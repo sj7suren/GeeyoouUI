@@ -46,17 +46,27 @@ void AppState::stopAcquisition() {
 }
 
 int main() {
-  // Frameless, own title bar, own window buttons -- see ShowcaseWindow.cpp.
-  // The shell inside it is sized by AppWindow::setContent, so nothing here has
-  // to subscribe to resized() any more.
-  ShowcaseWindow win;
-  win.enableAnimations(30);
-
+  // DECLARATION ORDER IS LOAD-BEARING.
+  //
+  // The page builders below capture `&app`, and those lambdas live inside the
+  // window's widget tree.  Destruction runs in reverse declaration order, so
+  // `app` MUST be declared FIRST in order to be destroyed LAST -- otherwise the
+  // tree outlives the state it points at, and teardown is a use-after-free.
+  //
+  // This used to be the other way round, patched by a manual
+  // `app.alarmSink = nullptr;` before returning.  That patch is gone: getting
+  // the order right removes the whole class of problem instead of one instance.
   AppState app;
   app.chFlow = app.hub.addChannel("进料流量", "m³/h");
   app.chTemp = app.hub.addChannel("釜内温度", "°C");
   app.chPress = app.hub.addChannel("系统压力", "MPa");
   app.startAcquisition();
+
+  // Frameless, own title bar, own window buttons -- see ShowcaseWindow.cpp.
+  // The shell inside it is sized by AppWindow::setContent, so nothing here has
+  // to subscribe to resized() any more.
+  ShowcaseWindow win;
+  win.enableAnimations(30);
 
   Shell* shell = win.shell();
 
@@ -134,9 +144,10 @@ int main() {
   win.show();
   const int rc = platform().runEventLoop();
 
-  // The ops page holds a lambda capturing its AlarmList; drop it before the
-  // widget tree unwinds so a late alarm cannot reach a destroyed widget.
-  app.alarmSink = nullptr;
+  // Stop the acquisition thread before anything unwinds -- it is the only
+  // writer that outlives the event loop.  The alarm sink needs no manual
+  // teardown any more: `win` is destroyed before `app`, so the widgets holding
+  // that lambda are gone by the time `app` goes.
   app.stopAcquisition();
   return rc;
 }
