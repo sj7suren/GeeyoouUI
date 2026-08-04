@@ -49,7 +49,13 @@ enum class FocusPolicy : std::uint8_t {
 class Widget : public StyleSubject {
  public:
   Widget() = default;
-  ~Widget() override = default;
+  // Out of line, and NOT defaulted: it has to cancel any in-flight event bubble
+  // standing on this widget.  The removal API announces that on its way through
+  // (Widget.cpp, announceDetached), but a widget can die without ever passing
+  // through it -- a Window is a stack object, the unique_ptr takeChild() hands
+  // back can simply be dropped, and any subclass destructor gets here too.  The
+  // bubble is what would then read a freed parent pointer.
+  ~Widget() override;
 
   Widget(const Widget&) = delete;
   Widget& operator=(const Widget&) = delete;
