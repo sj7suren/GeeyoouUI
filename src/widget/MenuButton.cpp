@@ -9,6 +9,10 @@
 namespace geeyoou {
 
 MenuButton::~MenuButton() {
+  // Before anything else: closing the menu does not unsubscribe from it, and
+  // the slot below captures `this`.
+  conns_.clear();
+
   // The menu is parented to the Window, so it survives us unless taken down.
   if (menu_ && menu_->isVisible()) {
     if (Window* w = menu_->window()) w->closePopup();
@@ -41,7 +45,8 @@ void MenuButton::ensureMenu() {
   if (!w) return;
   menu_ = w->add<PopupList>();
   menu_->setMaxVisibleRows(maxRows_);
-  menu_->rowActivated.connect([this](int row) {
+  // Owned by conns_: the menu belongs to the Window and survives us.
+  conns_ += menu_->rowActivated.connect([this](int row) {
     trigger(row);
     closeMenu();
   });
