@@ -15,12 +15,16 @@
 #include "geeyoou/platform/Platform.hpp"
 
 #include <cstddef>
+#include <memory>
 #include <vector>
 
 #include "framework/Test.hpp"
+#include "geeyoou/widget/Widget.hpp"
+#include "geeyoou/widget/Window.hpp"
 
 using geeyoou::platform;
 using geeyoou::TimerId;
+using geeyoou::Window;
 
 namespace {
 
@@ -29,6 +33,22 @@ namespace {
 // worse than a test that fails.
 constexpr int kIntervalMs = 10;
 constexpr int kTickBudget = 40;
+
+// Counts animation ticks through a pointer the CALLER owns: the probe is a
+// child of the window under test, so it is destroyed with it and could not hold
+// the count itself -- which is the whole point of the case below.
+class TickProbe : public geeyoou::Widget {
+ public:
+  explicit TickProbe(int* ticks) : ticks_(ticks) {}
+
+ protected:
+  void onAnimationTick() override {
+    if (ticks_) ++*ticks_;
+  }
+
+ private:
+  int* ticks_ = nullptr;
+};
 
 }  // namespace
 
@@ -92,6 +112,50 @@ GEEYOOU_TEST(timer, a_stopped_timer_stops_firing) {
   // recalled -- but it must not have kept pace with the nine driver ticks that
   // followed.
   CHECK_LT(victimTicks, victimTicksAtStop + 2);
+}
+
+GEEYOOU_TEST(timer, a_second_windows_animation_clock_dies_with_the_window) {
+  // What Window::~Window's stopTimer(animationTimer_) is FOR, and until now no
+  // test reached it: nothing in the suite called enableAnimations(), so every
+  // run took the stopTimer(0) early return and the real path was never
+  // executed.  The clock lives in the platform and its callback captures the
+  // window, so a window that dies with it running ticks into freed memory a few
+  // milliseconds later.
+  //
+  // A SECOND window on purpose: the showcase only ever had one, and it outlives
+  // main(), which is exactly why the defect could sit there unnoticed.
+  int ticks = 0;
+  int ticksAtClose = -1;
+  int pumped = 0;
+
+  auto win = std::make_unique<Window>("geeyoou animation lifetime", 200, 150);
+  TickProbe* probe = win->add<TickProbe>(&ticks);
+  probe->setGeometry({0.0f, 0.0f, 100.0f, 40.0f});
+  win->enableAnimations(60);  // ~16ms, comfortably faster than the driver below
+  CHECK(win->animationsEnabled());
+
+  TimerId driver = 0;
+  driver = platform().startTimer(kIntervalMs, [&] {
+    ++pumped;
+    if (pumped == 10) {
+      ticksAtClose = ticks;
+      win.reset();  // the window goes; its clock must go with it
+    }
+    // At least twenty more ticks of the pump AFTER the window is gone -- the
+    // window's own clock is faster, so a surviving one would be obvious.
+    if (pumped >= 40 || pumped >= kTickBudget) {
+      platform().stopTimer(driver);
+      platform().quit(0);
+    }
+  });
+  REQUIRE(driver != 0);
+
+  platform().runEventLoop();
+
+  CHECK_GE(pumped, 40);
+  CHECK_GE(ticksAtClose, 1);     // it really was animating while it was alive
+  CHECK_EQ(ticks, ticksAtClose);  // ...and not one tick after it died
+  CHECK(win == nullptr);
 }
 
 GEEYOOU_TEST(timer, a_timer_may_stop_itself_from_inside_its_own_callback) {
