@@ -246,9 +246,19 @@ void DatePicker::open() {
     calendar_->setRange(min_, max_);
     calendar_->setToday(today_);
     // Owned by conns_: the calendar belongs to the Window and survives us.
+    //
+    // CLOSE FIRST, dispatch second.  setDate() emits dateChanged, an emit runs
+    // application code, and picking a date is exactly when a form navigates
+    // away and destroys the page holding this picker -- which contract D7
+    // permits, since dateChosen belongs to the Window's CalendarView rather
+    // than to us.  So the emit has to be the last statement: with close() after
+    // it, this lambda called into a freed `this`.
+    //
+    // The visible trade: the application observes "popup closed" BEFORE
+    // "date changed".
     conns_ += calendar_->dateChosen.connect([this](Date d) {
-      setDate(d);
       close();
+      setDate(d);
     });
   }
   calendar_->setSelected(date_);
