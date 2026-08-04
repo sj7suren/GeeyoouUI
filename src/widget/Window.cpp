@@ -30,11 +30,21 @@ Window::Window(const std::string& title, int logicalWidth, int logicalHeight,
   // Every widget resolves its colours through Theme::current() as it paints, so
   // a full repaint is all a skin change needs -- no per-widget notification and
   // no cached-colour invalidation walk.
-  skinConn_ = skins().changed.connect([this] { update(); });
+  //
+  // skins() is a process-lifetime singleton, so this subscription MUST be owned:
+  // conns_ drops it during member destruction, before anything it touches goes.
+  conns_ += skins().changed.connect([this] { update(); });
 }
 
 Window::~Window() {
-  skins().changed.disconnect(skinConn_);
+  // First, before any of the state the tick walks is dismantled: the timer
+  // lives in the platform and its callback captures `this`, so a window that
+  // dies with its animation clock still running is a use-after-free on the very
+  // next tick.
+  platform().stopTimer(animationTimer_);
+  animationTimer_ = 0;
+  animationsOn_ = false;
+
   // Drop the observer pointers before the child vector is destroyed, so nothing
   // can dereference a half-destroyed widget during teardown.
   focus_ = nullptr;
@@ -74,7 +84,9 @@ void Window::enableAnimations(int fps) {
   if (animationsOn_) return;
   animationsOn_ = true;
   const int interval = (fps > 0) ? (1000 / fps) : 33;
-  platform().startTimer(interval, [this] { animationTickTree(); });
+  // The id is kept, not discarded: it is the only thing the destructor can use
+  // to stop a clock that outlives this object otherwise.
+  animationTimer_ = platform().startTimer(interval, [this] { animationTickTree(); });
 }
 
 void Window::setImeCaret(const Rect& windowRect) {
