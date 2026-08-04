@@ -13,6 +13,11 @@ constexpr float kArrowW = 24.0f;
 }  // namespace
 
 SelectBase::~SelectBase() {
+  // First: our slots live in a PopupList that the WINDOW owns, and closing the
+  // popup below does not unsubscribe them.  Left connected, they would keep a
+  // captured `this` in a list that is still alive and still firing.
+  conns_.clear();
+
   // The popup is a child of the WINDOW, not of us, so it outlives this object
   // unless we take it down.  Leaving it visible would strand an orphan list on
   // screen that nothing can close.
@@ -73,12 +78,14 @@ void SelectBase::ensurePopup() {
 
   popup_ = w->add<PopupList>();
   popup_->setMaxVisibleRows(maxVisibleRows_);
-  popup_->rowActivated.connect([this](int row) {
+  // Owned by conns_, not fire-and-forget: the popup belongs to the Window and
+  // survives us, so these three have to be released when WE go.
+  conns_ += popup_->rowActivated.connect([this](int row) {
     onRowActivated(row);
     if (closeOnActivate()) close();
   });
-  popup_->rowToggled.connect([this](int row) { onRowToggled(row); });
-  popup_->expanderToggled.connect([this](int row) { onExpanderToggled(row); });
+  conns_ += popup_->rowToggled.connect([this](int row) { onRowToggled(row); });
+  conns_ += popup_->expanderToggled.connect([this](int row) { onExpanderToggled(row); });
 }
 
 void SelectBase::refreshRows() {
