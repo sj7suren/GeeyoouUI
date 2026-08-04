@@ -6,6 +6,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <malloc.h>  // _aligned_malloc / _aligned_free (MSVC)
+#if defined(_MSC_VER)
+#include <crtdbg.h>  // report modes, so a Debug run never opens a dialog
+#endif
 #include <new>
 #include <vector>
 
@@ -149,4 +152,24 @@ int runAll() {
 
 }  // namespace geeyoou::test
 
-int main() { return geeyoou::test::runAll(); }
+int main() {
+  // Unbuffered, so the case names printed so far survive a run that ENDS
+  // BADLY.  A suite whose job includes proving that injected defects are caught
+  // spends much of its life crashing on purpose, and a buffered stdout throws
+  // away exactly the line that says where.  86 lines of printf; the cost does
+  // not register.
+  std::setvbuf(stdout, nullptr, _IONBF, 0);
+
+#if defined(_MSC_VER) && defined(_DEBUG)
+  // A Debug run has to be able to complete unattended.  Every assert the CRT,
+  // the STL's checked iterators or the library itself raises would otherwise
+  // open a MODAL DIALOG, and an automated run would hang there rather than
+  // fail -- which is worse than either passing or failing.  Sent to stderr
+  // instead, an assertion ends the process with a diagnosable exit code.
+  _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+  _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+  _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
+  _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
+#endif
+  return geeyoou::test::runAll();
+}
