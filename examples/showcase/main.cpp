@@ -97,7 +97,9 @@ int main() {
   int alarmTick = 0;
   bool pressWasHigh = false;
   bool tempWasHigh = false;
-  platform().startTimer(100, [&] {
+  // The id is deliberately dropped: everything this captures lives in main()'s
+  // frame, which outlives the event loop, so there is nothing to stop it before.
+  (void)platform().startTimer(100, [&] {
     app.hub.drain();
     ++alarmTick;
 
