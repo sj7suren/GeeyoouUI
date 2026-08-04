@@ -39,7 +39,6 @@ std::size_t DataHub::drain() {
     // the callback sees this sample rather than the previous one.
     sampleArrived.emit(s);
   }
-  batchDrained.emit(n);
   return n;
 }
 
