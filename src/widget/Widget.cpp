@@ -7,6 +7,125 @@
 #include "geeyoou/widget/Window.hpp"
 
 namespace geeyoou {
+namespace {
+
+// --- in-flight event bubbles -------------------------------------------------
+//
+// dispatchMouse/dispatchKey walk from the target widget up to the root, calling
+// a handler at every step.  A handler runs application code, and application
+// code may now destroy widgets -- including the one the walk is standing on.
+// Reading `w->parent_` after such a handler returns is then a use-after-free:
+// the systemic risk recorded in docs/iterations/01-lifecycle-and-tests.md.
+//
+// Pre-reading the parent BEFORE the call only covers the narrow case where the
+// handler removes exactly the current node.  Cancelling the walk covers all of
+// them, and is sound because what leaves the tree is always a whole SUBTREE: if
+// any ancestor of the current node is going, the current node is going with it.
+// So the remaining path is unsafe if and only if the CURRENT node is doomed --
+// one pointer compare per departing node, and no ancestry search.
+//
+// The cursors live in the dispatching stack frames and are threaded onto one
+// list, so nested dispatch simply nests and nothing allocates.  A plain static
+// rather than a thread_local: input dispatch is UI-thread-only by construction
+// (docs/architecture.md section 3.4), and a TLS lookup on every mouse move
+// would be paid to describe a case that cannot happen.
+struct BubbleCursor {
+  Widget* node = nullptr;
+  BubbleCursor* outer = nullptr;
+};
+
+BubbleCursor* g_bubbles = nullptr;
+
+class BubbleGuard {
+ public:
+  explicit BubbleGuard(Widget* start) {
+    cursor_.node = start;
+    cursor_.outer = g_bubbles;
+    g_bubbles = &cursor_;
+  }
+  ~BubbleGuard() { g_bubbles = cursor_.outer; }
+
+  BubbleGuard(const BubbleGuard&) = delete;
+  BubbleGuard& operator=(const BubbleGuard&) = delete;
+
+  Widget* node() const { return cursor_.node; }
+  void moveTo(Widget* w) { cursor_.node = w; }
+
+ private:
+  BubbleCursor cursor_;
+};
+
+void cancelBubblesOn(const Widget* doomed) {
+  for (BubbleCursor* c = g_bubbles; c; c = c->outer) {
+    if (c->node == doomed) c->node = nullptr;
+  }
+}
+
+// --- detach bookkeeping ------------------------------------------------------
+constexpr std::size_t kNotAChild = std::size_t(-1);
+
+std::size_t indexOfChild(const std::vector<std::unique_ptr<Widget>>& v,
+                         const Widget* child) {
+  for (std::size_t i = 0; i < v.size(); ++i) {
+    if (v[i].get() == child) return i;
+  }
+  return kNotAChild;
+}
+
+// Pre-order, and BEFORE anything is unlinked: `win` is still reachable through
+// the parent chain and every observer pointer still names a live widget when it
+// is dropped.
+void announceDetached(Widget* node, Window* win) {
+  cancelBubblesOn(node);
+  if (win) win->widgetDetached(node);
+  // By index, re-reading size() each time: widgetDetached emits popupClosed for
+  // a departing popup, and a slot on that signal may add or remove children of
+  // its own.  A range-for would be holding an iterator across that call.
+  const std::vector<std::unique_ptr<Widget>>& kids = node->children();
+  for (std::size_t i = 0; i < kids.size(); ++i) announceDetached(kids[i].get(), win);
+}
+
+}  // namespace
+
+std::unique_ptr<Widget> Widget::takeChild(Widget* child) {
+  if (!child) return nullptr;
+  if (indexOfChild(children_, child) == kNotAChild) return nullptr;
+
+  // Repaint what the subtree is vacating, while it is still attached: update()
+  // maps through the parent chain to find the Window it must report damage to.
+  if (child->visible_) child->update();
+
+  announceDetached(child, window());
+
+  // Re-found rather than reused: announceDetached can run popupClosed slots,
+  // and one of those may already have removed `child` -- or a sibling ahead of
+  // it, which moves the index either way.
+  const std::size_t index = indexOfChild(children_, child);
+  if (index == kNotAChild) return nullptr;
+
+  std::unique_ptr<Widget> owned = std::move(children_[index]);
+  children_.erase(children_.begin() + std::ptrdiff_t(index));
+  owned->parent_ = nullptr;
+  return owned;
+}
+
+void Widget::removeChild(Widget* child) {
+  std::unique_ptr<Widget> doomed = takeChild(child);
+  doomed.reset();  // the destruction IS the point; spelled out, not implied
+}
+
+void Widget::clearChildren() {
+  // Back to front: reverse order of construction, and no element ever has to be
+  // shifted down the vector.
+  while (!children_.empty()) {
+    const std::size_t before = children_.size();
+    removeChild(children_.back().get());
+    // A detach handler may remove children itself, which is fine; what it must
+    // not be able to do is grow the list back faster than we drain it.  Bailing
+    // out beats spinning forever.
+    if (children_.size() >= before) break;
+  }
+}
 
 void Widget::setGeometry(const Rect& r) {
   if (visible_) update();  // repaint what we are vacating
@@ -213,9 +332,10 @@ Widget* Widget::hitTest(Point windowPos) {
 }
 
 void Widget::dispatchMouse(const MouseEvent& windowEvent) {
-  // Bubble from this widget up towards the root until someone accepts.
-  Widget* w = this;
-  while (w) {
+  // Bubble from this widget up towards the root until someone accepts.  The
+  // guard is what lets a handler destroy widgets: see BubbleCursor above.
+  BubbleGuard bubble(this);
+  while (Widget* w = bubble.node()) {
     const Rect r = w->windowRect();
     MouseEvent local = windowEvent;
     local.pos = {windowEvent.windowPos.x - r.x(), windowEvent.windowPos.y - r.y()};
@@ -225,15 +345,21 @@ void Widget::dispatchMouse(const MouseEvent& windowEvent) {
       windowEvent.accept();
       return;
     }
-    w = w->parent_;
+    // Only now is `w` known to have survived its own handler.  A cancelled
+    // cursor means it left the tree -- and so did every ancestor we had left to
+    // visit, which is why there is nothing to resume from.
+    if (bubble.node() != w) return;
+    bubble.moveTo(w->parent_);
   }
 }
 
 void Widget::dispatchKey(const KeyEvent& e) {
   // Same bubbling rule as the mouse: the focused widget gets first refusal,
-  // then each ancestor, so a GroupBox or Window can implement shortcuts.
-  Widget* w = this;
-  while (w) {
+  // then each ancestor, so a GroupBox or Window can implement shortcuts.  And
+  // the same guard -- Enter on a dialog's default button is exactly where an
+  // application closes the screen it is standing on.
+  BubbleGuard bubble(this);
+  while (Widget* w = bubble.node()) {
     KeyEvent local = e;
     local.accepted = false;
     w->onKey(local);
@@ -241,7 +367,8 @@ void Widget::dispatchKey(const KeyEvent& e) {
       e.accept();
       return;
     }
-    w = w->parent_;
+    if (bubble.node() != w) return;
+    bubble.moveTo(w->parent_);
   }
 }
 
