@@ -30,6 +30,7 @@
 #include <string>
 #include <utility>
 
+#include "geeyoou/core/ConnectionScope.hpp"
 #include "geeyoou/core/Signal.hpp"
 #include "geeyoou/widget/Window.hpp"
 #include "geeyoou/widget/WindowHeader.hpp"
@@ -93,7 +94,11 @@ class AppWindow : public Window {
   bool borderVisible_ = true;
   bool hasBorderColor_ = false;
   Color borderColor_;
-  Connection skinConn_;
+
+  // Declared last, destroyed first -- see ConnectionScope.hpp.  Owns the
+  // subscription to the process-lifetime skin registry; the base Window has its
+  // own scope for its own.
+  ConnectionScope conns_;
 };
 
 }  // namespace geeyoou
