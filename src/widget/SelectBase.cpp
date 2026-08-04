@@ -80,9 +80,22 @@ void SelectBase::ensurePopup() {
   popup_->setMaxVisibleRows(maxVisibleRows_);
   // Owned by conns_, not fire-and-forget: the popup belongs to the Window and
   // survives us, so these three have to be released when WE go.
+  //
+  // CLOSE FIRST, dispatch second, here and in the two keyboard paths below.
+  // onRowActivated() is what emits currentIndexChanged/selectionChanged, an
+  // emit runs application code, and "the operator picked a value" is precisely
+  // when an application swaps out the screen this control lives on.  That is
+  // legal -- contract D7 only forbids destroying the owner of the signal being
+  // emitted, and rowActivated belongs to the Window's PopupList, not to us --
+  // so the dispatch has to be the LAST thing that touches `this`.  The other
+  // order left closeOnActivate() and close() running on freed memory.
+  //
+  // The visible trade: the application observes "popup closed" BEFORE "row
+  // activated".  Cheaper than a use-after-free.  Closing does not disturb the
+  // row list, so `row` still resolves against the same rows afterwards.
   conns_ += popup_->rowActivated.connect([this](int row) {
-    onRowActivated(row);
     if (closeOnActivate()) close();
+    onRowActivated(row);
   });
   conns_ += popup_->rowToggled.connect([this](int row) { onRowToggled(row); });
   conns_ += popup_->expanderToggled.connect([this](int row) { onExpanderToggled(row); });
@@ -210,8 +223,9 @@ void SelectBase::onKey(const KeyEvent& e) {
     for (std::size_t i = 0; i < rows.size(); ++i) {
       if (rows[i].shortcut == digit) {
         popup_->setHighlighted(int(i), false);
-        onRowActivated(int(i));
+        // Close before dispatch -- see ensurePopup().
         if (closeOnActivate()) close();
+        onRowActivated(int(i));
         break;
       }
     }
@@ -237,8 +251,9 @@ void SelectBase::onKey(const KeyEvent& e) {
     case Key::Enter: {
       const int hi = popup_->highlighted();
       if (hi >= 0) {
-        onRowActivated(hi);
+        // Close before dispatch -- see ensurePopup().
         if (closeOnActivate()) close();
+        onRowActivated(hi);
       } else {
         close();
       }
