@@ -10,6 +10,7 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 option(GEEYOOU_BUILD_EXAMPLES "Build example applications" ON)
+option(GEEYOOU_BUILD_TESTS "Build unit tests" ON)
 
 include(cmake/Dependencies.cmake)
 
@@ -91,6 +92,12 @@ if(MSVC)
   target_compile_options(geeyoou PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus)
 else()
   target_compile_options(geeyoou PRIVATE -Wall -Wextra)
+endif()
+
+# ------------------------------------------------------------------ tests ----
+if(GEEYOOU_BUILD_TESTS)
+  enable_testing()
+  add_subdirectory(tests)
 endif()
 
 # --------------------------------------------------------------- examples ----
