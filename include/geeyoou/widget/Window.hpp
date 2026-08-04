@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 
+#include "geeyoou/core/ConnectionScope.hpp"
 #include "geeyoou/core/Signal.hpp"
 #include "geeyoou/core/Surface.hpp"
 #include "geeyoou/platform/Platform.hpp"
@@ -126,9 +127,15 @@ class Window : public Widget {
   Widget* focus_ = nullptr;
   Widget* popup_ = nullptr;
   bool animationsOn_ = false;
-  // Held so the destructor can drop it: the slot captures `this`, and a skin
-  // change after the window died would repaint a corpse.
-  Connection skinConn_;
+  // The animation clock lives in the platform, not in this object, and its
+  // callback captures `this`.  Held so the destructor can stop it -- otherwise
+  // closing any window at all ticks into freed memory a few milliseconds later.
+  TimerId animationTimer_ = 0;
+
+  // Declared LAST so it is destroyed FIRST: the skin subscription captures
+  // `this` and calls update(), which reaches for platformWindow_.  Anything
+  // added here must be unsubscribed before the state it touches is gone.
+  ConnectionScope conns_;
 };
 
 }  // namespace geeyoou
