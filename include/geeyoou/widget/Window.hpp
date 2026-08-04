@@ -49,6 +49,11 @@ class Window : public Widget {
   // --- focus ---------------------------------------------------------------
   void setFocusWidget(Widget* w);
   Widget* focusWidget() const { return focus_; }
+  // What the pointer is over, and which widget holds the mouse grab.  Read-only
+  // on purpose: both are decided by input dispatch, and a setter would be a way
+  // to desynchronise them from the enter/leave bookkeeping that maintains them.
+  Widget* hoveredWidget() const { return hovered_; }
+  Widget* mouseGrabWidget() const { return pressGrab_; }
   // Moves focus to the next (or previous) FocusPolicy::Tab widget in tree
   // order, wrapping around.  Returns false when nothing is focusable.
   bool focusNext(bool backwards);
@@ -93,6 +98,15 @@ class Window : public Widget {
   // repaint.  Public because Widget calls it, not because users should.
   void addDirtyRect(const Rect& windowRect);
 
+  // Announced by Widget's removal API once for EVERY node of a subtree that is
+  // leaving the tree, while the subtree is still intact and still attached.
+  // Drops whichever of the four observer pointers named `w`: a window that kept
+  // focus_ or hovered_ on a removed widget would deliver the next keystroke, or
+  // the next Leave, into freed memory.
+  //
+  // Public because Widget calls it, not because users should.
+  void widgetDetached(Widget* w);
+
  protected:
   // Answers the window manager's "is this pixel draggable chrome?" for a
   // frameless window.  The base window has no chrome, so everything is client;
@@ -103,13 +117,20 @@ class Window : public Widget {
     return HitZone::Client;
   }
 
+  // The full input path -- hover tracking, mouse grab, focus-on-click, popup
+  // dismissal, Tab traversal -- as the platform backend drives it.  Protected
+  // rather than private so a subclass can feed SYNTHETIC input through exactly
+  // the same route: an operator-training playback, a soft keyboard, and the
+  // test suite all need that, and a second entry point that skipped the
+  // bookkeeping would be a second, subtly different set of rules.
+  void handleMouse(const MouseEvent& e);
+  void handleKey(const KeyEvent& e);
+
  private:
   Window* asWindow() override { return this; }
 
   void handleSurface(const Surface& s, const Rect& dirtyPhysical);
   void handlePaint(Painter& p, const Rect& dirty);
-  void handleMouse(const MouseEvent& e);
-  void handleKey(const KeyEvent& e);
   void handleResize(const ResizeEvent& e);
 
   std::unique_ptr<PlatformWindow> platformWindow_;
