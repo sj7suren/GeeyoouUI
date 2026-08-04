@@ -404,6 +404,120 @@ GEEYOOU_TEST(removal, a_slot_may_remove_the_widget_the_key_bubble_stands_on) {
   win.handleKey(keyPress(Key::Escape));
 }
 
+GEEYOOU_TEST(removal, a_slot_may_destroy_the_bubble_subtree_without_the_removal_api) {
+  // The removal API is not the only door out of the tree, and the bubble guard
+  // used to be armed on that door alone: cancellation happened inside
+  // announceDetached, which only runs for takeChild/removeChild/clearChildren.
+  //
+  // Here the slot destroys the subtree by DROPPING THE OWNING unique_ptr --
+  // exactly what an application does with the result of takeChild(), and the
+  // same code path a Window declared on the stack takes when it goes out of
+  // scope.  Nothing announces that, so ~Widget has to cancel the bubble itself.
+  Navigator nav;
+  int deaths = 0;
+
+  std::unique_ptr<Counter> page = std::make_unique<Counter>();
+  page->setGeometry({0.0f, 0.0f, 400.0f, 300.0f});
+  Counter* row = page->add<Counter>();
+  row->setGeometry({0.0f, 0.0f, 200.0f, 50.0f});
+  Emitter* btn = row->add<Emitter>(&nav);
+  btn->setGeometry({0.0f, 0.0f, 100.0f, 20.0f});
+  btn->add<Tracer>(&deaths);
+
+  ConnectionScope conns;
+  conns += nav.go.connect([&page] { page.reset(); });
+
+  // Straight into the bubble, no Window involved: what is under test is the
+  // walk, and every widget on it -- including the one it is standing on -- is
+  // about to be freed by the handler.
+  btn->dispatchMouse(mouseAt(MouseAction::Press, 10.0f, 10.0f));
+
+  CHECK_EQ(deaths, 1);
+  CHECK(page == nullptr);  // the whole tree went, and the walk did not follow it
+}
+
+GEEYOOU_TEST(removal, detach_still_reaches_a_sibling_that_a_slot_shifted_down) {
+  // The announcement walks the child list while application code is allowed to
+  // edit it.  Re-reading size() each step stops the overrun but NOT the shift:
+  // a slot that removes an EARLIER sibling moves every later one down by one,
+  // and an index walk then steps straight over a whole subtree.  Nothing in
+  // that subtree gets announced, so the window keeps its focus/hover/grab
+  // pointer aimed into memory that is freed moments later.
+  TestWindow win;
+  int deaths = 0;
+
+  Widget* holder = win.add<Widget>();
+  holder->setGeometry({0.0f, 0.0f, 400.0f, 300.0f});
+  Widget* first = holder->add<Widget>();      // what the slot removes
+  Widget* pop = holder->add<Widget>();        // announcing THIS is what emits
+  pop->setGeometry({0.0f, 0.0f, 120.0f, 80.0f});
+  Widget* later = holder->add<Widget>();      // the one that used to be skipped
+  Widget* deep = later->add<Tracer>(&deaths); // ...and the pointer aimed into it
+  deep->setGeometry({0.0f, 0.0f, 60.0f, 20.0f});
+  deep->setFocusPolicy(FocusPolicy::Tab);
+
+  win.openPopup(pop, {0.0f, 0.0f, 60.0f, 24.0f});
+  win.setFocusWidget(deep);
+  REQUIRE(win.popup() == pop);
+  REQUIRE(win.focusWidget() == deep);
+
+  bool once = false;
+  ConnectionScope conns;
+  conns += win.popupClosed.connect([&] {
+    if (once) return;
+    once = true;
+    holder->removeChild(first);  // shifts `pop` and `later` down one slot
+  });
+
+  win.removeChild(holder);
+
+  CHECK(once);                 // the slot really ran, mid-announcement
+  CHECK_EQ(deaths, 1);
+  // The point of the case: `deep` sits under the sibling the shift displaced,
+  // and it was still announced.
+  CHECK_EQ(win.focusWidget(), static_cast<Widget*>(nullptr));
+  CHECK(win.children().empty());
+}
+
+GEEYOOU_TEST(removal, detach_survives_a_slot_that_removes_the_node_being_announced) {
+  // The other half of the same hazard: widgetDetached() emits popupClosed, and
+  // a slot on it may remove the very node whose announcement is in flight (D7
+  // allows destroying objects other than the signal's owner).  The walk then
+  // has to stop rather than read that node's child list.
+  TestWindow win;
+  int deaths = 0;
+
+  Widget* holder = win.add<Widget>();
+  holder->setGeometry({0.0f, 0.0f, 400.0f, 300.0f});
+  Tracer* pop = holder->add<Tracer>(&deaths);
+  pop->setGeometry({0.0f, 0.0f, 120.0f, 80.0f});
+  pop->add<Tracer>(&deaths);
+
+  win.openPopup(pop, {0.0f, 0.0f, 60.0f, 24.0f});
+  REQUIRE(win.popup() == pop);
+
+  bool once = false;
+  ConnectionScope conns;
+  conns += win.popupClosed.connect([&] {
+    if (once) return;
+    once = true;
+    holder->removeChild(pop);  // the node that is being announced right now
+  });
+
+  win.removeChild(holder);
+
+  CHECK(once);
+  CHECK_EQ(deaths, 2);  // the popup and its child, destroyed exactly once each
+  CHECK_EQ(win.popup(), static_cast<Widget*>(nullptr));
+  CHECK(win.children().empty());
+
+  // Still usable: a stale observer pointer would surface on the next event.
+  Counter* fresh = win.add<Counter>();
+  fresh->setGeometry({0.0f, 0.0f, 400.0f, 300.0f});
+  win.handleMouse(mouseAt(MouseAction::Move, 20.0f, 20.0f));
+  CHECK_GE(fresh->mouse, 1);
+}
+
 GEEYOOU_TEST(removal, an_enter_handler_may_remove_what_the_pointer_is_over) {
   // Window::handleMouse picks a `target`, then sends synthetic Enter/Leave, and
   // only afterwards delivers the real event to that same target.  A handler
