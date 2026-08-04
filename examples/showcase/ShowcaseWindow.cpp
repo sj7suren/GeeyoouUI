@@ -105,7 +105,7 @@ ShowcaseWindow::ShowcaseWindow()
   // Applying a skin installs that skin's sheet, wiping ours -- so recompose
   // afterwards.  Safe from recursion: composeStyleSheet writes the sheet
   // directly instead of going back through skins(), so it emits nothing.
-  skinConn_ = skins().changed.connect([this] {
+  conns_ += skins().changed.connect([this] {
     applyHeaderTheme();
     composeStyleSheet();
   });
@@ -117,7 +117,7 @@ void ShowcaseWindow::applyHeaderTheme() {
   account_->setStatusColor(t.ok);
 }
 
-ShowcaseWindow::~ShowcaseWindow() { skins().changed.disconnect(skinConn_); }
+ShowcaseWindow::~ShowcaseWindow() = default;
 
 void ShowcaseWindow::setUserStyleSheet(std::string qss) {
   userQss_ = std::move(qss);
