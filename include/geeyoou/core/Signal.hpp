@@ -198,7 +198,7 @@ class Signal {
     }
     for (std::size_t i = 0; i < n; ++i) ids[i] = slots_[i].id;
 
-    const DepthGuard guard(*block_);
+    const DepthGuard guard(block_);
     for (std::size_t i = 0; i < n; ++i) {
       // Resolved afresh every iteration: the slot we just called is allowed to
       // have added or removed entries, either of which moves them.  Nothing may
@@ -221,12 +221,26 @@ class Signal {
   // channel degrades to the old cost instead of overflowing a buffer.
   static constexpr std::size_t kInlineSlots = 8;
 
+  // Holds the block by SHARED pointer, not by reference.  The signal's own
+  // strong reference is the only one there is, and a slot that violates D7 --
+  // destroying the object that owns the signal it is running inside -- runs
+  // ~Signal, which drops it and frees the block.  A referencing guard would
+  // then decrement `emitDepth` through a dangling pointer on the way out: a
+  // silent four-byte write into freed memory, and in a Release build (where the
+  // D7 assert is compiled out) that stray write IS the first thing that
+  // happens.  Pinning the block turns it back into a plain leak-free no-op, so
+  // the assert stays the first symptom.
+  //
+  // Cost is one atomic increment/decrement pair per emission and no allocation.
   struct DepthGuard {
-    explicit DepthGuard(detail::SignalBlock& b) : block(b) { ++block.emitDepth; }
-    ~DepthGuard() { --block.emitDepth; }
+    explicit DepthGuard(std::shared_ptr<detail::SignalBlock> b)
+        : block(std::move(b)) {
+      ++block->emitDepth;
+    }
+    ~DepthGuard() { --block->emitDepth; }
     DepthGuard(const DepthGuard&) = delete;
     DepthGuard& operator=(const DepthGuard&) = delete;
-    detail::SignalBlock& block;
+    std::shared_ptr<detail::SignalBlock> block;
   };
 
   // slots_ is kept sorted by id -- ids only ever increase and erase preserves
