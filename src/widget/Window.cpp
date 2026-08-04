@@ -130,6 +130,29 @@ void Window::closePopup() {
   popupClosed.emit();
 }
 
+// ----------------------------------------------------------------- detach ---
+void Window::widgetDetached(Widget* w) {
+  if (!w) return;
+
+  // The popup goes first, and through closePopup() rather than by nulling the
+  // pointer: the control that opened it is waiting on popupClosed to drop its
+  // own "I am open" state, and a popup that vanished without that signal leaves
+  // a ComboBox permanently convinced its list is still on screen.
+  if (popup_ == w) closePopup();
+
+  // Re-tested after that emit, which can move the focus or open another popup.
+  //
+  // Focus is dropped SILENTLY -- no onFocusChanged(false).  A focus-out
+  // notification runs arbitrary widget code (LineEdit emits editingFinished
+  // from there) on a widget that is already on its way out of the tree, and
+  // that code can re-enter the very removal we are in the middle of.  The
+  // widget is being taken away; there is nothing useful left for it to do about
+  // having lost the focus.
+  if (focus_ == w) focus_ = nullptr;
+  if (hovered_ == w) hovered_ = nullptr;
+  if (pressGrab_ == w) pressGrab_ = nullptr;
+}
+
 // ------------------------------------------------------------------ focus ---
 void Window::setFocusWidget(Widget* w) {
   if (w == focus_) return;
@@ -233,18 +256,27 @@ void Window::handleMouse(const MouseEvent& e) {
 
   // Enter/leave bookkeeping, so widgets can render a hover state without each
   // of them tracking the cursor themselves.
+  //
+  // `hovered_` is moved to the new widget BEFORE either notification, and
+  // `target` is re-read from it afterwards.  That is not bookkeeping tidiness:
+  // a handler may destroy widgets, and hovered_ is a pointer widgetDetached
+  // maintains while a local `target` is not.  Carrying the target through the
+  // member is what keeps the rest of this function from working on a widget
+  // that a Leave or Enter handler took away.
   if (!pressGrab_ && target != hovered_) {
-    if (hovered_) {
+    Widget* const was = hovered_;
+    hovered_ = target;
+    if (was) {
       MouseEvent leave = e;
       leave.action = MouseAction::Leave;
-      hovered_->dispatchMouse(leave);
+      was->dispatchMouse(leave);
     }
-    hovered_ = target;
     if (hovered_) {
       MouseEvent enter = e;
       enter.action = MouseAction::Enter;
       hovered_->dispatchMouse(enter);
     }
+    target = hovered_;
   }
 
   if (e.action == MouseAction::Press) {
@@ -261,6 +293,11 @@ void Window::handleMouse(const MouseEvent& e) {
       Widget* f = target;
       while (f && !f->isFocusable()) f = f->parent();
       setFocusWidget(f);
+      // The focus-out notification runs widget code -- LineEdit emits
+      // editingFinished from there -- which may remove the widget we are about
+      // to hand the press to.  pressGrab_ is the maintained pointer; re-reading
+      // it is how that removal reaches this frame.
+      target = pressGrab_;
     }
   }
 
