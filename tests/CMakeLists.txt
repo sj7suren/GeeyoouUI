@@ -9,6 +9,8 @@
 add_executable(geeyoou_tests
   framework/Test.cpp
   core/test_signal.cpp
+  core/test_connection_scope.cpp
+  core/test_platform_timer.cpp
   widget/test_tree.cpp
   widget/test_hittest.cpp
   render/test_style_cascade.cpp
