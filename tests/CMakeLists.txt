@@ -13,6 +13,7 @@ add_executable(geeyoou_tests
   core/test_platform_timer.cpp
   widget/test_tree.cpp
   widget/test_hittest.cpp
+  widget/test_removal.cpp
   render/test_style_cascade.cpp
   visual/test_golden.cpp
 )
