@@ -165,8 +165,18 @@ class Win32Window final : public PlatformWindow {
   }
 
   ~Win32Window() override {
+    // The back-pointer goes BEFORE DestroyWindow, not after: DestroyWindow
+    // dispatches WM_DESTROY, WM_NCDESTROY and whatever activation/focus
+    // messages the shell adds SYNCHRONOUSLY, straight back into wndProc.  This
+    // object is already half gone by then -- releaseBackingStore() below has
+    // run, and the callbacks it holds name a Window that is usually being
+    // destroyed one frame up the stack.  Unhooked, wndProc finds nothing and
+    // hands those last messages to DefWindowProc.
+    const HWND hwnd = hwnd_;
+    hwnd_ = nullptr;
+    if (hwnd) SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
     releaseBackingStore();
-    if (hwnd_) DestroyWindow(hwnd_);
+    if (hwnd) DestroyWindow(hwnd);
   }
 
   void show() override {
@@ -611,6 +621,22 @@ class Win32Window final : public PlatformWindow {
         if (onClose) onClose();
         PostQuitMessage(0);
         return 0;
+
+      // The last message any window ever receives, and the one that has to
+      // sever the link in both directions.  ~Win32Window unhooks itself before
+      // it calls DestroyWindow, so the usual path never gets here -- this is
+      // for the window that is destroyed by somebody ELSE (the shell tearing
+      // down an owned window, or an application that calls DestroyWindow on
+      // nativeHandle()).  Without it, GWLP_USERDATA keeps naming a
+      // Win32Window that no longer exists, and the next message to arrive --
+      // WM_CLOSE handlers routinely destroy their own window, so there is one
+      // -- is dispatched into freed memory.
+      case WM_NCDESTROY: {
+        const HWND hwnd = hwnd_;
+        hwnd_ = nullptr;
+        if (hwnd) SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+        return DefWindowProcW(hwnd, msg, wp, lp);
+      }
     }
     return DefWindowProcW(hwnd_, msg, wp, lp);
   }
@@ -660,8 +686,14 @@ class Win32Platform final : public Platform {
   }
 
   int runEventLoop() override {
-    MSG msg;
-    while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+    // Zero-initialised, and the three GetMessage outcomes kept apart: on the
+    // error return (-1) nothing was written into `msg` at all, so the old
+    // `return int(msg.wParam)` handed the caller a read of uninitialised stack.
+    MSG msg{};
+    for (;;) {
+      const BOOL got = GetMessageW(&msg, nullptr, 0, 0);
+      if (got == 0) break;   // WM_QUIT: wParam is the exit code the app asked for
+      if (got == -1) return -1;  // the queue itself failed; there is no exit code
       TranslateMessage(&msg);
       DispatchMessageW(&msg);
     }
