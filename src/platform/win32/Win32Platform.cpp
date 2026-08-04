@@ -19,6 +19,7 @@
 #include <cstring>
 #include <cwchar>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -80,15 +81,45 @@ Key mapVirtualKey(WPARAM vk) {
   return Key::Unknown;
 }
 
-std::map<UINT_PTR, std::function<void()>>& timerTable() {
-  static std::map<UINT_PTR, std::function<void()>> t;
+// --- timers -----------------------------------------------------------------
+//
+// Two tables rather than one because the two directions are asked for by two
+// different parties: the TIMERPROC only knows the id Win32 assigned, while
+// stopTimer() only knows the id WE handed out.  Handing out the native id
+// directly would be one table less and one real bug more -- Win32 recycles
+// UINT_PTRs, so a stale handle could kill a timer somebody else had just
+// started, which is exactly the class of mistake this whole interface exists
+// to close.
+//
+// No locking: SetTimer(nullptr, ...) posts WM_TIMER to the calling thread's
+// queue, so every one of these entries is created, fired and destroyed on the
+// UI thread (docs/architecture.md section 3.11).
+struct TimerSlot {
+  TimerId id = 0;
+  // Behind a shared_ptr so the callback survives being cancelled from inside
+  // itself -- which is precisely what Window's animation tick does when a slot
+  // it drives closes the window.
+  std::shared_ptr<std::function<void()>> fn;
+};
+
+std::map<UINT_PTR, TimerSlot>& timersByNative() {
+  static std::map<UINT_PTR, TimerSlot> t;
   return t;
 }
 
-void CALLBACK timerThunk(HWND, UINT, UINT_PTR id, DWORD) {
-  auto& table = timerTable();
-  auto it = table.find(id);
-  if (it != table.end() && it->second) it->second();
+std::map<TimerId, UINT_PTR>& nativeByTimerId() {
+  static std::map<TimerId, UINT_PTR> t;
+  return t;
+}
+
+void CALLBACK timerThunk(HWND, UINT, UINT_PTR native, DWORD) {
+  auto& table = timersByNative();
+  const auto it = table.find(native);
+  if (it == table.end()) return;
+  // Copied out before the call: stopping this timer from within its own
+  // callback erases the map node the std::function lives in.
+  const std::shared_ptr<std::function<void()>> fn = it->second.fn;
+  if (fn && *fn) (*fn)();
 }
 
 // ---------------------------------------------------------------------------
@@ -639,11 +670,30 @@ class Win32Platform final : public Platform {
 
   void quit(int exitCode) override { PostQuitMessage(exitCode); }
 
-  void startTimer(int intervalMs, std::function<void()> fn) override {
+  TimerId startTimer(int intervalMs, std::function<void()> fn) override {
     // A thread timer (hwnd == nullptr) rather than a window timer: it does not
     // tie the tick to any particular window's lifetime.
-    const UINT_PTR id = SetTimer(nullptr, 0, UINT(intervalMs), &timerThunk);
-    if (id) timerTable()[id] = std::move(fn);
+    const UINT_PTR native = SetTimer(nullptr, 0, UINT(intervalMs), &timerThunk);
+    if (!native) return 0;
+
+    const TimerId id = ++lastTimerId_;
+    timersByNative()[native] =
+        TimerSlot{id, std::make_shared<std::function<void()>>(std::move(fn))};
+    nativeByTimerId()[id] = native;
+    return id;
+  }
+
+  void stopTimer(TimerId id) override {
+    if (id == 0) return;
+    auto& byId = nativeByTimerId();
+    const auto it = byId.find(id);
+    if (it == byId.end()) return;  // already stopped, or never ours
+
+    const UINT_PTR native = it->second;
+    // KillTimer's first argument must match SetTimer's, and ours was nullptr.
+    KillTimer(nullptr, native);
+    byId.erase(it);
+    timersByNative().erase(native);
   }
 
   std::string clipboardText() override {
@@ -677,6 +727,11 @@ class Win32Platform final : public Platform {
     }
     CloseClipboard();
   }
+
+ private:
+  // Monotonic and never reused, so a handle kept past its timer's death names
+  // nothing rather than naming a stranger.
+  TimerId lastTimerId_ = 0;
 };
 
 }  // namespace
