@@ -66,6 +66,35 @@ class Widget : public StyleSubject {
     return raw;
   }
 
+  // --- removing children ---------------------------------------------------
+  //
+  // Hands `child` back to the caller, who becomes its owner; the subtree under
+  // it comes along and its parent() becomes null.  Returns nullptr when `child`
+  // is not one of ours -- including the case where a handler run during the
+  // removal got to it first.
+  //
+  // Before anything is unlinked, EVERY node of the departing subtree is
+  // announced to the Window (Window::widgetDetached), which drops any focus,
+  // hover, mouse-grab or popup pointer aimed into it.  Per node rather than
+  // just at the root, because those pointers routinely name a grandchild: a
+  // root-only notification would leave the window dereferencing freed memory on
+  // the very next event.
+  //
+  // Legal from inside an event handler or a slot -- an in-flight event bubble
+  // that is standing on a removed widget is cancelled rather than left walking
+  // into freed memory.  The one thing a slot still may NOT do is remove the
+  // object that owns the signal it is running inside: that is contract D7 (see
+  // core/Signal.hpp), and nothing here can make destroying a Signal mid-emit
+  // safe.
+  std::unique_ptr<Widget> takeChild(Widget* child);
+
+  // takeChild() and let the result die: `child` and its subtree are destroyed.
+  void removeChild(Widget* child);
+
+  // Removes every child, last one first -- reverse order of construction, the
+  // same order the compiler would have used.
+  void clearChildren();
+
   // --- geometry (logical pixels, relative to the parent) -------------------
   void setGeometry(const Rect& r);
   const Rect& geometry() const { return geometry_; }
