@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 
+#include "geeyoou/core/ConnectionScope.hpp"
 #include "geeyoou/widget/PopupList.hpp"
 #include "geeyoou/widget/PushButton.hpp"
 
@@ -73,6 +74,11 @@ class MenuButton : public PushButton {
   PopupList* menu_ = nullptr;
   float menuWidth_ = 0.0f;
   int maxRows_ = 12;
+
+  // Declared LAST so it is destroyed FIRST -- same reason as SelectBase: the
+  // menu is a child of the WINDOW, so the slot ensureMenu() installs outlives
+  // this button unless the subscription is owned.
+  ConnectionScope conns_;
 };
 
 // Primary action on the left, menu of alternatives behind the chevron.
