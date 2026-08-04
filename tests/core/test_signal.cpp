@@ -72,6 +72,41 @@ GEEYOOU_TEST(signal, default_connection_disconnects_nothing) {
   CHECK_EQ(hits, 2);
 }
 
+GEEYOOU_TEST(signal, disconnect_removes_exactly_one_slot) {
+  // eraseById() returns the moment it erases.  Dropping that `return` leaves
+  // the loop stepping an iterator the erase invalidated, which is a crash --
+  // eventually, somewhere else, and only if the allocator cooperates.  This
+  // case makes the same defect a plain arithmetic failure instead: the size
+  // must fall by exactly one per disconnect, and only the named slot may stop
+  // arriving.
+  Signal<> sig;
+  constexpr int kSlots = 6;
+  int hits[kSlots] = {};
+  Connection conns[kSlots];
+  for (int i = 0; i < kSlots; ++i) {
+    conns[i] = sig.connect([&hits, i] { ++hits[i]; });
+  }
+  CHECK_EQ(sig.size(), std::size_t(kSlots));
+
+  // From the MIDDLE: erasing the last entry is the one case where running off
+  // the end of the loop happens to be harmless.
+  sig.disconnect(conns[2]);
+  CHECK_EQ(sig.size(), std::size_t(kSlots - 1));
+  sig.disconnect(conns[3]);
+  CHECK_EQ(sig.size(), std::size_t(kSlots - 2));
+  // Already gone: a second disconnect must remove nothing at all.
+  sig.disconnect(conns[2]);
+  CHECK_EQ(sig.size(), std::size_t(kSlots - 2));
+
+  sig.emit();
+  CHECK_EQ(hits[0], 1);
+  CHECK_EQ(hits[1], 1);
+  CHECK_EQ(hits[2], 0);
+  CHECK_EQ(hits[3], 0);
+  CHECK_EQ(hits[4], 1);
+  CHECK_EQ(hits[5], 1);
+}
+
 GEEYOOU_TEST(signal, slots_run_in_connection_order) {
   Signal<> sig;
   std::string order;
@@ -373,11 +408,38 @@ GEEYOOU_TEST(signal, a_moved_from_signal_is_reusable) {
 // "how many times did that allocate" is a first-class question rather than an
 // optimisation.  emit() therefore captures a list of slot IDS on the stack
 // instead of copying the slot list.
+namespace {
+
+// MSVC's debugging iterators allocate a proxy object per CONTAINER, including
+// the spill vector emit() leaves empty on the inline path.  Under
+// _ITERATOR_DEBUG_LEVEL != 0 the counts below would therefore be measuring the
+// STL's debug bookkeeping, not emit()'s allocation profile -- one allocation
+// per emission that does not exist in anything anyone ships.
+//
+// So the COUNTS are asserted in Release only, loudly (a note in the summary)
+// rather than silently, while the functional half of both cases still runs in
+// Debug.  Weakening the Release gate to accommodate a Debug-only artefact would
+// be the wrong trade: Release is the build that runs in the plant.
+#if defined(_ITERATOR_DEBUG_LEVEL) && _ITERATOR_DEBUG_LEVEL != 0
+constexpr bool kStlAllocatesPerContainer = true;
+#else
+constexpr bool kStlAllocatesPerContainer = false;
+#endif
+
+void noteAllocCountsSkipped(const char* which) {
+  geeyoou::test::note(std::string("[skip] ") + which +
+                      "：分配计数断言仅在 Release 生效"
+                      "（_ITERATOR_DEBUG_LEVEL != 0 时 STL 每个容器自带一次代理分配）");
+}
+
+}  // namespace
+
 GEEYOOU_TEST(signal, emit_allocates_nothing_within_the_inline_capacity) {
   Signal<int> sig;
   {
     // An empty signal takes the early return.  This is what makes it safe to
-    // declare a signal on a widget that nobody wired.
+    // declare a signal on a widget that nobody wired.  Free of the proxy caveat
+    // below: the early return constructs no container at all.
     const AllocGuard g;
     sig.emit(1);
     CHECK_EQ(g.count(), std::uint64_t(0));
@@ -391,7 +453,11 @@ GEEYOOU_TEST(signal, emit_allocates_nothing_within_the_inline_capacity) {
   {
     const AllocGuard g;
     for (int i = 0; i < 1000; ++i) sig.emit(1);
-    CHECK_EQ(g.count(), std::uint64_t(0));
+    if constexpr (kStlAllocatesPerContainer) {
+      noteAllocCountsSkipped("signal.emit_allocates_nothing_within_the_inline_capacity");
+    } else {
+      CHECK_EQ(g.count(), std::uint64_t(0));
+    }
   }
   CHECK_EQ(seen, 8000);
 }
@@ -407,7 +473,11 @@ GEEYOOU_TEST(signal, emit_spills_to_the_heap_exactly_once_past_the_capacity) {
 
   const AllocGuard g;
   for (int i = 0; i < 1000; ++i) sig.emit(1);
-  CHECK_EQ(g.count(), std::uint64_t(1000));
+  if constexpr (kStlAllocatesPerContainer) {
+    noteAllocCountsSkipped("signal.emit_spills_to_the_heap_exactly_once_past_the_capacity");
+  } else {
+    CHECK_EQ(g.count(), std::uint64_t(1000));
+  }
   CHECK_EQ(seen, 9000);
 }
 
