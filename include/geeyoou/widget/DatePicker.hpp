@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 
+#include "geeyoou/core/ConnectionScope.hpp"
 #include "geeyoou/core/Date.hpp"
 #include "geeyoou/widget/SelectBase.hpp"
 
@@ -79,6 +80,11 @@ class DatePicker : public SelectBase {
   Date min_{1970, 1, 1};
   Date max_{2999, 12, 31};
   CalendarView* calendar_ = nullptr;
+
+  // Declared LAST so it is destroyed FIRST.  The calendar is a child of the
+  // WINDOW, so the dateChosen slot open() installs -- which captures `this` --
+  // outlives this picker unless the subscription is owned.
+  ConnectionScope conns_;
 };
 
 }  // namespace geeyoou
