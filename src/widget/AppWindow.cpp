@@ -41,7 +41,7 @@ AppWindow::AppWindow(const std::string& title, int logicalWidth,
 
   // The window backdrop is a stored colour rather than a per-paint theme
   // lookup, so unlike every widget it has to be re-read when the skin changes.
-  skinConn_ = skins().changed.connect([this] {
+  conns_ += skins().changed.connect([this] {
     setBackground(Theme::current().background);
     update();
   });
@@ -49,7 +49,9 @@ AppWindow::AppWindow(const std::string& title, int logicalWidth,
   relayout();
 }
 
-AppWindow::~AppWindow() { skins().changed.disconnect(skinConn_); }
+// Out of line rather than defaulted in the header: the header would then need
+// the complete definition of everything the members hold.
+AppWindow::~AppWindow() = default;
 
 // ----------------------------------------------------------------- layout ---
 float AppWindow::borderWidth() const {
