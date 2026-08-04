@@ -245,7 +245,8 @@ void DatePicker::open() {
     calendar_ = w->add<CalendarView>();
     calendar_->setRange(min_, max_);
     calendar_->setToday(today_);
-    calendar_->dateChosen.connect([this](Date d) {
+    // Owned by conns_: the calendar belongs to the Window and survives us.
+    conns_ += calendar_->dateChosen.connect([this](Date d) {
       setDate(d);
       close();
     });
