@@ -72,30 +72,84 @@ std::size_t indexOfChild(const std::vector<std::unique_ptr<Widget>>& v,
   return kNotAChild;
 }
 
+// Is `w` STILL a child of `parent`?  `hint` is where it was last seen, which it
+// almost always still is, so the answer costs one compare instead of a scan;
+// `hint` is corrected when the list did move underneath us.
+//
+// Only pointer VALUES are compared -- `w` is never dereferenced -- so this is
+// also the right question to ask about a widget an application slot may already
+// have destroyed.
+bool stillAChild(const Widget& parent, const Widget* w, std::size_t& hint) {
+  const std::vector<std::unique_ptr<Widget>>& v = parent.children();
+  if (hint < v.size() && v[hint].get() == w) return true;
+  const std::size_t i = indexOfChild(v, w);
+  if (i == kNotAChild) return false;
+  hint = i;
+  return true;
+}
+
 // Pre-order, and BEFORE anything is unlinked: `win` is still reachable through
 // the parent chain and every observer pointer still names a live widget when it
 // is dropped.
-void announceDetached(Widget* node, Window* win) {
+//
+// Every announcement runs APPLICATION code -- widgetDetached closes a departing
+// popup, which emits popupClosed -- and contract D7 lets a slot destroy other
+// objects.  Two consequences, and both cost a re-check rather than a copy:
+//
+//   * `node` itself may be gone when widgetDetached returns (a slot is entitled
+//     to removeChild(node) from wherever it is parented).  Everything below
+//     dereferences it, so it is proved to still be in `parent` first.
+//   * a slot may remove a child of `node`.  Walking the live vector by index is
+//     NOT enough: re-reading size() prevents the overrun, but removing a child
+//     ahead of the cursor shifts every later one DOWN by one, and the walk then
+//     skips a whole subtree -- whose nodes keep the window's focus/hover/grab
+//     pointers aimed at memory that is about to be freed.  So the list is
+//     snapshotted and each entry re-checked against the live one.
+void announceDetached(const Widget& parent, Widget* node, std::size_t nodeHint,
+                      Window* win) {
   cancelBubblesOn(node);
   if (win) win->widgetDetached(node);
-  // By index, re-reading size() each time: widgetDetached emits popupClosed for
-  // a departing popup, and a slot on that signal may add or remove children of
-  // its own.  A range-for would be holding an iterator across that call.
-  const std::vector<std::unique_ptr<Widget>>& kids = node->children();
-  for (std::size_t i = 0; i < kids.size(); ++i) announceDetached(kids[i].get(), win);
+  if (!stillAChild(parent, node, nodeHint)) return;
+  if (node->children().empty()) return;  // the common case: no snapshot, no allocation
+
+  std::vector<Widget*> kids;
+  kids.reserve(node->children().size());
+  for (const std::unique_ptr<Widget>& c : node->children()) kids.push_back(c.get());
+
+  for (std::size_t i = 0; i < kids.size(); ++i) {
+    // Announcing a sibling can take `node` away too -- it is a legal thing for a
+    // slot to do, and node->children() below would then be a read of freed
+    // memory.
+    if (!stillAChild(parent, node, nodeHint)) return;
+    std::size_t hint = i;
+    if (!stillAChild(*node, kids[i], hint)) continue;  // already removed for us
+    announceDetached(*node, kids[i], hint, win);
+  }
 }
 
 }  // namespace
 
+Widget::~Widget() {
+  // A bubble standing on this widget must not walk into the parent pointer that
+  // is about to be freed.  announceDetached() already does this for the removal
+  // API, but destruction has other doors: dropping the unique_ptr takeChild()
+  // returned, a Window going out of scope, or any subclass destructor at all.
+  //
+  // Descendants are covered without a walk: children_ is destroyed right after
+  // this body, so every one of them arrives here on its own.
+  cancelBubblesOn(this);
+}
+
 std::unique_ptr<Widget> Widget::takeChild(Widget* child) {
   if (!child) return nullptr;
-  if (indexOfChild(children_, child) == kNotAChild) return nullptr;
+  const std::size_t hint = indexOfChild(children_, child);
+  if (hint == kNotAChild) return nullptr;
 
   // Repaint what the subtree is vacating, while it is still attached: update()
   // maps through the parent chain to find the Window it must report damage to.
   if (child->visible_) child->update();
 
-  announceDetached(child, window());
+  announceDetached(*this, child, hint, window());
 
   // Re-found rather than reused: announceDetached can run popupClosed slots,
   // and one of those may already have removed `child` -- or a sibling ahead of
