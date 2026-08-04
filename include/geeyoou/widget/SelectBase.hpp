@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 
+#include "geeyoou/core/ConnectionScope.hpp"
 #include "geeyoou/core/Signal.hpp"
 #include "geeyoou/render/Icon.hpp"
 #include "geeyoou/widget/PopupList.hpp"
@@ -98,6 +99,12 @@ class SelectBase : public Widget {
   bool hovered_ = false;
   int maxVisibleRows_ = 9;
   float popupWidth_ = 0.0f;
+
+  // Declared LAST so it is destroyed FIRST.  The slots ensurePopup() installs
+  // capture `this` and are subscribed to a PopupList that belongs to the
+  // WINDOW, so they outlive this control unless something drops them; taking
+  // the popup down in the destructor closes it but leaves them connected.
+  ConnectionScope conns_;
 };
 
 }  // namespace geeyoou
