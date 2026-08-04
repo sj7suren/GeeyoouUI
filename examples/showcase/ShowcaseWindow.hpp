@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "Shell.hpp"
+#include "geeyoou/core/ConnectionScope.hpp"
 #include "geeyoou/widget/AppWindow.hpp"
 #include "geeyoou/widget/WindowHeader.hpp"
 
@@ -55,7 +56,9 @@ class ShowcaseWindow : public geeyoou::AppWindow {
   geeyoou::HeaderMenu* language_ = nullptr;
   geeyoou::HeaderAvatar* account_ = nullptr;
   std::string userQss_;
-  geeyoou::Connection skinConn_;
+
+  // Declared last, destroyed first -- see core/ConnectionScope.hpp.
+  geeyoou::ConnectionScope conns_;
 };
 
 }  // namespace showcase
