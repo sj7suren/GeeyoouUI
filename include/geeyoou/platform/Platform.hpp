@@ -9,6 +9,7 @@
 //
 // v1 ships Win32 only.  See docs/architecture.md section 2.
 //
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -101,6 +102,16 @@ class PlatformWindow {
   std::function<void()> onWindowStateChanged;
 };
 
+// Identifies a running timer.  Zero is never handed out and never refers to
+// anything, so a default-initialised TimerId is safe to pass to stopTimer().
+// Ids are not reused, which is what makes stopping a timer twice -- or stopping
+// one that has already been torn down -- a no-op instead of a way to kill
+// somebody else's clock.
+//
+// At namespace scope rather than nested in Platform: widgets store one as a
+// member and should not have to name the backend interface to do so.
+using TimerId = std::uint64_t;
+
 class Platform {
  public:
   virtual ~Platform() = default;
@@ -115,7 +126,19 @@ class Platform {
   // Fires `fn` on the UI thread every `intervalMs`.  This is the only timing
   // primitive the widget layer needs: HMI screens are driven either by data
   // arrival or by a fixed refresh tick.
-  virtual void startTimer(int intervalMs, std::function<void()> fn) = 0;
+  //
+  // The returned id MUST be kept by anything whose callback captures a pointer
+  // it does not own for the rest of the process.  A timer outlives the object
+  // that started it unless somebody stops it, and the callback is the last
+  // thing running against a destroyed window.  [[nodiscard]] because "I meant
+  // this one to run forever" is worth one explicit (void) at the call site.
+  [[nodiscard]] virtual TimerId startTimer(int intervalMs,
+                                           std::function<void()> fn) = 0;
+
+  // Cancels a timer.  Silently does nothing for id 0, for an id that already
+  // stopped, and for one that never existed.  Legal from inside the timer's own
+  // callback.
+  virtual void stopTimer(TimerId id) = 0;
 
   // Clipboard, as UTF-8.  Returns an empty string when the clipboard holds no
   // text (or cannot be opened -- another process may hold it locked, which is
