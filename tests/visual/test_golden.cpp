@@ -221,6 +221,21 @@ class PrimitivesProbe : public Widget {
   }
 };
 
+// A flat rectangle of one colour, filling its own local rect.  Deliberately
+// featureless: the case it serves is about WHERE the paint lands, not what is
+// drawn, and any decoration would only add pixels that a real regression could
+// hide behind.
+class ClipBox : public Widget {
+ public:
+  explicit ClipBox(Color c) : color_(c) {}
+
+ protected:
+  void onPaint(Painter& p, const Rect&) override { p.fillRect(localRect(), color_); }
+
+ private:
+  Color color_;
+};
+
 class IconStrip : public Widget {
  protected:
   void onPaint(Painter& p, const Rect&) override {
@@ -261,6 +276,39 @@ GEEYOOU_TEST(golden, shape_icons) {
   const OffscreenImage img =
       renderTree(strip, 278, 60, Color::rgb(0x12, 0x16, 0x1D));
   GOLDEN("shape", "icons", img, Gate::Hard);
+}
+
+GEEYOOU_TEST(golden, shape_clip_inheritance) {
+  // Every other baseline in this group draws a root that fills the canvas with
+  // children entirely inside it, and for that shape `mine.intersected(clip)` is
+  // the identity -- so deleting the intersection from Widget::paintTree changes
+  // not one pixel of any of them.  That is a hole in the visual gate, and this
+  // scene is what closes it: the orange child OVERFLOWS its 100x100 parent by
+  // 150 pixels in both directions, and only the inherited clip keeps it inside.
+  //
+  // Losing that clip is not cosmetic.  It is what stops a scrolled ListView row
+  // from painting over the panel that contains it, and a dropdown row from
+  // spilling across the screen behind it.
+  resetStyling();
+  Widget root;
+  root.setGeometry({0.0f, 0.0f, 200.0f, 200.0f});
+
+  ClipBox* panel = root.add<ClipBox>(Color::rgb(0x2F, 0xA8, 0xFF));
+  panel->setGeometry({20.0f, 20.0f, 100.0f, 100.0f});
+
+  // Runs off the parent's right and bottom edges: without the inherited clip it
+  // would cover most of the canvas instead of a 50x50 corner.
+  ClipBox* overflow = panel->add<ClipBox>(Color::rgb(0xFF, 0xB0, 0x20));
+  overflow->setGeometry({50.0f, 50.0f, 200.0f, 200.0f});
+
+  // A sibling that stays inside, so the baseline pins down the ordinary case in
+  // the same picture -- an over-eager clip would show up here.
+  ClipBox* inside = panel->add<ClipBox>(Color::rgb(0x3E, 0xD1, 0x7A));
+  inside->setGeometry({10.0f, 10.0f, 25.0f, 25.0f});
+
+  const OffscreenImage img =
+      renderTree(root, 200, 200, Color::rgb(0x12, 0x16, 0x1D));
+  GOLDEN("shape", "clip_inheritance", img, Gate::Hard);
 }
 
 GEEYOOU_TEST(golden, shape_button_variants) {
