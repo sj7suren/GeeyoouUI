@@ -55,8 +55,6 @@ class DataHub {
 
   // Emitted once per sample, on the UI thread, during drain().
   Signal<const Sample&> sampleArrived;
-  // Emitted once per drain() that actually moved anything, after all samples.
-  Signal<std::size_t> batchDrained;
 
  private:
   struct Channel {
