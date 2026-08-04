@@ -46,9 +46,21 @@ void MenuButton::ensureMenu() {
   menu_ = w->add<PopupList>();
   menu_->setMaxVisibleRows(maxRows_);
   // Owned by conns_: the menu belongs to the Window and survives us.
+  //
+  // CLOSE FIRST, dispatch second, and the order is load-bearing rather than
+  // stylistic.  trigger() emits, an emit runs application code, and "the
+  // operator picked a menu entry" is precisely when an application tears down
+  // the screen this button lives on -- which is legal (contract D7 only forbids
+  // destroying the owner of the signal being emitted, and that signal belongs
+  // to the Window's PopupList, not to us).  With the emit last, this lambda has
+  // nothing left to touch when it returns; the other way round, closeMenu()
+  // would be a call on a freed `this`.
+  //
+  // The visible trade: the application observes "menu closed" BEFORE "entry
+  // triggered".  Cheaper than a use-after-free.
   conns_ += menu_->rowActivated.connect([this](int row) {
-    trigger(row);
     closeMenu();
+    trigger(row);
   });
 }
 
@@ -90,9 +102,14 @@ void MenuButton::trigger(int row) {
   if (row < 0 || row >= int(rows.size())) return;
   const int mi = rows[std::size_t(row)].modelIndex;
   if (mi < 0 || mi >= int(items_.size())) return;
+  // Taken BY VALUE before the first emit, not held as a reference into items_.
+  // A triggeredIndex slot may call setItems() -- relabelling a menu on a
+  // language switch or a permission refresh is exactly that -- and the vector
+  // reallocates, leaving any reference into it dangling for the second emit.
   const MenuItem& m = items_[std::size_t(mi)];
+  const std::string id = m.id.empty() ? m.text : m.id;
   triggeredIndex.emit(mi);
-  triggered.emit(m.id.empty() ? m.text : m.id);
+  triggered.emit(id);
 }
 
 void MenuButton::onPaint(Painter& p, const Rect& dirty) {
@@ -142,7 +159,9 @@ void MenuButton::onKey(const KeyEvent& e) {
       int nth = 0;
       for (std::size_t i = 0; i < rows.size(); ++i) {
         if (rows[i].separator || !rows[i].enabled) continue;
-        if (++nth == digit) { trigger(int(i)); closeMenu(); break; }
+        // Closed before the dispatch, for the same reason as the rowActivated
+        // lambda above: trigger() is the last thing that may touch `this`.
+        if (++nth == digit) { closeMenu(); trigger(int(i)); break; }
       }
       e.accept();
       return;
