@@ -215,3 +215,49 @@
 - **无 Window 的游离树**：`removeChild` 在没有 Window 的子树上照常工作，冒泡游标也照常取消（游标链是进程级静态，不依赖 Window），但没有 `widgetDetached` 可发——游离树上本来也没有观察指针。
 - **控件持有的弹层反向悬垂**：`SelectBase::popup_` / `MenuButton::menu_` / `DatePicker::calendar_` 是裸指针，指向 Window 的子节点。如果应用对 Window 调用 `removeChild(那个弹层)`，这三个指针会悬垂，且 `Window::widgetDetached` 无从通知它们。库内无人这样做，**但移除 API 使它第一次成为可写出来的代码**。
 - `emit` 实参是成员引用（上一节第 2 条）：未修，仍然成立。
+
+---
+
+## 阶段 4 复核：R1 门禁整改（安全门 FAIL + QA 门 FAIL 的处置）
+
+R1 的安全门与 QA 门都判 FAIL。本节记录本轮逐条处置、以及**明确推迟到 R2** 的条目。全部改动为行级，未引入新机制、未改架构。
+
+### 一、本轮修掉的（安全门）
+
+| # | 原判 | 修法 | 固化用例 |
+|---|---|---|---|
+| A1 | **S2 高**：`~Widget` 不取消冒泡游标。取消只发生在 `announceDetached`，即只覆盖移除 API；而 widget 还能经 `unique_ptr` 释放、栈上 Window 出作用域、任何子类析构等途径死亡 | `~Widget` 从头文件的 `= default` 移到 `Widget.cpp` 定义，体内 `cancelBubblesOn(this)`。后代无需遍历：`children_` 紧随其后销毁，每个后代都会各自走到这里 | `removal.a_slot_may_destroy_the_bubble_subtree_without_the_removal_api` |
+| A2 | **S1 中**：`DepthGuard` 持 `SignalBlock&`，而 signal 的 `block_` 是唯一强引用。D7 违约时 `~Signal` 释放控制块，栈上 `~DepthGuard` 仍 `--emitDepth` → 确定性 4 字节 write-after-free；Release 下 assert 已被编译掉，这次静默堆写就是违约第一现场 | `DepthGuard` 改持 `shared_ptr<detail::SignalBlock>`。代价：每次 emit 一对原子增减，**不新增分配**（`signal.emit_allocates_nothing_within_the_inline_capacity` 仍为 0） | 无直接用例（见"未验证点"） |
+| A3 | **S3+S4 中**：`announceDetached` 按下标遍历活动 vector。重读 `size()` 只防越界、不防**索引平移**——槽删掉靠前的兄弟后，其后整棵子树永不被通告；另外通告后无条件 `node->children()`，而槽可以合法地把 `node` 从别处移除 | 通告后先 `stillAChild(parent, node, hint)` 证明 `node` 还在，再对子列表**取快照**并逐个复检；`stillAChild` 带位置提示，未变动时是一次指针比较，只有真被改动时才退化为扫描。叶子节点不取快照、不分配 | `removal.detach_still_reaches_a_sibling_that_a_slot_shifted_down`（确定性）、`removal.detach_survives_a_slot_that_removes_the_node_being_announced` |
+| A4 | **S6 高**：`MenuButton::trigger` 跨 `triggeredIndex.emit` 持 `const MenuItem&`，槽内 `setItems()` 重分配即悬垂 | emit 前按值取出 `const std::string id` | `popup_lifetime.menu_trigger_survives_set_items_from_its_own_slot` |
+| A5 | **S12+D1 高**：`GWLP_USERDATA` 从不清除，`~Win32Window` 的 `DestroyWindow` 会同步回调 wndProc | `~Win32Window` 在 `DestroyWindow` **之前**清空 `GWLP_USERDATA`；另加 `WM_NCDESTROY` 分支，覆盖"窗口被别人销毁"的路径 | 无自动用例（见"未验证点"） |
+| A6 | **高**：三处"先派发、后关闭"的 lambda | 语句对调为**先关闭、后派发**，使 emit 链成为 lambda 的最后一条语句。`SelectBase` 的两条键盘路径同形，一并对调，否则鼠标与键盘会给应用两种事件顺序 | `popup_lifetime.*_closes_before_it_dispatches*`（4 个） |
+| A7 | **S8 低**：`MSG msg;` 未初始化，`GetMessageW` 返回 -1 时读未初始化栈 | `MSG msg{}`，并把 0（WM_QUIT）与 -1（队列出错）分开处理 | 无自动用例（需真实消息循环） |
+
+**A6 的行为变更（需要写进控件文档）**：应用先收到"弹层已关闭"，再收到"已选中 / 已触发 / 日期已变"。这是刻意的取舍——安全 > 事件顺序美观。
+
+### 二、本轮修掉的（QA 门）
+
+- **B1 Debug 构建**：新增 `build-debug.bat`（独立的 `build-debug/` 目录，与 Release 树并存）。此前 `build.bat` 硬编码 Release，`Signal.hpp` 的 `assert(!isEmitting())` **从未被编译进任何二进制**，D7 至今零次执行。新增负向用例 `d7.destroying_the_signal_owner_from_a_slot_is_caught_in_debug`：以 `GEEYOOU_D7_SUICIDE=1` 重跑自身，Debug 下子进程必须**死在该断言上**（实测退出码 3，stderr 打印 `Assertion failed: !isEmitting() && "Signal destroyed from inside its own emit()"`），Release 下子进程必须走到底并以 42 退出——**后者不是通过，而是本套件白纸黑字承认 Release 不执行 D7**。
+- **B2 裁剪继承基线**：新增 `shape/clip_inheritance`——父 100×100、子几何 (50,50,200,200) 溢出父边界。此前所有 golden 场景都是"根铺满画布、子控件全在父内"，`mine ⊆ clipInWindow` 时交集是恒等运算，删掉 `intersected(clipInWindow)` 零像素差。实测注入后 **14400 像素不符，首个在 (120,70)**（正是父的右边界）。
+- **B3 第二窗口生命周期**：此前全仓无任何测试调用 `enableAnimations()`，`~Window` 的 `stopTimer(animationTimer_)` 每次都走 `stopTimer(0)` 早退分支，该修复的实际覆盖率为 0。新增 `timer.a_second_windows_animation_clock_dies_with_the_window`。
+- **B4 I1 确定性断言**：新增 `signal.disconnect_removes_exactly_one_slot`，从**中间**断开并断言 `size()` 精确递减 1、其余槽照常到达——原本 I1 只能靠迭代器失效崩溃被间接发现。
+- **测试基础设施**：`main()` 现在关掉 stdout 缓冲（崩溃跑也能看到最后一个用例名），并把 CRT/STL 断言从**模态对话框**改到 stderr（Debug 下无人值守跑不再挂死）。`signal.emit_*` 两个分配计数断言在 `_ITERATOR_DEBUG_LEVEL != 0` 时改为打印 `[skip]` 说明——MSVC 调试迭代器每个容器自带一次代理分配，Debug 下测的是 STL 记账而非 `emit` 的分配画像；Release 门禁强度不变。
+
+### 三、O6 计数口径（CTO 裁定，仅记录，不改代码）
+
+**按类计数，不按成员计数。** 新增公共类型算 1（`ConnectionScope` = 1、`TimerId` = 1），类内新增成员不单独计。按此口径当前 = 12，压线通过。
+
+### 四、明确推迟到 R2（本轮不修）
+
+- **S5 弹层永不回收**：`SelectBase::popup_` / `MenuButton::menu_` / `DatePicker::calendar_` 由 Window 拥有且从不移除，控件反复创建即单调增长。
+- **S7 异常穿越回调**：`emit` / 冒泡 / `announceDetached` 都不是异常安全的；一个抛出的槽会跳过 `Window` 的指针清理。
+- **S10 递归无深度上限**：`paintTree` / `hitTest` / `announceDetached` / `collectFocusable` 均按树深递归，深树可爆栈。
+- **S13**：同批留档。
+- 上一节遗留的 **`emit` 实参是成员引用**、以及 **控件持有的弹层反向悬垂**，仍然成立。
+
+### 五、A6 之后**仍然**残留的窗口（R2 输入）
+
+对调语句把危险面从"大概率"压到"小概率"，但没有消灭它：`close()` / `closeMenu()` 内部的 `Window::closePopup()` 会发 `popupClosed`，`SelectBase::close()` 末尾还会发 `openStateChanged(false)`。若应用在**这两个信号**的槽里销毁该控件，随后的 `onRowActivated(row)` / `trigger(row)` 仍是 UAF。
+
+两种顺序都存在窗口，本轮选的是窗口更窄的那个：应用在"选中值"的槽里切画面是常见写法，在"弹层已关闭"的槽里销毁打开它的控件则罕见。**彻底消除需要弱 widget 句柄或把关闭责任下沉到 `PopupList`**，即第三节所述的 R4/R5 方案。
