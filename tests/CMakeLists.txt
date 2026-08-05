@@ -25,6 +25,7 @@ add_executable(geeyoou_tests
   widget/test_showcase_pages.cpp
   widget/test_r2_safety.cpp
   widget/test_r2_remediation.cpp
+  widget/test_rem3_doors.cpp
   widget/test_layout_soak.cpp
   render/test_style_cascade.cpp
   visual/test_golden.cpp
