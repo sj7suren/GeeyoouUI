@@ -38,6 +38,8 @@ class Label : public Widget {
   float heightForWidth(float width) const;
   float lineSpacing() const;
 
+  SizeHint sizeHint() const override;
+
  protected:
   void onPaint(Painter& p, const Rect& dirtyLocal) override;
   void onGeometryChanged() override;

@@ -13,6 +13,7 @@ void Label::setText(std::string utf8) {
   text_ = std::move(utf8);
   wrappedFor_ = -1.0f;
   update();
+  invalidateSizeHint();
 }
 
 void Label::setPixelSize(float px) {
@@ -20,6 +21,7 @@ void Label::setPixelSize(float px) {
   sizeSet_ = true;
   wrappedFor_ = -1.0f;
   update();
+  invalidateSizeHint();
 }
 
 void Label::setColor(Color c) {
@@ -49,6 +51,44 @@ void Label::setWordWrap(bool on) {
   wrap_ = on;
   wrappedFor_ = -1.0f;
   update();
+  invalidateSizeHint();
+}
+
+// What the text needs, measured -- not what the label was last given.
+//
+// The width is the longest HARD line (text is split on '\n' only): soft
+// wrapping is a function of the width the label ends up with, and asking for it
+// here would make the hint depend on the geometry a previous arrange produced,
+// which is the circularity ADR-R2-09 forbids.
+//
+// So a wrapping label declares a minimum width of zero -- "squeeze me, I will
+// cope" -- while a non-wrapping one declares its full text width as its
+// minimum, because squeezing it does not reflow anything, it only cuts the text
+// off.  That difference is the entire behavioural content of setWordWrap() as
+// far as a layout is concerned.
+SizeHint Label::sizeHint() const {
+  const float ps = pixelSize();
+  const float lh = lineSpacing();
+
+  float widest = 0.0f;
+  std::size_t start = 0;
+  std::size_t lineCount = 1;
+  while (true) {
+    std::size_t nl = text_.find('\n', start);
+    const bool last = (nl == std::string::npos);
+    if (last) nl = text_.size();
+    widest = std::max(
+        widest,
+        measureText(std::string_view(text_).substr(start, nl - start), ps).width);
+    if (last) break;
+    ++lineCount;
+    start = nl + 1;
+  }
+
+  SizeHint h;
+  h.preferred = Size{widest, float(lineCount) * lh};
+  h.min = Size{wrap_ ? 0.0f : widest, lh};
+  return h;
 }
 
 void Label::onGeometryChanged() {
