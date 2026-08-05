@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -969,4 +970,361 @@ GEEYOOU_TEST(layout_engine, m4_a_pass_that_nests_past_the_ceiling_is_recorded_no
         "tree construction itself first (docs/iterations/02-layout-engine.md section 10.4.2). "
         "This case only runs in the Release-configured process.");
   }
+}
+
+// --- the ceiling, without a deep tree ---------------------------------------
+//
+// The case above needs 64 nested layout hosts because it drives the ceiling the
+// way the ceiling was DESIGNED to be driven -- a pass on a host whose child is
+// itself a host -- and Debug's add<T> refuses to build that tree, so half the
+// gate has never run it.  Section 10.4 item 2 records that as "counter and
+// recording path implemented, never exercised".
+//
+// It does not have to be a deep tree.  What g_layoutDepth counts is FRAMES, and
+// sixty-five unrelated one-widget trees nest sixty-five frames just as well as
+// one sixty-five-level tree does: each host's own arrange() lays out the next
+// host.  A layout that lays out a sibling column when its own column moves is
+// not a hypothetical shape, and every host here is depth 0, so nothing in Debug
+// objects to building them.
+//
+// This is the SAME move that makes M-2 testable at all below, which is the
+// point worth carrying away: the two ceilings are properties of the recursion,
+// not of the tree, and a case that builds a tree to reach them is testing
+// through the wrong variable.
+namespace {
+
+class ChainedPassLayout : public Layout {
+ public:
+  Widget* next = nullptr;
+  int arranges = 0;
+
+ protected:
+  SizeHint measure(const Widget&) const override { return SizeHint{}; }
+
+  LayoutOverflow arrange(Widget&, const Rect&) override {
+    ++arranges;
+    // No setGeometry anywhere in this chain, deliberately: M2's downward
+    // one-way assert is a Debug abort, and a case whose job is to run in Debug
+    // must not go anywhere near it.  What is being counted is the depth of the
+    // PASS, and performLayout() is a pass all by itself.
+    if (next) next->performLayout();
+    return LayoutOverflow{};
+  }
+};
+
+}  // namespace
+
+GEEYOOU_TEST(layout_engine, m4_a_chain_of_unrelated_hosts_reaches_the_same_ceiling) {
+  constexpr int kHosts = 80;  // > kMaxTreeDepth (64)
+
+  std::vector<std::unique_ptr<Widget>> hosts;
+  std::vector<ChainedPassLayout*> layouts;
+  hosts.reserve(kHosts);
+  layouts.reserve(kHosts);
+  for (int i = 0; i < kHosts; ++i) {
+    hosts.push_back(std::make_unique<Widget>());
+    layouts.push_back(hosts.back()->setLayout<ChainedPassLayout>());
+  }
+  // Linked afterwards, so building the chain does not run it: setLayout<>()
+  // arranges once on adoption.
+  for (int i = 0; i + 1 < kHosts; ++i) layouts[std::size_t(i)]->next = hosts[std::size_t(i) + 1].get();
+
+  geeyoou::detail::resetLayoutDiagnostics();
+  for (ChainedPassLayout* l : layouts) l->arranges = 0;
+
+  hosts[0]->performLayout();
+
+  // Refused at the host that would have been the 65th frame, recorded, and the
+  // process is still here.
+  CHECK_EQ(int(geeyoou::detail::layoutDiagnostics().depthExceeded), 1);
+  CHECK_EQ(geeyoou::detail::layoutDiagnostics().lastDepthExceededHost,
+           static_cast<const Widget*>(hosts[64].get()));
+  CHECK_EQ(layouts[63]->arranges, 1);
+  CHECK_EQ(layouts[64]->arranges, 0);
+
+  // Run it again.  This is the count-balance assertion: a ceiling that had left
+  // g_layoutDepth incremented on the refused frame would refuse the very FIRST
+  // call this time, and layouts[0] would not arrange at all.
+  hosts[0]->performLayout();
+  CHECK_EQ(int(geeyoou::detail::layoutDiagnostics().depthExceeded), 2);
+  CHECK_EQ(layouts[0]->arranges, 2);
+  CHECK_EQ(layouts[63]->arranges, 2);
+  CHECK_EQ(layouts[64]->arranges, 0);
+
+  geeyoou::detail::resetLayoutDiagnostics();
+}
+
+// ================================================================== M-2 ===
+//
+// The MEASURING half's depth ceiling (Layout::measureFor), which until this
+// round did not exist: g_measureDepth was incremented, decremented and read by
+// the park list, and never compared against anything.
+//
+// Do not read "M-2" as the M2 above.  M2 is the downward one-way assert; M-2 is
+// the second of the two remediation items this round, and the collision is in
+// the design document rather than in this file's gift to fix.
+//
+// WHAT THE EXISTING LATCH ALREADY COVERS, so that what is left is exact:
+//
+//   * a layout measuring itself -- buffersBusy_ on the way back in;
+//   * a two-layout cycle A -> B -> A -- coming back to A finds A's own latch;
+//   * anything that goes through an ARRANGE -- M4, above.
+//
+// WHAT IT DID NOT: a chain A -> B -> C -> ... -> N of DIFFERENT layouts.  Every
+// latch is a different bool and every one of them is false, no arrange is
+// involved so g_layoutDepth stays at zero the whole way, and the only thing
+// that ends the recursion is the stack.  A sizeHint() override that asks
+// another widget for its hint is the entire ingredient list, and asking another
+// widget for its hint is what sizeHint() is FOR.
+namespace {
+
+// Forwards the question to a widget in a completely different tree.
+class Relay : public Widget {
+ public:
+  Widget* next = nullptr;
+
+  SizeHint sizeHint() const override {
+    return next ? next->sizeHint() : Widget::sizeHint();
+  }
+};
+
+// Asks its children, which is what every real layout does.
+class AskingLayout : public Layout {
+ public:
+  mutable int measures = 0;
+
+ protected:
+  SizeHint measure(const Widget& host) const override {
+    ++measures;
+    SizeHint h;
+    for (const std::unique_ptr<Widget>& c : host.children()) {
+      const SizeHint k = c->sizeHint();
+      h.preferred.width = (std::max)(h.preferred.width, k.preferred.width);
+      h.preferred.height += k.preferred.height;
+    }
+    return h;
+  }
+
+  // Empty on purpose: this case is about the measuring half alone, and an
+  // arrange that placed anything would drag M4 into the experiment.
+  LayoutOverflow arrange(Widget&, const Rect&) override { return LayoutOverflow{}; }
+};
+
+}  // namespace
+
+GEEYOOU_TEST(layout_engine, a_chain_of_measurements_stops_at_the_same_ceiling_a_pass_does) {
+  // SIXTY-FIVE SEPARATE TREES, each one root plus one child.  Not one tree
+  // sixty-five levels deep: that is what made section 10.4 item 2 untestable in
+  // Debug, and it was never what the ceiling is about.  Nothing here is deeper
+  // than depth 1, so add<T>'s kMaxTreeDepth assert has nothing to say and this
+  // case runs in EVERY configuration.
+  constexpr int kTrees = 80;  // > kMaxTreeDepth (64)
+
+  std::vector<std::unique_ptr<Widget>> trees;
+  std::vector<AskingLayout*> layouts;
+  std::vector<Relay*> relays;
+  trees.reserve(kTrees);
+  layouts.reserve(kTrees);
+  relays.reserve(kTrees);
+  for (int i = 0; i < kTrees; ++i) {
+    trees.push_back(std::make_unique<Widget>());
+    layouts.push_back(trees.back()->setLayout<AskingLayout>());
+    relays.push_back(trees.back()->add<Relay>());
+  }
+  for (int i = 0; i + 1 < kTrees; ++i) relays[std::size_t(i)]->next = trees[std::size_t(i) + 1].get();
+
+  geeyoou::detail::resetLayoutDiagnostics();
+  for (AskingLayout* l : layouts) l->measures = 0;
+
+  const SizeHint answer = trees[0]->sizeHint();
+  (void)answer;
+
+  // ADR-R2-04: the chain was cut, the fact was recorded, and the process is
+  // still running.  REMOVE THE CEILING AND THIS FIRST LINE READS ZERO -- which
+  // is the assertion form of "eighty measurements ran, and eighty thousand
+  // would have run just as happily until the stack ran out".
+  //
+  // Both halves of that sentence were run rather than reasoned, on the E5/E6
+  // tree: with the ceiling taken out, this case fails here with 0 and
+  // layouts[64] having measured anyway; with the ceiling out AND kTrees raised
+  // to 20 000 the process dies of an exhausted stack (SIGSEGV, no report, no
+  // exit code worth reading).  With the ceiling in, the same 20 000 links pass
+  // this case unchanged -- the refusal lands at 64 whatever the chain length
+  // is, which is why 80 is enough to keep in the gate.
+  CHECK_EQ(int(geeyoou::detail::layoutDiagnostics().depthExceeded), 1);
+  CHECK_EQ(geeyoou::detail::layoutDiagnostics().lastDepthExceededHost,
+           static_cast<const Widget*>(trees[64].get()));
+  CHECK_EQ(layouts[63]->measures, 1);
+  CHECK_EQ(layouts[64]->measures, 0);
+
+  // COUNT BALANCE, the first of the two properties the check's position has to
+  // buy (see the note on it in Layout.cpp).  The refused call never touched
+  // g_measureDepth, so the counter is back at zero and a second, identical
+  // measurement behaves identically.  A ceiling that had incremented before
+  // giving up would leave the counter stuck at 64 and refuse trees[0] outright
+  // on this line.
+  const SizeHint again = trees[0]->sizeHint();
+  (void)again;
+  CHECK_EQ(int(geeyoou::detail::layoutDiagnostics().depthExceeded), 2);
+  CHECK_EQ(layouts[0]->measures, 2);
+  CHECK_EQ(layouts[63]->measures, 2);
+  CHECK_EQ(layouts[64]->measures, 0);
+
+  // The park list's second drain point is the other half of what the position
+  // had to leave alone: nothing was parked here, and nothing is left behind.
+  CHECK_EQ(geeyoou::detail::parkedLayoutCount(), std::size_t(0));
+  CHECK_EQ(geeyoou::detail::deathWatchDepth(), std::size_t(0));
+
+  // A refusal is not a degradation of a guarded frame: no cursor was involved,
+  // nothing died, and framesDegraded counts frames that lost the object they
+  // were standing on.  Two counters, two different facts.
+  CHECK_EQ(int(geeyoou::detail::layoutDiagnostics().framesDegraded), 0);
+
+  geeyoou::detail::resetLayoutDiagnostics();
+}
+
+// ================================================================== M-1 ===
+//
+// layoutRect() is a protected virtual an application may override, so it is a
+// door under P1 -- and it is the one section 11.4's enumeration did not have.
+// Widget::contentRect() calls it and then reads layout_ twice; runLayoutIfAny
+// calls contentRect() and then reads layout_ again and hands *this to arrange.
+// Two frames, one door.
+//
+// The library's only override is GroupBox's, which reads a string and a
+// rectangle and cannot reach application code -- so nothing in the library can
+// trigger this, and that is exactly the position the previous five recurrences
+// of this family were in when they were written.
+namespace {
+
+// Counters are STATIC because the object that owns them is freed before the
+// case can read them: its host dies in the middle of the pass, so the layout is
+// parked and then released as the pass unwinds.  A member counter here would be
+// a use-after-free in the test.
+class CountingLayout : public Layout {
+ public:
+  static int arranges;
+  static int measures;
+  static void reset() {
+    arranges = 0;
+    measures = 0;
+  }
+
+ protected:
+  SizeHint measure(const Widget&) const override {
+    ++measures;
+    return SizeHint{};
+  }
+
+  LayoutOverflow arrange(Widget& host, const Rect& content) override {
+    ++arranges;
+    for (const std::unique_ptr<Widget>& c : host.children()) c->setGeometry(content);
+    return LayoutOverflow{};
+  }
+};
+
+int CountingLayout::arranges = 0;
+int CountingLayout::measures = 0;
+
+// A container that draws decoration of its own -- which is the whole reason
+// layoutRect() is overridable -- and destroys itself while working out where
+// that decoration ends.
+//
+// Absurd as written, and one step from ordinary: a header that recomputes
+// itself and, on the way, tells a model something, whose slot drops the page.
+// D7 allows that; nothing in the library forbids it; and the frame it lands in
+// is a private method of Widget that reads two members after the call.
+class SuicidalRect : public Widget {
+ public:
+  mutable std::function<void()> once;
+  static int layoutRectCalls;
+
+ protected:
+  Rect layoutRect() const override {
+    ++layoutRectCalls;
+    // Captured in FRONT of the call, because the call destroys `this`.  This
+    // override is a caller too, and it carries the very obligation it is here
+    // to test -- writing it any other way would make the case fail inside the
+    // test rather than inside the library.
+    const Rect r = localRect();
+    if (once) {
+      std::function<void()> f;
+      f.swap(once);
+      f();
+    }
+    return r;
+  }
+};
+
+int SuicidalRect::layoutRectCalls = 0;
+
+}  // namespace
+
+GEEYOOU_TEST(layout_engine, a_layout_rect_override_that_destroys_its_host_is_survived) {
+  geeyoou::detail::resetLayoutDiagnostics();
+
+  // --- the healthy half, first --------------------------------------------
+  //
+  // The same override, not armed.  It proves the two checks cost a live frame
+  // nothing, and it proves the door really is on this path: layoutRectCalls
+  // moving is what says the case is wired to the door at all rather than to
+  // some other part of setGeometry.
+  {
+    Widget root;
+    SuicidalRect* host = root.add<SuicidalRect>();
+    host->setLayout<CountingLayout>();
+    ProbeWidget* kid = host->add<ProbeWidget>();
+
+    CountingLayout::reset();
+    SuicidalRect::layoutRectCalls = 0;
+    host->setGeometry({0.0f, 0.0f, 120.0f, 90.0f});
+
+    CHECK_EQ(CountingLayout::arranges, 1);
+    CHECK_EQ(SuicidalRect::layoutRectCalls, 1);
+    CHECK(kid->geometry() == Rect(0.0f, 0.0f, 120.0f, 90.0f));
+    CHECK_EQ(int(geeyoou::detail::layoutDiagnostics().framesDegraded), 0);
+    CHECK_EQ(geeyoou::detail::deathWatchDepth(), std::size_t(0));
+  }
+
+  // --- and the door -------------------------------------------------------
+  {
+    Widget root;
+    SuicidalRect* host = root.add<SuicidalRect>();
+    host->setLayout<CountingLayout>();
+    host->add<ProbeWidget>();
+
+    CountingLayout::reset();
+    SuicidalRect::layoutRectCalls = 0;
+    host->once = [&root, host] { root.removeChild(host); };
+
+    // Everything below is stated WITHOUT naming `host` again: it is a dangling
+    // pointer from the moment the hook above runs, and the case has to obey the
+    // rule it is checking.
+    host->setGeometry({0.0f, 0.0f, 120.0f, 90.0f});
+
+    CHECK_EQ(SuicidalRect::layoutRectCalls, 1);
+    CHECK(root.children().empty());
+
+    // The pass gave up BEFORE arranging.  Without the check in contentRect the
+    // frame reads layout_ out of a freed Widget (ASan: heap-use-after-free,
+    // 8-byte read), follows whatever comes back, and hands *this to arrangeFor
+    // -- so this is the line that is red before the fix, in the two
+    // configurations that survive long enough to reach it.
+    CHECK_EQ(CountingLayout::arranges, 0);
+
+    // ONE record, from contentRect's frame.  runLayoutIfAny gives up as well
+    // and deliberately does not raise the counter a second time: its give-up is
+    // a `false` its caller consumes, not an absence (see the note there).  That
+    // is a per-SITE decision, not a general rule -- REM3-G8 counts frames, and
+    // section 11.3 now records the setContentSize case where one operation
+    // legitimately raises it twice.
+    CHECK_EQ(int(geeyoou::detail::layoutDiagnostics().framesDegraded), 1);
+
+    // Nothing leaked on the give-up path: the layout was parked when its host
+    // died mid-pass, and the outermost LayoutGuard released it on the way out.
+    CHECK_EQ(geeyoou::detail::parkedLayoutCount(), std::size_t(0));
+    CHECK_EQ(geeyoou::detail::deathWatchDepth(), std::size_t(0));
+  }
+
+  geeyoou::detail::resetLayoutDiagnostics();
 }
