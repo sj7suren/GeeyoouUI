@@ -312,7 +312,11 @@ class Widget : public StyleSubject {
   void markLayoutDirty();
   void childAppended();
   void childRemoved(std::size_t index);
-  void latchNaturalSize();
+  // `fromArrange` is "this geometry was written by my own parent's layout",
+  // which is the one source a natural size may never come from.  Decided by
+  // setGeometry, which is the only caller and the only place that can still
+  // tell -- see the definition.
+  void latchNaturalSize(bool fromArrange);
   void rebaseSubtreeDepth();
 
   Rect geometry_;

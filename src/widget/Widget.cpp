@@ -138,12 +138,7 @@ void cancelOn(LiveCursor* list, const Widget* doomed) {
 class LayoutGuard {
  public:
   explicit LayoutGuard(Widget* host) : live_(host) { ++g_layoutDepth; }
-  ~LayoutGuard() {
-    --g_layoutDepth;
-    // The outermost frame: no arrange() is on the stack any more, so nothing
-    // can still be reading a parked layout.
-    if (g_layoutDepth == 0) detail::releaseParkedLayouts();
-  }
+  ~LayoutGuard() { --g_layoutDepth; }
 
   LayoutGuard(const LayoutGuard&) = delete;
   LayoutGuard& operator=(const LayoutGuard&) = delete;
@@ -152,17 +147,43 @@ class LayoutGuard {
   bool alive() const { return live_.alive(); }
 
  private:
+  // Drains the park list when the outermost frame unwinds.  A MEMBER, declared
+  // before live_, rather than two lines in ~LayoutGuard's body: members are
+  // destroyed in reverse order, so this runs AFTER live_ has taken this frame's
+  // cursor off g_layouts.  Done in the body instead -- which is what it used to
+  // be -- the list is cleared while detail::layoutPassActive() still reads
+  // true, i.e. while the engine is still telling everyone a pass is running,
+  // which is precisely the state the release is supposed to be the end of.
+  struct DrainOnUnwind {
+    ~DrainOnUnwind() {
+      if (g_layoutDepth == 0) detail::releaseParkedLayouts();
+    }
+  };
+
+  DrainOnUnwind drain_;
   LiveGuard<g_layouts> live_;
 };
 
-#ifndef NDEBUG
-// M2, the downward one-way rule.  Non-null ONLY while control is directly
-// inside a Layout::arrange -- the moment that arrange calls setGeometry, the
-// scope below parks it for the duration, so the application code a child's
-// onGeometryChanged runs is not mistaken for the layout still writing.  That
-// distinction is the difference between an assert that catches a Layout
-// reaching past its own children and one that fires on every container in the
-// library the first time it is put inside a layout.
+// The host whose arrange() is DIRECTLY on the stack, or null.
+//
+// Non-null ONLY while control is inside a Layout::arrange -- the moment that
+// arrange calls setGeometry, the scope below parks it for the duration, so the
+// application code a child's onGeometryChanged runs is not mistaken for the
+// layout still writing.
+//
+// TWO readers, and the second is why this is not Debug-only any more:
+//
+//   * M2's assert, the downward one-way rule.  That distinction above is the
+//     difference between an assert that catches a Layout reaching past its own
+//     children and one that fires on every container in the library the first
+//     time it is put inside a layout.
+//   * latchNaturalSize, which needs to know whether THIS setGeometry is a
+//     layout placing its own child.  It used to ask detail::layoutPassActive()
+//     instead -- "is a pass running anywhere in this process" -- and that is a
+//     different question with a different answer: a container that places its
+//     own children by hand from onGeometryChanged does so while its own
+//     parent's pass is on the stack, so its children never latched a natural
+//     size at all and went on being measured at 0x0 for ever.
 const Widget* g_arrangeHost = nullptr;
 
 class ArrangeSuspend {
@@ -176,7 +197,6 @@ class ArrangeSuspend {
  private:
   const Widget* saved_;
 };
-#endif
 
 // --- detach bookkeeping ------------------------------------------------------
 constexpr std::size_t kNotAChild = std::size_t(-1);
@@ -226,10 +246,20 @@ void announceDetached(const Widget& parent, Widget* node, std::size_t nodeHint,
                       Window* win) {
   cancelOn(g_bubbles, node);
   cancelOn(g_geometries, node);
-  // NOT parked here: `node` is only being ANNOUNCED, not destroyed -- takeChild
-  // may still hand it back alive.  ~Widget is the one door every departure goes
-  // through, and that is where the layout is parked.
-  cancelOn(g_layouts, node);
+  // NOTHING is done to g_layouts here, and the layout is not parked either.
+  // `node` is only being ANNOUNCED, not destroyed -- takeChild may still hand
+  // it back alive -- and ~Widget is the one door every departure really goes
+  // through, which is where both of those belong.
+  //
+  // The cursor used to be cancelled anyway, and it was the argument above that
+  // it failed to follow.  A cancelled cursor makes runLayoutIfAny return at its
+  // `!guard.alive()` check, which is the path for a host that has been FREED,
+  // so it deliberately writes nothing -- layoutRunning_ included.  On a host
+  // that is merely detached and perfectly alive that flag then stays true for
+  // good, M1 turns every later pass into "mark dirty and return", and the
+  // subtree's geometry is frozen for the rest of the process.  takeChild() from
+  // inside a layout pass is ordinary application code (a page moving a panel
+  // between two containers on a resize), and it made the panel a picture.
   if (win) win->widgetDetached(node);
   if (!stillAChild(parent, node, nodeHint)) return;
   if (node->children().empty()) return;  // the common case: no snapshot, no allocation
@@ -267,10 +297,20 @@ Widget::~Widget() {
 
   if (layout_) {
     --detail::g_layoutHosts;
-    // An arrange() of ours is still on the stack, reading items_, scratch_ and
-    // the `host` reference it was handed.  Freeing the layout here would pull
-    // all of that out from under it; parking hands it to the outermost pass.
-    if (layoutRunning_) detail::parkLayout(layout_.release());
+    // A call of ours is still on the stack, reading items_, scratch_ and the
+    // `host` reference it was handed.  Freeing the layout here would pull all
+    // of that out from under it; parking defers it until nothing is reading.
+    //
+    // TWO flags, not one.  layoutRunning_ is about ARRANGING, and a measurement
+    // is not an arrange: ScrollArea::relayout calls content_->sizeHint() with
+    // no pass anywhere on the stack, and a child's sizeHint() override is as
+    // entitled to destroy this widget from in there as any handler is.  Asking
+    // layoutRunning_ alone let that case run the unique_ptr below straight
+    // through the BoxLayout that gather() was walking -- and then
+    // Layout::measureFor wrote its result into the freed object on the way out.
+    if (layoutRunning_ || layout_->buffersBusy_) {
+      detail::parkLayout(layout_.release());
+    }
   }
 }
 
@@ -330,12 +370,19 @@ void Widget::setGeometry(const Rect& r) {
   // DURING a pass must still re-run even though its own rectangle did not move.
   if (r == geometry_ && !layoutDirty_) return;
 
+  // Is THIS call a layout placing one of its own children?  Read HERE, before
+  // the suspend below clears g_arrangeHost, and carried down as a parameter:
+  // by the time latchNaturalSize runs, the pointer is deliberately null so the
+  // application code onGeometryChanged runs is not mistaken for the layout
+  // still writing, and re-reading it there would answer "no" for every call.
+  const bool fromArrange = (parent_ != nullptr && parent_ == g_arrangeHost);
+
 #ifndef NDEBUG
   // M2: an arrange may only write to its host's DIRECT children.
   assert((g_arrangeHost == nullptr || parent_ == g_arrangeHost) &&
          "Layout::arrange may only setGeometry on its host's direct children");
-  const ArrangeSuspend suspend;
 #endif
+  const ArrangeSuspend suspend;
 
   if (visible_) update();  // repaint what we are vacating
   geometry_ = r;
@@ -343,7 +390,7 @@ void Widget::setGeometry(const Rect& r) {
   // and after that it is frozen.  Both halves are decided in one place; the
   // test here is only the fast path out of a call that would do nothing.
   // ADR-R2-09.
-  if (naturalSize_.isEmpty()) latchNaturalSize();
+  if (naturalSize_.isEmpty()) latchNaturalSize(fromArrange);
   // Before onGeometryChanged, not after: explicit code wins.  A container that
   // both owns a layout and overrides onGeometryChanged gets to place whatever
   // the layout did not, and its placement is the one that survives.
@@ -374,7 +421,14 @@ void Widget::adoptLayout(std::unique_ptr<Layout> l) {
   // host's layout is, and released when the outermost pass unwinds.  Clearing
   // its host_ is what stops the outgoing arrange at its next check; the
   // incoming layout re-places the same children in this pass's second round.
-  if (layout_ && layoutRunning_) detail::parkLayout(layout_.release());
+  //
+  // buffersBusy_ for the same reason ~Widget tests it: a sizeHint() override is
+  // as entitled to call setLayout as an onGeometryChanged is, and a measurement
+  // is not a pass, so layoutRunning_ alone would free the object the outgoing
+  // measure() is walking.
+  if (layout_ && (layoutRunning_ || layout_->buffersBusy_)) {
+    detail::parkLayout(layout_.release());
+  }
 
   layout_ = std::move(l);
   if (!layout_) {
@@ -426,7 +480,7 @@ void Widget::performLayout() {
   runLayoutIfAny();
 }
 
-void Widget::latchNaturalSize() {
+void Widget::latchNaturalSize(bool fromArrange) {
   if (!naturalSize_.isEmpty()) return;  // already latched, and it is for life
   // ADR-R2-09 is one-way in BOTH directions.  It stopped a window dragged
   // smaller from ratcheting its contents down; latching the OUTPUT of a layout
@@ -435,7 +489,19 @@ void Widget::latchNaturalSize() {
   // and never fit back into a 120 wide one.  The natural size is the first
   // non-empty size a HUMAN gave this widget, which is what sizeHint()'s
   // contract says it is; a size a layout computed is not one.
-  if (detail::layoutPassActive()) return;
+  //
+  // "A size a layout computed" is the geometry MY OWN PARENT'S ARRANGE just
+  // wrote, which is what `fromArrange` reports.  It is NOT "any geometry
+  // written while a pass is running somewhere in this process", which is the
+  // question this used to ask -- detail::layoutPassActive() is a process-wide
+  // flag, and the two answers differ for exactly the case that matters: a
+  // container that positions its own children by hand from onGeometryChanged.
+  // Those setGeometry calls ARE by hand, but they happen underneath the pass
+  // that sized the container, so the old test threw every one of them away.
+  // The children then reported preferred = 0x0 for the rest of their lives, and
+  // the day that container was dropped into a layout they were arranged at
+  // nothing.
+  if (fromArrange) return;
   const Size s = geometry_.size();
   if (s.isEmpty()) return;  // nothing worth remembering yet
   naturalSize_ = s;
@@ -517,7 +583,12 @@ bool Widget::runLayoutIfAny() {
   LayoutGuard guard(this);
   layoutRunning_ = true;
   int rounds = 0;
+  bool refused = false;
   do {
+    // Application code run by the previous round is entitled to take the layout
+    // off this widget outright (adoptLayout(nullptr)).  There is then nothing
+    // to arrange, and `running` below would be a null dereference.
+    if (!layout_) break;
     layoutDirty_ = false;
     const Rect content = contentRect();
     // Captured, not re-read: application code run from inside arrange() may
@@ -526,23 +597,36 @@ bool Widget::runLayoutIfAny() {
     // adoptLayout parks the outgoing object, so this pointer stays valid until
     // the outermost pass unwinds.
     Layout* const running = layout_.get();
-#ifndef NDEBUG
     const Widget* savedArrange = g_arrangeHost;
     g_arrangeHost = this;
-#endif
-    const LayoutOverflow result = running->arrangeFor(*this, content);
-#ifndef NDEBUG
+    const LayoutOverflow result = running->arrangeFor(*this, content, refused);
     g_arrangeHost = savedArrange;
-#endif
     // arrange() ran application code; this widget may be gone.  Nothing below
     // may touch a member, layout_ included -- it died with us.
     if (!guard.alive()) return false;
+    // Nothing ran, so there is nothing to record: `result` is the PREVIOUS
+    // pass's overflow, and the loop condition below would read a dirty flag
+    // this function has already cleared.  Handled after the loop.
+    if (refused) break;
     running->lastOverflow_ = result;
     // At most ONE re-run.  A layout that has not settled after seeing its own
     // output once will not settle on the third try either; it will just burn a
     // frame budget doing it.
   } while (layoutDirty_ && ++rounds < 2);
 
+  if (refused) {
+    // ADR-R2-04: the layout declined because one of its own measurements is on
+    // the stack and refilling the buffers it is walking would free them under
+    // it.  The REQUEST does not go away with the pass -- the dirty flag is put
+    // back rather than cleared, and Layout::measureFor re-issues the pass as
+    // soon as the measurement that was in the way returns.  Leaving the flag
+    // clear here is what used to lose the pass outright: the widget kept the
+    // geometry of the previous one and nothing anywhere remembered it was owed
+    // a new one.  Not counted as non-convergence either; nothing diverged.
+    layoutDirty_ = true;
+    layoutRunning_ = false;
+    return true;
+  }
   if (layoutDirty_) detail::layoutNotConverged(this);
   layoutDirty_ = false;
   layoutRunning_ = false;
