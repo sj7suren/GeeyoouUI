@@ -523,6 +523,95 @@ GEEYOOU_TEST(removal, detach_survives_a_slot_that_removes_the_node_being_announc
   CHECK_GE(fresh->mouse, 1);
 }
 
+GEEYOOU_TEST(removal, take_child_survives_a_slot_that_destroys_the_host) {
+  // REM3-RES-4.  The two cases above cover the node being ANNOUNCED and its
+  // SIBLINGS dying under the announcement.  The third party to the call is the
+  // one nothing was watching: the parent whose takeChild() is in flight.
+  //
+  // announceDetached() runs widgetDetached -> closePopup -> popupClosed, and a
+  // slot on that signal is entitled to remove any widget except the signal's
+  // owner (D7).  `holder` is not the owner -- the Window is -- so removing it
+  // is legal, and it frees the very children_ vector the rest of takeChild()
+  // walks, plus the `parent` reference announceDetached is still re-checking
+  // `node` against.
+  //
+  // What must happen instead is the ADR-R2-04 answer: notice, hand back
+  // nullptr, touch nothing.  The subtree is already gone -- it went with the
+  // host -- so there is nothing left to hand the caller anyway.
+  TestWindow win;
+  int deaths = 0;
+
+  Widget* outer = win.add<Widget>();
+  outer->setGeometry({0.0f, 0.0f, 400.0f, 300.0f});
+  Tracer* holder = outer->add<Tracer>(&deaths);  // the host of the call in flight
+  holder->setGeometry({0.0f, 0.0f, 400.0f, 300.0f});
+  Tracer* pop = holder->add<Tracer>(&deaths);    // announcing THIS is what emits
+  pop->setGeometry({0.0f, 0.0f, 120.0f, 80.0f});
+
+  win.openPopup(pop, {0.0f, 0.0f, 60.0f, 24.0f});
+  REQUIRE(win.popup() == pop);
+
+  bool once = false;
+  ConnectionScope conns;
+  conns += win.popupClosed.connect([&] {
+    if (once) return;
+    once = true;
+    outer->removeChild(holder);  // takes the host of the takeChild below with it
+  });
+
+  // Called by hand rather than through removeChild: what is under test is the
+  // value takeChild() returns when its own host has died, and removeChild()
+  // throws that value away.
+  std::unique_ptr<Widget> taken = holder->takeChild(pop);
+
+  CHECK(once);                 // the slot really ran, mid-announcement
+  CHECK(taken == nullptr);     // degraded, rather than an owner of freed memory
+  CHECK_EQ(deaths, 2);         // host and popup, destroyed exactly once each
+  CHECK(outer->children().empty());
+  CHECK_EQ(win.popup(), static_cast<Widget*>(nullptr));
+
+  // Still usable: a stale observer pointer would surface on the next event.
+  Counter* fresh = win.add<Counter>();
+  fresh->setGeometry({0.0f, 0.0f, 400.0f, 300.0f});
+  win.handleMouse(mouseAt(MouseAction::Move, 20.0f, 20.0f));
+  CHECK_GE(fresh->mouse, 1);
+}
+
+GEEYOOU_TEST(removal, clear_children_survives_a_slot_that_destroys_the_host) {
+  // The same trigger one frame up.  Making takeChild() degrade safely does NOT
+  // cover this: it hands its caller a clean nullptr and the caller -- this loop
+  // -- then goes back to children_.empty(), which is the freed vector.  The
+  // frame that re-reads the member is the frame that needs the check, every
+  // time, which is why the cursor is a list and not a flag.
+  TestWindow win;
+  int deaths = 0;
+
+  Widget* outer = win.add<Widget>();
+  outer->setGeometry({0.0f, 0.0f, 400.0f, 300.0f});
+  Tracer* holder = outer->add<Tracer>(&deaths);
+  holder->setGeometry({0.0f, 0.0f, 400.0f, 300.0f});
+  Tracer* pop = holder->add<Tracer>(&deaths);
+  pop->setGeometry({0.0f, 0.0f, 120.0f, 80.0f});
+
+  win.openPopup(pop, {0.0f, 0.0f, 60.0f, 24.0f});
+  REQUIRE(win.popup() == pop);
+
+  bool once = false;
+  ConnectionScope conns;
+  conns += win.popupClosed.connect([&] {
+    if (once) return;
+    once = true;
+    outer->removeChild(holder);
+  });
+
+  holder->clearChildren();
+
+  CHECK(once);
+  CHECK_EQ(deaths, 2);
+  CHECK(outer->children().empty());
+  CHECK_EQ(win.popup(), static_cast<Widget*>(nullptr));
+}
+
 GEEYOOU_TEST(removal, an_enter_handler_may_remove_what_the_pointer_is_over) {
   // Window::handleMouse picks a `target`, then sends synthetic Enter/Leave, and
   // only afterwards delivers the real event to that same target.  A handler
