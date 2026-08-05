@@ -13,6 +13,13 @@
 
 namespace geeyoou {
 
+// Deepest widget tree the library is willing to work on.  Two things lean on
+// it: Widget::add asserts against it in debug builds, and a layout pass gives
+// up past this many nested hosts instead of overflowing the stack.  64 is far
+// beyond any real HMI screen -- the showcase's deepest path is 7 -- and still
+// shallow enough that a runaway pass is abandoned in microseconds.
+inline constexpr std::uint16_t kMaxTreeDepth = 64;
+
 struct Point {
   float x = 0.0f;
   float y = 0.0f;
@@ -56,6 +63,16 @@ class Rect {
   constexpr Point center() const { return {x_ + w_ * 0.5f, y_ + h_ * 0.5f}; }
 
   constexpr bool isEmpty() const { return w_ <= 0.0f || h_ <= 0.0f; }
+
+  // Exact, field by field -- deliberately NOT epsilon-based.  Widget::setGeometry
+  // uses this to decide "nothing moved, do no work", and an epsilon there would
+  // swallow the sub-pixel drift that a re-run would have corrected, leaving the
+  // tree permanently a fraction off.  A NaN edge never compares equal to itself,
+  // so a NaN rectangle always takes the slow path: the safe direction.
+  constexpr bool operator==(const Rect& o) const {
+    return x_ == o.x_ && y_ == o.y_ && w_ == o.w_ && h_ == o.h_;
+  }
+  constexpr bool operator!=(const Rect& o) const { return !(*this == o); }
 
   constexpr bool contains(const Point& p) const {
     return p.x >= x_ && p.x < right() && p.y >= y_ && p.y < bottom();
