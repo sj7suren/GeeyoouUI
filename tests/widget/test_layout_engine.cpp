@@ -336,11 +336,11 @@ GEEYOOU_TEST(layout_engine, invalidate_size_hint_reruns_the_nearest_host_above) 
   // runs -- once, not once per level.
   CHECK_EQ(lay->arranges, before + 1);
 
-  // relayout() on a widget with no layout is a no-op rather than an error.
+  // performLayout() on a widget with no layout is a no-op rather than an error.
   const int after = lay->arranges;
-  leaf->relayout();
+  leaf->performLayout();
   CHECK_EQ(lay->arranges, after);
-  root.relayout();
+  root.performLayout();
   CHECK_EQ(lay->arranges, after + 1);
 }
 
@@ -367,7 +367,7 @@ class ReentrantLayout : public Layout {
     if (demands > 0) {
       --demands;
       const int seen = arranges;
-      host.relayout();  // must NOT recurse
+      host.performLayout();  // must NOT recurse
       if (arranges != seen) sawNestedRun = true;
     }
     return LayoutOverflow{};
