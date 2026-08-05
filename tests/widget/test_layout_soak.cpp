@@ -487,6 +487,11 @@ void cycle(Widget& root, int n) {
 GEEYOOU_TEST(layout_soak, nothing_the_engine_holds_grows_with_the_number_of_cycles) {
   const int cycles = soakCycles();
 
+  // Reset BEFORE the warm-up, so the degradation count below covers every cycle
+  // this case ran and none that anybody else did.  Nothing else in this case
+  // reads the diagnostics, so there is nothing to lose by clearing them.
+  geeyoou::detail::resetLayoutDiagnostics();
+
   Widget root;
   root.setGeometry({0.0f, 0.0f, 800.0f, 600.0f});
 
@@ -558,4 +563,38 @@ GEEYOOU_TEST(layout_soak, nothing_the_engine_holds_grows_with_the_number_of_cycl
   CHECK_EQ(g_doors.scrollContent, opened);
   CHECK_EQ(g_doors.scrollViewport, opened);
   CHECK_EQ(g_doors.shellResize, opened);
+
+  // ...and every one of them was SURVIVED rather than avoided.
+  //
+  // The five counters above say the doors opened.  They cannot say what
+  // happened on the way back, and "the process is still alive" cannot either --
+  // a guard wired the wrong way round, a checkpoint deleted, a door that stopped
+  // reaching its checkpoint because a rectangle stopped changing all leave the
+  // suite green.  This is the positive fact: five frames per cycle found the
+  // tree moved under them and said so.
+  //
+  // FIVE PER CYCLE IS ARITHMETIC ABOUT THESE FIVE GROUPS, NOT A LAW.  It is
+  // emphatically NOT "one per door" and not "one per operation" -- REM3-G8
+  // counts FRAMES, and section 11.3 of docs/iterations/02-layout-engine.md
+  // records the case where one setContentSize honestly raises it twice
+  // (relayout's own frame, then setContentSize's CP-C2 after it returns).
+  // tests/widget/test_rem3_doors.cpp holds that case.  Each of the five groups
+  // below happens to kill its target at the FIRST checkpoint the frame reaches,
+  // which is what makes the number here one apiece:
+  //
+  //   groupBoxMeasure -> CP-G1     scrollHint      -> CP-S1
+  //   scrollContent   -> CP-C1     scrollViewport  -> CP-S2
+  //   shellResize     -> CP-S1
+  //
+  // Add a sixth group, or move an existing one's hook one door later, and this
+  // number changes -- correctly.  Recompute it from the table above; do not
+  // relax it to a >=.
+  CHECK_EQ(std::size_t(geeyoou::detail::layoutDiagnostics().framesDegraded),
+           opened * 5);
+
+  // The other four diagnostics are NOT asserted at zero here on purpose: the
+  // refused-pass group raises `reentered` by design, and pinning a number this
+  // case does not exist to check would make it fail for somebody else's
+  // perfectly correct change.
+  geeyoou::detail::resetLayoutDiagnostics();
 }
