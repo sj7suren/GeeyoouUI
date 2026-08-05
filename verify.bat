@@ -20,6 +20,16 @@ rem first two legs and visible only under /fsanitize=address.  An ASan leg
 rem somebody has to remember to run is not a gate either, so it is here, and a
 rem red ASan leg is a red gate.
 rem
+rem AND YOUR TEST MUST LET THE READ SURVIVE TO THIS LEG.  A green ASan run says
+rem nothing about a load the optimiser deleted: `(void)w->geometry();` has no
+rem consumer, /O2 removes it, and the use-after-free is then unobservable HERE
+rem while the case still fails on its own flag assertions.  That is exactly what
+rem E14 measured -- failing cases, zero reports -- so every read of a
+rem possibly-freed object in a test must be CONSUMED by a CHECK.  "The case went
+rem red" and "ASan went red" are two independent signals; only the second one is
+rem evidence about memory safety.  See build-asan.bat's header for the full
+rem account.
+rem
 rem Exit code: 0 only if all six steps below succeeded.
 setlocal
 
