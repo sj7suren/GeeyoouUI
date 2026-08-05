@@ -51,11 +51,16 @@
 #include "framework/Test.hpp"
 #include "geeyoou/widget/BoxLayout.hpp"
 #include "geeyoou/widget/GridLayout.hpp"
+#include "geeyoou/widget/GroupBox.hpp"
 #include "geeyoou/widget/Layout.hpp"
+#include "geeyoou/widget/ScrollArea.hpp"
 #include "geeyoou/widget/Widget.hpp"
+#include "showcase/Shell.hpp"
 
 using geeyoou::BoxLayout;
 using geeyoou::GridLayout;
+using geeyoou::GroupBox;
+using geeyoou::ScrollArea;
 using geeyoou::Size;
 using geeyoou::SizeHint;
 using geeyoou::Widget;
@@ -129,6 +134,30 @@ class GeometryHook : public Sized {
     f();
   }
 };
+
+// How many times each of the five hint-side doors below actually opened.
+//
+// Not decoration, and not a fifth series: the four series can only prove that a
+// cycle left nothing behind, and the cheapest way to leave nothing behind is to
+// never build anything.  A door that stops opening -- because a rectangle
+// stopped changing and M3 short-circuited the call, because a layout stopped
+// being installed, because somebody reordered two lines -- turns its group into
+// dead code that keeps passing.  Five counters, asserted to be EXACTLY the
+// number of cycles, are what stop that.
+//
+// Fix-invariant on purpose: every hook fires from inside the door, BEFORE the
+// frame it is attacking gets to notice anything, so E3/E4 landing must not move
+// any of these numbers by one.  A guard that changed them would be a guard that
+// suppressed the call instead of surviving it.
+struct DoorLog {
+  std::size_t groupBoxMeasure = 0;   // GroupBox.cpp:53
+  std::size_t scrollHint = 0;        // ScrollArea.cpp:158
+  std::size_t scrollContent = 0;     // ScrollArea.cpp:22
+  std::size_t scrollViewport = 0;    // ScrollArea.cpp:164
+  std::size_t shellResize = 0;       // Shell.cpp:330 -> ScrollArea.cpp:158
+};
+
+DoorLog g_doors;
 
 struct Sample {
   std::size_t children = 0;
@@ -249,6 +278,207 @@ void cycle(Widget& root, int n) {
     if (held) held->setGeometry({0.0f, 0.0f, 170.0f, 210.0f});
   }
 
+  // ==========================================================================
+  // The OTHER kind of door: sizeHint()'s CALLERS
+  // --------------------------------------------------------------------------
+  // Everything above this line attacks a frame that belongs to a Layout, and
+  // Layout.hpp's contract already tells those frames to re-check hostAlive()
+  // after every re-entry into application code.  The five groups below attack
+  // frames in Widget SUBCLASSES -- GroupBox and ScrollArea -- which are not
+  // Layout implementations, are not addressed by that contract, and check
+  // nothing.  They CALL sizeHint(), the call runs an application override, and
+  // then they go on reading (and in two places WRITING) through pointers that
+  // override was entitled to free.  See docs/iterations/02-layout-engine.md,
+  // section 11, whose table names the same two sites.
+  //
+  // Placed in the soak rather than in five stand-alone cases because the fix
+  // for all of them is a stack cursor, and a cursor is only correct if it also
+  // comes back OFF its list, every time, on every path out of the frame --
+  // including the early return the guard itself introduces.  One leaked cursor
+  // is invisible to a case that runs the path once; it is a list that grows
+  // with the cycle count here.
+  //
+  // NOT ONE OF THE FIVE GOES THROUGH A POPUP.  The removal-side cases in
+  // test_removal.cpp all reach application code through the single door
+  // Window::widgetDetached owns (closePopup -> popupClosed; focus and hover are
+  // dropped silently, Window.cpp).  These five reach it through sizeHint() and
+  // onGeometryChanged() overrides, which are doors the APPLICATION implements.
+  // So a second detach-side door -- an onDescendantDetached broadcast, say --
+  // would not change the coverage argument for anything below.
+
+  // --- a GroupBox emptied from inside its own measurement -------------------
+  //
+  // BoxLayout.cpp:155 `c->sizeHint()` -> GroupBox.cpp:53 `Widget::sizeHint()`,
+  // which is the INNER layout's measure -> that layout's gather -> an
+  // application sizeHint() override -> the band the GroupBox sits in is
+  // destroyed -> back at GroupBox.cpp:54, which reads layout(), then title_,
+  // then makes a virtual call through style().
+  //
+  // The whole band goes, not just the panel, because that is the shape the
+  // showcase produces -- a page rebuilding a section drops the section -- and
+  // because it covers both frames in one go: BoxLayout::gather notices, at its
+  // hostAlive() check; GroupBox::sizeHint has nothing to notice with.
+  {
+    Widget* band = root.add<Widget>();
+    BoxLayout* outer = band->setLayout<BoxLayout>(BoxLayout::Orientation::Vertical);
+    GroupBox* panel = band->add<GroupBox>();
+    // Titled: the title is what makes :62-:65 read a std::string and take the
+    // style path out of the freed object, and a fix that hoisted that work in
+    // front of the door (R3-G5 forbids it) would still have to keep passing
+    // here.
+    panel->setTitle("参数");
+    outer->addWidget(panel, 1);
+    outer->addWidget(band->add<Sized>(40.0f, 24.0f), 1);
+
+    BoxLayout* inner = panel->setLayout<BoxLayout>(BoxLayout::Orientation::Vertical);
+    HintHook* trigger = panel->add<HintHook>();
+    inner->addWidget(trigger, 1);
+    inner->addWidget(panel->add<Sized>(), 1);
+    // Armed last: every addWidget above marks the tree dirty and runs a pass of
+    // its own, and a hook armed earlier would fire in one of those instead of
+    // in the door this group is about.
+    trigger->once = [&root, band] {
+      ++g_doors.groupBoxMeasure;
+      root.removeChild(band);
+    };
+
+    band->setGeometry({0.0f, 0.0f, 240.0f, 180.0f});
+  }
+
+  // --- a ScrollArea destroyed from inside its content's MEASUREMENT ---------
+  //
+  // ScrollArea.cpp:158 `content_->sizeHint()` -- the branch taken by every page
+  // that hands its content to the layout engine, which is five of the ten --
+  // and on the way back :159 reads geometry_, :164 and :165 WRITE a 16-byte
+  // Rect through viewport_ and content_.  Pre-reading before the door, which is
+  // the trick that would fix a pure read, cannot fix a write.
+  {
+    ScrollArea* sa = root.add<ScrollArea>();
+    Widget* content = sa->content();
+    BoxLayout* box = content->setLayout<BoxLayout>(BoxLayout::Orientation::Vertical);
+    HintHook* trigger = content->add<HintHook>();
+    box->addWidget(trigger, 1);
+    box->addWidget(content->add<Sized>(60.0f, 40.0f), 1);
+    trigger->once = [&root, sa] {
+      ++g_doors.scrollHint;
+      root.removeChild(sa);
+    };
+
+    // onGeometryChanged -> relayout: the same entry a window resize uses.
+    sa->setGeometry({0.0f, 0.0f, 200.0f, 150.0f});
+  }
+
+  // --- ...and from inside its content's ARRANGE ------------------------------
+  //
+  // The other way into the same object.  ScrollArea.cpp:22 sizes the content,
+  // the content owns a layout, the layout arranges, a child's
+  // onGeometryChanged destroys the scroll area -- and setContentSize carries on
+  // at :24 relayout(), :26 scrollTo(scrollOffset()), :27 update(), all three
+  // through a freed `this`.
+  {
+    ScrollArea* sa = root.add<ScrollArea>();
+    // Given a geometry FIRST, so the content has a real rectangle to be
+    // re-arranged out of: M3 would short-circuit a child's setGeometry that did
+    // not move, and a door that does not open is not a test.
+    sa->setGeometry({0.0f, 0.0f, 200.0f, 150.0f});
+
+    Widget* content = sa->content();
+    BoxLayout* box = content->setLayout<BoxLayout>(BoxLayout::Orientation::Vertical);
+    GeometryHook* trigger = content->add<GeometryHook>();
+    box->addWidget(trigger, 1);
+    box->addWidget(content->add<Sized>(50.0f, 30.0f), 1);
+    trigger->once = [&root, sa] {
+      ++g_doors.scrollContent;
+      root.removeChild(sa);
+    };
+
+    sa->setContentSize({320.0f, 260.0f});
+  }
+
+  // --- the THIRD door in relayout(), the one in series with the other two ----
+  //
+  // :164 `viewport_->setGeometry(...)` is itself a door, and :165 is a write
+  // through content_ after it.  A fix that only guards the sizeHint() at :158
+  // leaves this one open, and the frame it leaves open is the one that WRITES.
+  //
+  // The viewport is ScrollArea's only direct child (see its constructor) and is
+  // reachable through the public children() accessor -- the same route section
+  // 11's Q5 takes to show that viewport_ and content_ are not invariants.  It
+  // needs a layout to be a door at all: setGeometry on a plain widget with no
+  // layout and no onGeometryChanged override runs no application code.
+  {
+    ScrollArea* sa = root.add<ScrollArea>();
+    Widget* content = sa->content();
+    BoxLayout* cbox = content->setLayout<BoxLayout>(BoxLayout::Orientation::Vertical);
+    cbox->addWidget(content->add<Sized>(80.0f, 60.0f), 1);
+
+    Widget* viewport = sa->children()[0].get();
+    BoxLayout* vbox = viewport->setLayout<BoxLayout>(BoxLayout::Orientation::Vertical);
+    GeometryHook* trigger = viewport->add<GeometryHook>();
+    vbox->addWidget(trigger, 1);
+    trigger->once = [&root, sa] {
+      ++g_doors.scrollViewport;
+      root.removeChild(sa);
+    };
+
+    // The content's hint (80x60) fits, so neither bar is needed, so :164 hands
+    // the viewport the full rectangle -- a change from (0,0,0,0), so the pass
+    // really runs.
+    sa->setGeometry({0.0f, 0.0f, 220.0f, 160.0f});
+  }
+
+  // --- the production path, end to end --------------------------------------
+  //
+  // Nothing in this group is constructed for the test except the widget that
+  // does the tearing down.  Shell.cpp's relayout() sizes every page host on
+  // every window resize (`pg.host->setGeometry(...)`), the host is a
+  // ScrollArea, its onGeometryChanged is relayout(), and its content owns a
+  // layout because that is what the five migrated pages do.  That is the whole
+  // chain from "the operator dragged the window" to ScrollArea.cpp:158 -- no
+  // scaffolding, no injected defect.
+  {
+    showcase::Shell* shell = root.add<showcase::Shell>();
+    shell->setGeometry({0.0f, 0.0f, 640.0f, 480.0f});
+
+    Widget* pageContent = nullptr;
+    HintHook* trigger = nullptr;
+    shell->addPage("演示", "布局", "", geeyoou::Icon::None,
+                   [&pageContent, &trigger](Widget* content) {
+                     pageContent = content;
+                     BoxLayout* box = content->setLayout<BoxLayout>(
+                         BoxLayout::Orientation::Vertical);
+                     trigger = content->add<HintHook>();
+                     box->addWidget(trigger, 1);
+                     box->addWidget(content->add<Sized>(120.0f, 40.0f), 1);
+                     return Size{300.0f, 400.0f};
+                   });
+    shell->showPage(0);
+
+    // Armed AFTER the page is built: showPage() reaches the same door twice on
+    // its own (setContentSize, then the shell's own relayout), and a hook armed
+    // in the builder would fire there instead of on the resize this group is
+    // about.
+    //
+    // content -> viewport -> ScrollArea -> pageArea, through parent() only: a
+    // control on a page dropping its own page while the page is being measured
+    // is application code doing something D7 allows.
+    Widget* host = pageContent->parent()->parent();
+    Widget* pageArea = host->parent();
+    trigger->once = [pageArea, host] {
+      ++g_doors.shellResize;
+      pageArea->removeChild(host);
+    };
+
+    // The resize.  Shell::relayout -> pg.host->setGeometry -> ScrollArea::
+    // onGeometryChanged -> relayout -> content_->sizeHint() -> the page's
+    // override -> the host is gone -> ScrollArea.cpp:159 onwards.
+    shell->setGeometry({0.0f, 0.0f, 720.0f, 540.0f});
+
+    // The shell outlives the page host, so this group takes itself away rather
+    // than being taken away by its own hook like the four above.
+    root.removeChild(shell);
+  }
+
   root.removeChild(page);
 }
 
@@ -315,4 +545,17 @@ GEEYOOU_TEST(layout_soak, nothing_the_engine_holds_grows_with_the_number_of_cycl
   // "one load and one predicted branch" claim in Widget rests on.
   CHECK_EQ(geeyoou::detail::parkedLayoutCount(), std::size_t(0));
   CHECK(root.children().empty());
+
+  // Every one of the five hint-side doors opened on every cycle, warm-up
+  // included: exactly once each, no more (a door opening twice would mean a
+  // second, unaccounted pass) and no fewer (a door that stopped opening turns
+  // its group into scenery that keeps passing).  This is also the determinism
+  // statement: there is no RNG anywhere in cycle(), so these are the same five
+  // numbers on every machine and in every configuration.
+  const std::size_t opened = std::size_t(cycles) + 3;  // + the warm-up cycles
+  CHECK_EQ(g_doors.groupBoxMeasure, opened);
+  CHECK_EQ(g_doors.scrollHint, opened);
+  CHECK_EQ(g_doors.scrollContent, opened);
+  CHECK_EQ(g_doors.scrollViewport, opened);
+  CHECK_EQ(g_doors.shellResize, opened);
 }
