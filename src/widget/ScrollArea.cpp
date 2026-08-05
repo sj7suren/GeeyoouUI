@@ -90,27 +90,52 @@ void ScrollArea::setFrameVisible(bool on) {
 void ScrollArea::onGeometryChanged() { relayout(); }
 
 // ----------------------------------------------------------------- layout ---
+//
+// BOTH BARS ARE DECIDED TOGETHER, in one function, because each one steals a
+// strip from the other's axis.  Asking the two questions independently either
+// recurses forever or answers one of them wrongly, and the version this
+// replaces did the second: needHBar() subtracted a vertical bar's width
+// UNCONDITIONALLY, so `content.width > width - kBar` was true for every content
+// exactly as wide as the area -- which, since relayout() sizes content to at
+// least the viewport, is the normal case.  Every scroll area in the
+// application therefore carried a permanent 10px horizontal scroll range with
+// nothing to scroll to.
+//
+// The refinement step terminates: only a horizontal bar that appeared on its
+// own can bring a vertical one with it, and that question is asked once.
+// Vertical still wins the tie, which is the right bias for lists.
+void ScrollArea::bars(bool& vbar, bool& hbar) const {
+  const Rect r = localRect();
+  const Size cs = contentSize();
+  vbar = cs.height > r.height();
+  hbar = cs.width > r.width() - (vbar ? kBar : 0.0f);
+  if (hbar && !vbar) vbar = cs.height > r.height() - kBar;
+}
+
 bool ScrollArea::needVBar() const {
-  return contentSize().height > localRect().height() - (needHBar() ? kBar : 0.0f);
+  bool v = false;
+  bool h = false;
+  bars(v, h);
+  return v;
 }
 
 bool ScrollArea::needHBar() const {
-  // Deliberately asymmetric: the horizontal test does NOT consult needVBar(),
-  // because the pair would recurse forever.  Vertical wins the tie, which is
-  // the right bias for lists.
-  return contentSize().width > localRect().width() - kBar;
+  bool v = false;
+  bool h = false;
+  bars(v, h);
+  return h;
 }
 
 Size ScrollArea::viewportSize() const {
+  bool v = false;
+  bool h = false;
+  bars(v, h);
   const Rect r = localRect();
-  return {std::max(0.0f, r.width() - (needVBar() ? kBar : 0.0f)),
-          std::max(0.0f, r.height() - (needHBar() ? kBar : 0.0f))};
+  return {std::max(0.0f, r.width() - (v ? kBar : 0.0f)),
+          std::max(0.0f, r.height() - (h ? kBar : 0.0f))};
 }
 
 void ScrollArea::relayout() {
-  const Size vp = viewportSize();
-  viewport_->setGeometry({0.0f, 0.0f, vp.width, vp.height});
-
   // A laid-out page grows with the window; a hand-placed one does not.
   //
   // Without this the layout engine stops at the page's edge: the controls
@@ -122,12 +147,31 @@ void ScrollArea::relayout() {
   // five pages still using absolute coordinates cannot be affected by this.
   // max() rather than assignment, so a page shorter than the viewport still
   // fills it instead of floating in the middle.
+  //
+  // ORDER OF EVALUATION IS THE WHOLE POINT HERE.  What the page NEEDS decides
+  // the two bars, the bars decide the viewport, and the viewport and the need
+  // together decide the content -- in that order.  Sizing the viewport first,
+  // as this used to, asked bars() about the content size from BEFORE the resize
+  // and then set the content to exactly the width that answer implied, which is
+  // how a page that fits perfectly ended up permanently scrollable sideways.
   if (content_->layout()) {
     const SizeHint h = content_->sizeHint();
+    const Rect r = localRect();
+    const bool vbar = h.preferred.height > r.height();
+    const bool hbar = h.preferred.width > r.width() - (vbar ? kBar : 0.0f);
+    const Size vp{std::max(0.0f, r.width() - (vbar ? kBar : 0.0f)),
+                  std::max(0.0f, r.height() - (hbar ? kBar : 0.0f))};
+    viewport_->setGeometry({0.0f, 0.0f, vp.width, vp.height});
     content_->setGeometry({0.0f, 0.0f,
                            std::max(vp.width, h.preferred.width),
                            std::max(vp.height, h.preferred.height)});
+    return;
   }
+
+  // Hand-placed content: its size is whatever setContentSize was told, so the
+  // bars can be read straight off it.
+  const Size vp = viewportSize();
+  viewport_->setGeometry({0.0f, 0.0f, vp.width, vp.height});
 }
 
 Rect ScrollArea::vBarRect() const {

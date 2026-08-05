@@ -49,6 +49,10 @@ class ScrollArea : public Widget {
  private:
   enum class Drag { None, Vertical, Horizontal };
 
+  // Which scrollbars the current content needs.  One function for the pair:
+  // each bar takes a strip out of the other's axis, so they cannot be decided
+  // independently.  See the note above the definition.
+  void bars(bool& vbar, bool& hbar) const;
   bool needVBar() const;
   bool needHBar() const;
   Size viewportSize() const;
