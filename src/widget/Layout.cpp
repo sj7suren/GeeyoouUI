@@ -205,5 +205,19 @@ void layoutIndexClamped() {
   if (g_diagnostics.indexClamped != 0xFFFFFFFFu) ++g_diagnostics.indexClamped;
 }
 
+// Raised by a guarded frame, not by the layout engine -- see Widget.hpp, where
+// it is declared next to DeathWatch.  It lives HERE because the counter it
+// increments does, and because a second diagnostics store would be a second
+// place to reset (Widget.cpp's own note: a second hand-rolled copy is a second
+// place to forget).
+//
+// Once per FRAME, never once per check: the counter answers "how many frames
+// gave up", and a frame that asked its three questions and failed the first two
+// is still one frame.  The call sites keep that true by writing it in the
+// give-up branch, immediately before the return.
+void frameDegraded() {
+  if (g_diagnostics.framesDegraded != 0xFFFFFFFFu) ++g_diagnostics.framesDegraded;
+}
+
 }  // namespace detail
 }  // namespace geeyoou
