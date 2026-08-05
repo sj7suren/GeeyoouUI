@@ -25,7 +25,20 @@
 namespace geeyoou {
 
 class Painter;
+class Widget;
 class Window;
+
+namespace detail {
+// Tells every ancestor of `node` that it is leaving the tree (E14).  Declared
+// up here only so Widget can befriend it -- the hook it calls is protected, and
+// the traversal that calls THIS is a file-local function in Widget.cpp, which
+// cannot be named in a header.  Same shape as Layout's friendship with
+// detail::parkLayout, and for the same reason.
+//
+// The argument for what it does, when, and why it broadcasts to the whole
+// ancestor chain is at the definition, next to that traversal.
+void notifyDetachToAncestors(Widget* node);
+}  // namespace detail
 
 // Declares a widget's type name to the style engine, and keeps type selectors
 // inheritance-aware: with this macro a `PushButton { }` rule also styles
@@ -348,6 +361,43 @@ class Widget : public StyleSubject {
   // registry of animated widgets would need unregistration on destruction.
   virtual void onAnimationTick() {}
 
+  // A node somewhere BELOW this widget is leaving the tree.  Called on every
+  // ancestor of every departing node, from Widget.cpp's announceDetached.
+  //
+  // WHAT IT IS FOR, because it is not a general-purpose notification: a
+  // container that caches a pointer to a descendant -- ScrollArea::content_,
+  // AppWindow::fill_, Shell's page host -- holds a DANGLING MEMBER from the
+  // moment that descendant is removed.  The liveness guards do not fix that:
+  // they are FRAME-scoped, they buy the frame that is running one safe return
+  // and they do not repair object state.  Without this hook the next onPaint
+  // reads the freed pointer, and no application call is needed to get there.
+  //
+  // EVERY ANCESTOR, not just the direct parent, and that is the whole reason
+  // this is a broadcast rather than a call: in all three containers above the
+  // cached pointer is a GRANDCHILD (ScrollArea's content lives inside its
+  // viewport), so a parent-only notification reaches the viewport and never
+  // reaches the ScrollArea at all.
+  //
+  // WHEN: before anything is unlinked and before the Window is told, so `this`,
+  // `node` and the whole departing subtree are alive and still connected.  An
+  // override therefore never dereferences anything questionable -- comparing
+  // `node` against a cached pointer is all it needs, and pointer comparison is
+  // safe here by construction rather than by argument.
+  //
+  // WHAT AN OVERRIDE MAY DO -- REM3-G9, and it is narrow on purpose: null its
+  // OWN member pointers, and nothing else.  No signal, no update(), no
+  // removeChild, no virtual call, nothing that reaches application code.  This
+  // runs in the middle of a pre-order walk over a half-detached tree, and
+  // running application code from here re-opens the very door that walk closed.
+  // Debug builds assert on the re-entry that would corrupt the walk.
+  //
+  // NOT childRemoved(): that one is gated on detail::g_layoutHosts, and this
+  // must fire whether or not anybody in the process owns a Layout.  Folding the
+  // two together would also put "tell my layout" and "repair my own state" in
+  // one virtual, where a subclass that forgets to call the base silently stops
+  // the layout engine.  The empty default here has no such trap.
+  virtual void onDescendantDetached(Widget* node) { (void)node; }
+
  private:
   virtual Window* asWindow() { return nullptr; }
 
@@ -400,6 +450,9 @@ class Widget : public StyleSubject {
   Size naturalSize_;
 
   friend class Window;
+  // Reaches onDescendantDetached above, which is protected.  See the
+  // declaration at the top of this file.
+  friend void detail::notifyDetachToAncestors(Widget*);
 };
 
 namespace detail {
