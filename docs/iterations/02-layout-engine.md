@@ -1360,3 +1360,139 @@ src/widget/Widget.cpp:445:  owned->parent_ = nullptr;                   <- takeC
 * **REM3-G9 的 assert 只拦住了 `takeChild` 一条路**。`update()` / `emit()` / 虚调用仍然只是契约，没有运行时执行。
 * **REM3-G9 的编号**待架构团队复签（见 §11.3）。
 * **成本未取 `/FAsc` 复测**：广播是 O(深度) 的指针追逐 + 每层一次默认空体的虚调用，只在真实 detach 路径上付，绘制/布局/事件路径一条指令不加；**这是论证，不是实测**，按 §11.8 的教训标注在此。
+
+---
+
+### 11.12 【E15 · E16】三个容器兑现钩子 —— `ScrollArea` / `AppWindow` 的降级语义与用例
+
+> 状态：**已实现、三条腿门禁全绿、红态证据齐备，未由测试团队复核。** 结论由测试团队下。
+> 本小节收口 **REM3-RES-1**：E14 给了通知，E15 让容器听，E16 是验收。
+
+#### 缺陷在 E14 之后仍然存在的形状
+
+E14 落地那天，下面这两行在库里的每一个 `ScrollArea` 上仍然是 heap-use-after-free：
+
+```cpp
+sa->content()->parent()->removeChild(sa->content());
+paintTree(...);   // <- 中间没有任何应用调用
+```
+
+守卫是**帧作用域**的，它不修复对象状态；钩子存在但**没有容器覆写它**。所以 E14 之后 `content_` 照样悬垂，下一次重绘照样炸。
+
+#### 降级语义（Elena 裁定，实现照此）
+
+| 方法 | 摘除后的答案 |
+|---|---|
+| `ScrollArea::content()` | **`nullptr`** —— ⚠️ **公开 API 契约变更，已写进 `ScrollArea.hpp` 的注释** |
+| `contentSize()` | `{0,0}` |
+| `scrollOffset()` / `maxScroll()` | `{0,0}` |
+| `viewportSize()` | `localRect().size()`（无 content ⇒ 无滚动条） |
+| `bars()` / `needVBar()` / `needHBar()` | 双 false |
+| `relayout()` / `setContentSize()` / `scrollTo()` / `ensureVisible()` | 立即 `return`，不写任何几何 |
+| `onPaint` | 照常画边框，不画任何 track/thumb |
+| `onMouse` / `onKey` | 不接受任何滚动输入（**不 `accept()`**，让事件继续冒泡给外层） |
+
+**⚠️ 明令不做自愈，这是正确答案不是遗憾。** 不得重建 viewport/content：应用亲手摘掉了内容，静默复活一个新对象会让 `content()` 悄悄换成**另一个 widget**——"从会崩退化成会静默答错"，正是本轮整治要拒绝的那笔交易。降级是**永久**的。（"摘掉后还想接回去"是一个 API 缺口 `ScrollArea::setContentWidget`，**登记备查，本轮不做**。）
+
+**实现上只有真正解引用成员的入口需要自己的空检查**，其余全部由一处推导出来：`bars()` 答"没有条" ⇒ `viewportSize()` 是整个 `localRect()` ⇒ 四个 bar/thumb 矩形全空 ⇒ `onPaint` 的 `bar` lambda 首行返回、`maxScroll()` 算术上就是 `{0,0}`。需要自己那一条的是 `setContentSize` / `scrollOffset` / `scrollTo` / `ensureVisible` / `relayout` / `bars` / `onMouse` / `onKey`，统一走一个私有谓词 `hasParts()`，而不是每个方法各写一遍空检查。
+
+#### `AppWindow`：**`relayout()` 一个字都没改**，这是方案正确性的旁证
+
+`AppWindow::relayout()` 开头的 `if (!header_ || !content_) return;` 与 `if (fill_)` 从这个类被写出来那天就在源码里，而**库里没有任何一行代码能满足它们**——它们是长得像防御性编程的死代码。**E15 什么都没改，只是让它们描述的状态第一次可达。** `setHeaderVisible` / `isHeaderVisible` / `hitZoneAt` 同样早就是这么写的，同样一字未改。
+
+`AppWindow.cpp` 的 diff 因此是**纯新增**：一个三行的 override，没有一行修改。
+
+**唯一的新增判空**：`setContent<T>()` 原本直接解引用 `content_`，现在 `content_ == nullptr` 时返回 `nullptr`（`AppWindow.hpp`）。
+
+#### REM3-G9 遵守情况
+
+两个 override 各只做**指针比较 + 成员置空**。没有 `update()`、没有信号、没有 `removeChild`、没有虚调用。重绘没有丢：摘除方走的是 `Widget::takeChild`，它在广播**之前**就把腾出的区域标脏了。
+
+#### 红态先行（E15 落地**之前**跑的，原文摘录）
+
+用例先写、先入门禁，在 `ScrollArea` / `AppWindow` 的 override **不存在**时跑：
+
+* **Release**：`Segmentation fault`，退出码 **139**（进程直接死在 `taking_the_viewport_clears_both_of_a_scrollareas_pointers`）。
+* **ASan（RelWithDebInfo /O2）**：**143 条 AddressSanitizer 报告**，随后一条 deadly signal 中断整个 run，退出码 1。
+
+第一条报告，逐字：
+
+```
+==5028==ERROR: AddressSanitizer: heap-use-after-free on address 0x1292065a3754
+READ of size 4 at 0x1292065a3754 thread T0
+    #0 geeyoou::ScrollArea::contentSize include\geeyoou\widget\ScrollArea.hpp:28
+    #1 geeyoou::ScrollArea::bars        src\widget\ScrollArea.cpp:167
+    #2 geeyoou::ScrollArea::needVBar    src\widget\ScrollArea.cpp:176
+    #3 geeyoou::ScrollArea::vBarRect    src\widget\ScrollArea.cpp:287
+    #4 geeyoou::ScrollArea::vThumbRect  src\widget\ScrollArea.cpp:298
+    #5 geeyoou::ScrollArea::onPaint     src\widget\ScrollArea.cpp:336
+    #6 geeyoou::Widget::paintTree       src\widget\Widget.cpp:1140
+    #7 gy_case_detach_notify_a_scrollarea_that_lost_its_content_survives_paint_wheel_and_resize
+freed by thread T0 here:
+    #4 geeyoou::Widget::removeChild     src\widget\Widget.cpp:574
+```
+
+143 条报告的**使用点**分布（`#0` 帧去重计数）：
+
+| 使用点 | 条数 |
+|---|---|
+| `ScrollArea::contentSize`（`ScrollArea.hpp:28`） | 108 |
+| `Rect::operator==`（`Widget::setGeometry` 的幂等短路读的是**已释放**的 `geometry_`） | 16 |
+| `Widget::setGeometry`（`Widget.cpp:607`） | 4 |
+| `Widget::window` / `Widget::add<Widget>`（`AppWindow::setContent` 走进已释放的 `content_`） | 5 |
+| `ScrollArea::relayout`（`ScrollArea.cpp:215`，即 `content_->layout()`） | 1 |
+
+装上 override 之后：**三条腿全绿，207 个用例 0 失败，ASan 0 条我方报告**（日志里剩下的报告全部是本机 SogouPY.ime 的，分类器判 `[known]`）。
+
+#### 用例增量：**新增 7 条（200 → 207）**，`tests/widget/test_detach_notify.cpp`
+
+| 用例 | 覆盖的验收条 |
+|---|---|
+| `a_scrollarea_that_lost_its_content_survives_paint_wheel_and_resize` | 反例①逐字 + 连续 3 次 `paintTree` + `dispatchMouse(Wheel)` + `setGeometry` + 不自愈 + 整张降级表 |
+| `taking_the_viewport_clears_both_of_a_scrollareas_pointers` | 反例②逐字 + **两个指针都为空** + 不自愈 + `ensureVisible`/`setContentSize` 不写几何 |
+| `the_announcement_climbs_the_whole_ancestor_chain` | **正面**断言：深度 ≥3 的容器收到孙子的通知，且 `node` 参数就是那个孙子 |
+| `destruction_announces_nothing` | `~Widget` **不**触发钩子（含"探针本身是好的"的对照组） |
+| `an_appwindow_that_lost_its_content_lays_out_and_paints` | `AppWindow` 的 override、`relayout()` 死分支变活路径、`setContent<T>` 答 `nullptr` |
+| `a_measurement_that_steals_the_content_degrades_on_the_member_re_read` | **B7**：CP-S1 的 `content_ != ct0` 子分支 |
+| `an_arrange_that_steals_the_content_degrades_on_the_member_re_read` | **B7**：CP-C1 的 `content_ != ct0` 子分支 |
+
+**⚠️ 用例里每一次会 UAF 的读都有消费者**（`CHECK_NEAR` / `CHECK_EQ`），照 §11.11 那条方法学教训写的：`(void)sa->contentSize();` 在 `/O2` 下会被整个删掉，用例照样 FAIL 而 ASan 一条报告都没有。
+
+**踩到过的一个陷阱，写下来给下一个人**：两条 B7 用例里的"窃贼"最初没有 `arm()`，结果它在**搭场景阶段**就偷走了 content —— `add<T>` 会调 `childAppended()`、`addWidget()` 会标脏，任何一个都会跑一趟测量，也就是被测的那扇门。症状是 `contentBefore == nullptr`。**建场景的语句本身就是门。**
+
+#### B7：那两个成员重读子分支，这次真的被走到了
+
+§11.11 更正过"E14 本轮不成立"，理由是 `viewport_` / `content_` 是 `ScrollArea` 的私有成员、只有它自己的 override 能置空。**E15 提供了那个 override，两条子分支现在确实被走到。**
+
+不是靠论证，是靠一次**判别性实验**（形状取自 §11.11 的 B2）：把 CP-S1 / CP-C1 / CP-C2 / CP-S2 里的 `viewport_ != vp0 || content_ != ct0` 两项**删掉**、其余不动，两条 B7 用例立刻从"降级 1 次"变成**进程崩溃**：
+
+```
+==36788==ERROR: AddressSanitizer: access-violation on unknown address 0x0000000008
+    #0 geeyoou::Rect::operator==        include\geeyoou\core\Types.hpp:73
+    #1 geeyoou::Widget::setGeometry     src\widget\Widget.cpp:607
+    #2 geeyoou::ScrollArea::relayout    src\widget\ScrollArea.cpp:355   <- content_ 是 nullptr
+    #3 geeyoou::ScrollArea::onGeometryChanged
+    #5 gy_case_detach_notify_a_measurement_that_steals_the_content_degrades_on_the_member_re_read
+```
+
+⇒ 删掉成员重读，这一帧就会跟着一个**刚刚被置空**的成员走下去。**成员重读那一段今天不再是死代码。** 实验用文件备份还原，未跑任何 git 历史改写命令。
+
+**断言取的是 `framesDegraded == 1`（精确值，不是 `>=`）**：REM3-G8 说计数单位是**帧**，一次 `setContentSize` 可以诚实地记两次（`test_rem3_doors.cpp`），`>=` 会在这个检查点开始因为第二个原因触发的那天继续通过。
+**这两条用例只能证明"该条件为假并降级了"，不能直接证明"是五项里的哪一项"**——它靠的是构造：`sa` 是本帧的栈对象、viewport 未动、被摘的 content **活着**（parked 在用例自己的 `unique_ptr` 里），所以三个游标半边全为真，唯一能为假的就是成员重读。上面的判别性实验是这个论证的实测背书。
+
+#### 门禁
+
+* 基线 **200 用例 / 三条腿全绿** → 改动后 **207 用例 / 三条腿全绿**，0 失败。
+* **Release 独立跑 3 次**，退出码全 0，三次 stdout **逐字节相同**。
+* **整份 Release stdout 与基线 diff**：只有三处差异 —— 7 条新用例的 `PASS` 行、`200 个用例` → `207 个用例`、以及下面这一条：
+  * `[soak] live-allocs 17/17/17` → `18/18/18`。**已定位并解释**：逐条二分实验（把新用例逐个禁用后重跑 soak）证明这 +1 完全来自 `an_appwindow_that_lost_its_content_lays_out_and_paints`，而且只来自它**绘制**的那一段——套件里在此之前没有任何用例**画过 `WindowHeader`**，于是它的标题字号第一次进了 `src/render/Painter.cpp` 那张**进程级、按字号分桶**的 `FontRegistry` 缓存，多出一个常驻块。**不是泄漏**：同一个用例画 3 次也只多 1 个块，soak 400 圈里 `base == peak == last` 依旧成立，soak 的四条断言全部通过。四条序列的**平坦性**（唯一被断言的性质）未变。
+* **9 张 golden 逐字节不变**（SHA-256 逐个比对）。
+* `AppWindow::relayout` 的三处判空**一字未改**（对 HEAD 做过 `diff`，`AppWindow.cpp` 是纯新增）。
+
+#### 未验证 / 留给下一轮
+
+1. **`Shell`（showcase）今天仍然带着 RES-1 的缺陷。** `Shell::pageArea_` 与 `Page::host`（每个页面一个 `ScrollArea*`，存在 `std::vector<Page>` 里）没有 override，摘掉页面宿主之后 `Shell::relayout()` / `showPage()` 仍然会走悬垂指针。**Elena 的降级表没有覆盖 `Shell`**，而它的降级语义（`showPage` 遇到 host 为空该怎么办）是需要裁定的产品问题，不是机械改造，**本轮据此没有做**，登记待裁。
+2. **`AppWindow` 的 `maximizedChanged` 槽（`AppWindow.cpp:34-40`）无条件解引用 `header_`。** `header_` 现在**可以**是 `nullptr`，所以"摘掉 header 后切换最大化"是一次空指针解引用（确定性崩溃，不是 UAF）。裁定书写明"唯一新增 `setContent<T>` 的判空"，本轮**据此没有动它**。登记待裁。
+3. **showcase 真实渲染未验证** —— 无法在本环境自动化，**需编排者人工确认**。改动的可见面：任何 `ScrollArea` 在内容被摘除后不再画滚动条。存活路径的行为由"整份 Release stdout 与基线 diff"与 9 张 golden 逐字节相同背书。
+4. **`onMouse` 降级后残留的 `hoverV_` / `hoverH_`** 不会被清掉（早退发生在 `Leave` 分支之前）。看不见——两个 bar 矩形都是空的，读它们的东西一个都不画——但它是状态而不是不变量，写在这里备查。
+5. **`sizeHint()` 未纳入降级表**：`ScrollArea::sizeHint()` 不读任何成员，摘除后照样答那个默认窗口尺寸（320x200）。这是**故意不改**，但裁定表里没有这一行，登记以免下一个人以为是漏的。
