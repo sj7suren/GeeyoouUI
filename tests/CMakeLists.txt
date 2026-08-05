@@ -16,12 +16,22 @@ add_executable(geeyoou_tests
   widget/test_hittest.cpp
   widget/test_removal.cpp
   widget/test_popup_lifetime.cpp
+  widget/test_geometry_baseline.cpp
+  widget/test_layout_engine.cpp
   render/test_style_cascade.cpp
   visual/test_golden.cpp
+
+  # Not library code: Shell is the showcase's own frame.  It is compiled INTO
+  # the test binary because it is one of the four relayout() implementations
+  # every showcase page stands on, and a geometry regression in it would
+  # otherwise only be visible by looking at the running application.
+  ${CMAKE_SOURCE_DIR}/examples/showcase/Shell.cpp
 )
 
 target_link_libraries(geeyoou_tests PRIVATE geeyoou::geeyoou)
-target_include_directories(geeyoou_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(geeyoou_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_SOURCE_DIR}/examples)
 
 # Baked in rather than resolved relative to the executable: the binary lives in
 # build/bin and the baselines live in the source tree, and a test that guessed
