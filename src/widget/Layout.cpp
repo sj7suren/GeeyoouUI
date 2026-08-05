@@ -27,7 +27,7 @@ void Layout::invalidate() {
   onInvalidated();
   // Null only for a Layout that was constructed but never adopted, which the
   // public API cannot produce -- setLayout constructs and adopts in one step.
-  if (host_) host_->relayout();
+  if (host_) host_->performLayout();
 }
 
 // ------------------------------------------------------------ diagnostics ---
