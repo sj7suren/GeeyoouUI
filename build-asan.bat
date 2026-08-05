@@ -10,6 +10,16 @@ rem and visible only under /fsanitize=address: a freed Widget's vtable pointer
 rem is still the right bits for a few microseconds, so the pass finishes, the
 rem numbers come out right and the suite says PASS.
 rem
+rem AND YOUR TEST MUST LET THE READ SURVIVE TO THE SANITISER.  This leg only
+rem sees loads that are still in the binary: `(void)w->geometry();` is a load
+rem with no consumer, /O2 deletes it outright, and a deleted load is a
+rem use-after-free ASan never reports.  Measured, not feared -- E14's red state
+rem produced FAILING cases and ZERO reports until the value was stored into an
+rem observable member (tests\widget\test_removal.cpp, lastCachedWidth).  So:
+rem CONSUME every read of a possibly-freed object, with a CHECK.  "The case went
+rem red" and "ASan went red" are two INDEPENDENT signals, and a case that only
+rem produces the first one is not evidence about this leg at all.
+rem
 rem RelWithDebInfo, not Debug: ASan wants optimised code (its shadow-memory
 rem checks are cheap, the interceptors are not) and NDEBUG means the asserts do
 rem not pre-empt the reports.  /Zi is already in the RelWithDebInfo flags; it is
