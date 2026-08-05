@@ -5,6 +5,7 @@ add_executable(showcase
   PlantIcons.cpp
   PageWindow.cpp
   PageTheme.cpp
+  PageIcons.cpp
   PageOverview.cpp
   PageHmi.cpp
   PageLayout.cpp

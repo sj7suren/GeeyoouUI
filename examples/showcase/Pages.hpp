@@ -23,6 +23,7 @@ class ShowcaseWindow;
 //     semantics, not typography.
 Size buildOverviewPage(Widget* content, AppState& app);
 Size buildHmiPage(Widget* content, AppState& app);
+Size buildIconsPage(Widget* content);
 Size buildLayoutPage(Widget* content);
 Size buildWidgetsPage(Widget* content);
 Size buildInputsPage(Widget* content);

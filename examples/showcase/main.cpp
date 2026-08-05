@@ -78,6 +78,8 @@ int main() {
   shell->addPage("", "主题与皮肤", "皮肤注册表 / 主题色 / 类 QSS 选择器",
                  Icon::Sun,
                  [&win](Widget* c) { return buildThemePage(c, win); });
+  shell->addPage("", "图标库", "全部内置与自定义图标 · 搜索 / 尺寸对比 / 用法",
+                 Icon::Eye, [](Widget* c) { return buildIconsPage(c); });
   shell->addPage("演示画面", "HMI 监控", "仪表 / 指示灯 / 实时趋势", Icon::Play,
                  [&app](Widget* c) { return buildHmiPage(c, app); });
   shell->addPage("", "运维控制台", "报警列表 / 滚动表单 / 采集队列", Icon::Warning,
