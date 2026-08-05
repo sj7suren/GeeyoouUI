@@ -1,0 +1,16 @@
+Not the use-after-free family, so the BROAD rule applies: any GeeyoouUI frame
+anywhere in the report is ours.  Same semantics the gate had before
+tools/classify-asan.ps1 existed.
+=================================================================
+==23301==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x000d5a90b234 at pc 0x7ff64c8c4d90 bp 0x00c19dbfd200 sp 0x00c19dbfd208
+WRITE of size 4 at 0x000d5a90b234 thread T0
+    #0 0x7ff64c8c4d90 in Geeyoou::GridLayout::place E:\Develop\tools\GeeyoouUI\src\GridLayout.cpp:388
+    #1 0x7ff64c8c3110 in Geeyoou::GridLayout::arrange E:\Develop\tools\GeeyoouUI\src\GridLayout.cpp:205
+
+0x000d5a90b234 is located 4 bytes after 48-byte region [0x000d5a90b200,0x000d5a90b230)
+allocated by thread T0 here:
+    #0 0x7ffb9f2c0a10 in operator new[] D:\a\_work\1\s\src\vctools\crt\asan\llvm\compiler-rt\lib\asan\asan_win_new_array_thunk.cpp:35
+    #1 0x7ff64c8c2880 in Geeyoou::GridLayout::reserve E:\Develop\tools\GeeyoouUI\src\GridLayout.cpp:96
+
+SUMMARY: AddressSanitizer: heap-buffer-overflow E:\Develop\tools\GeeyoouUI\src\GridLayout.cpp:388 in Geeyoou::GridLayout::place
+==23301==ABORTING

@@ -1,0 +1,12 @@
+SEGV carries one stack and no "freed by" section at all.  It is outside the
+use-after-free family, so the broad rule decides it, and there is no code path
+in which a report kind we do not model silently passes.
+=================================================================
+==25190==ERROR: AddressSanitizer: SEGV on unknown address 0x000000000000 (pc 0x7ff64c8d2440 bp 0x00d4e1bfd700 sp 0x00d4e1bfd708 T0)
+==25190==The signal is caused by a READ memory access.
+==25190==Hint: address points at the zero page.
+    #0 0x7ff64c8d2440 in Geeyoou::ScrollArea::viewport E:\Develop\tools\GeeyoouUI\src\ScrollArea.cpp:117
+    #1 0x7ff64c8d1a90 in Geeyoou::ScrollArea::paint E:\Develop\tools\GeeyoouUI\src\ScrollArea.cpp:263
+
+SUMMARY: AddressSanitizer: SEGV E:\Develop\tools\GeeyoouUI\src\ScrollArea.cpp:117 in Geeyoou::ScrollArea::viewport
+==25190==ABORTING

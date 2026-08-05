@@ -1,0 +1,29 @@
+The same third-party report as third-party-sogou-uaf.log, but from a build that
+does NOT replace global operator delete -- the stock MSVC ASan thunk is frame
+#0 of the free stack and there is no gyFree in between.
+
+Kept as a separate case so the allocator-plumbing skip is proved to work in
+both worlds: the day tests\framework\Test.cpp stops overriding the global
+operator, or somebody points this classifier at a log from a different binary,
+the answer must not change.
+=================================================================
+==18855==ERROR: AddressSanitizer: heap-use-after-free on address 0x000ffd3c1a10 at pc 0x7ffb2c4d1e90 bp 0x0093f7bfe010 sp 0x0093f7bfe018
+READ of size 8 at 0x000ffd3c1a10 thread T0
+    #0 0x7ffb2c4d1e90 (C:\Windows\System32\IME\SogouPY.ime+0x180041e90)
+    #1 0x7ffbb1a23c40 (C:\Windows\System32\user32.dll+0x180053c40)
+    #2 0x7ffbb1a55110 in DestroyWindow (C:\Windows\System32\user32.dll+0x180085110)
+    #3 0x7ff64c8813a2 in geeyoou::Window::~Window E:\Develop\tools\GeeyoouUI\src\platform\Window.cpp:214
+
+0x000ffd3c1a10 is located 16 bytes inside of 96-byte region [0x000ffd3c1a00,0x000ffd3c1a60)
+freed by thread T0 here:
+    #0 0x7ffb9f2c1b40 in operator delete D:\a\_work\1\s\src\vctools\crt\asan\llvm\compiler-rt\lib\asan\asan_win_new_delete_thunks.cpp:71
+    #1 0x7ffb2c4c1330 (C:\Windows\System32\IME\SogouPY.ime+0x180031330)
+    #2 0x7ffbb1a23c40 (C:\Windows\System32\user32.dll+0x180053c40)
+    #3 0x7ff64c8813a2 in geeyoou::Window::~Window E:\Develop\tools\GeeyoouUI\src\platform\Window.cpp:214
+
+previously allocated by thread T0 here:
+    #0 0x7ffb9f2c0a10 in operator new D:\a\_work\1\s\src\vctools\crt\asan\llvm\compiler-rt\lib\asan\asan_win_new_scalar_thunk.cpp:35
+    #1 0x7ffb2c4be100 (C:\Windows\System32\IME\SogouPY.ime+0x18002e100)
+
+SUMMARY: AddressSanitizer: heap-use-after-free (C:\Windows\System32\IME\SogouPY.ime+0x180041e90)
+==18855==ABORTING

@@ -1,0 +1,5 @@
+A report whose stacks never made it to disk -- the process died, or the log was
+cut.  Nothing to attribute, therefore ours.
+=================================================================
+==24102==ERROR: AddressSanitizer: heap-use-after-free on address 0x000f0e0d0c0b at pc 0x7ff64c800000 bp 0x0000000000 sp 0x0000000000
+READ of size 8 at 0x000f0e0d0c0b thread T0

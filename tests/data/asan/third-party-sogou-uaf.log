@@ -1,0 +1,54 @@
+THE CASE THE CLASSIFIER EXISTS FOR, in the shape this build actually produces.
+
+Note frames #1 and #2 of the "freed by" stack: tests\framework\Test.cpp replaces
+global operator new / operator delete, so EVERY free in the process -- including
+this injected IME's -- passes through OUR source file first.  A classifier that
+takes "the innermost non-runtime frame" literally answers Test.cpp here and
+calls the report ours, which is exactly the flaky red we are trying to kill.
+The allocator plumbing has to be stepped over before blame is assigned.
+
+Our Window::~Window is also on the use stack, five frames out, because it is
+what called DestroyWindow.  The old any-occurrence findstr matched on that.
+tree.style_classes_split_on_whitespace  PASS
+
+181 cases, 0 failures
+=================================================================
+==17432==ERROR: AddressSanitizer: heap-use-after-free on address 0x000ffd3c1a10 at pc 0x7ffb2c4d1e90 bp 0x0093f7bfe010 sp 0x0093f7bfe018
+READ of size 8 at 0x000ffd3c1a10 thread T0
+    #0 0x7ffb2c4d1e90 (C:\Windows\System32\IME\SogouPY.ime+0x180041e90)
+    #1 0x7ffb2c4c9a20 (C:\Windows\System32\IME\SogouPY.ime+0x180039a20)
+    #2 0x7ffbb1a23c40 (C:\Windows\System32\user32.dll+0x180053c40)
+    #3 0x7ffbb1a1f7b0 in NtUserDestroyWindow (C:\Windows\System32\win32u.dll+0x18000f7b0)
+    #4 0x7ffbb1a55110 in DestroyWindow (C:\Windows\System32\user32.dll+0x180085110)
+    #5 0x7ff64c8813a2 in geeyoou::Window::~Window E:\Develop\tools\GeeyoouUI\src\platform\Window.cpp:214
+    #6 0x7ff64c8f01d4 in geeyoou::AppWindow::~AppWindow E:\Develop\tools\GeeyoouUI\src\widget\AppWindow.cpp:88
+    #7 0x7ff64c7710aa in geeyoou::test::runAll E:\Develop\tools\GeeyoouUI\tests\framework\Test.cpp:155
+    #8 0x7ff64c771ce7 in main E:\Develop\tools\GeeyoouUI\tests\framework\Test.cpp:195
+    #9 0x7ffbb2ce257c in BaseThreadInitThunk+0x13 (C:\Windows\System32\KERNEL32.DLL+0x18001257c)
+
+0x000ffd3c1a10 is located 16 bytes inside of 96-byte region [0x000ffd3c1a00,0x000ffd3c1a60)
+freed by thread T0 here:
+    #0 0x7ffecd54ec38 in _asan_wrap__CrtIsValidHeapPointer+0xb58 (E:\Develop\tools\GeeyoouUI\build-asan\bin\clang_rt.asan_dynamic-x86_64.dll+0x18004ec38)
+    #1 0x7ff64c7702f8 in `anonymous namespace'::gyFree E:\Develop\tools\GeeyoouUI\tests\framework\Test.cpp:52
+    #2 0x7ff64c76dea8 in operator delete E:\Develop\tools\GeeyoouUI\tests\framework\Test.cpp:80
+    #3 0x7ffb2c4c1330 (C:\Windows\System32\IME\SogouPY.ime+0x180031330)
+    #4 0x7ffb2c4bf880 (C:\Windows\System32\IME\SogouPY.ime+0x18002f880)
+    #5 0x7ffbb1a23c40 (C:\Windows\System32\user32.dll+0x180053c40)
+    #6 0x7ffbb1a55110 in DestroyWindow (C:\Windows\System32\user32.dll+0x180085110)
+    #7 0x7ff64c8813a2 in geeyoou::Window::~Window E:\Develop\tools\GeeyoouUI\src\platform\Window.cpp:214
+
+previously allocated by thread T0 here:
+    #0 0x7ffecd54d0f0 in _asan_wrap__CrtIsValidHeapPointer+0x9f0 (E:\Develop\tools\GeeyoouUI\build-asan\bin\clang_rt.asan_dynamic-x86_64.dll+0x18004d0f0)
+    #1 0x7ff64c770100 in `anonymous namespace'::gyAllocate E:\Develop\tools\GeeyoouUI\tests\framework\Test.cpp:33
+    #2 0x7ff64c76dc10 in operator new E:\Develop\tools\GeeyoouUI\tests\framework\Test.cpp:65
+    #3 0x7ffb2c4be100 (C:\Windows\System32\IME\SogouPY.ime+0x18002e100)
+    #4 0x7ffbb1a30990 (C:\Windows\System32\user32.dll+0x180060990)
+
+SUMMARY: AddressSanitizer: heap-use-after-free (C:\Windows\System32\IME\SogouPY.ime+0x180041e90)
+Shadow bytes around the buggy address:
+  0x000ffd3c1780: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+=>0x000ffd3c1a00: fd fd[fd]fd fd fd fd fd fd fd fd fd fa fa fa fa
+Shadow byte legend (one shadow byte represents 8 application bytes):
+  Addressable:           00
+  Freed heap region:       fd
+==17432==ABORTING

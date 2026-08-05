@@ -1,0 +1,35 @@
+The exact mirror of third-party-sogou-uaf.log.  Identical allocator plumbing in
+the free stack -- _asan_wrap / gyFree / operator delete, all of it in our own
+files -- and the use site is entirely third-party, a system DLL reading the
+byte.  The ONLY difference between this log and the third-party one is the
+frame that sits immediately behind the plumbing: geeyoou::Label::setText here,
+SogouPY.ime there.
+
+That one frame is the whole verdict.  If a change to the plumbing skip ever
+makes these two agree, one of them is wrong and the classifier is worthless in
+one direction or the other.
+
+Also the case a "BOTH sites must be ours" rule would ship: we freed it, they
+read it.  One blame stack is enough.
+=================================================================
+==21044==ERROR: AddressSanitizer: heap-use-after-free on address 0x000c4b118220 at pc 0x7ffbb1a6d210 bp 0x00e2a97fd110 sp 0x00e2a97fd118
+READ of size 2 at 0x000c4b118220 thread T0
+    #0 0x7ffbb1a6d210 in SetWindowTextW (C:\Windows\System32\user32.dll+0x18009d210)
+    #1 0x7ffbb1a6c880 (C:\Windows\System32\user32.dll+0x18009c880)
+
+0x000c4b118220 is located 0 bytes inside of 48-byte region [0x000c4b118220,0x000c4b118250)
+freed by thread T0 here:
+    #0 0x7ffecd54ec38 in _asan_wrap__CrtIsValidHeapPointer+0xb58 (E:\Develop\tools\GeeyoouUI\build-asan\bin\clang_rt.asan_dynamic-x86_64.dll+0x18004ec38)
+    #1 0x7ff64c7702f8 in `anonymous namespace'::gyFree E:\Develop\tools\GeeyoouUI\tests\framework\Test.cpp:52
+    #2 0x7ff64c76dea8 in operator delete E:\Develop\tools\GeeyoouUI\tests\framework\Test.cpp:80
+    #3 0x7ff64c8b4770 in geeyoou::Label::setText E:\Develop\tools\GeeyoouUI\src\widget\Label.cpp:142
+    #4 0x7ff64c8b3010 in geeyoou::WindowHeader::retitle E:\Develop\tools\GeeyoouUI\src\widget\WindowHeader.cpp:77
+
+previously allocated by thread T0 here:
+    #0 0x7ffecd54d0f0 in _asan_wrap__CrtIsValidHeapPointer+0x9f0 (E:\Develop\tools\GeeyoouUI\build-asan\bin\clang_rt.asan_dynamic-x86_64.dll+0x18004d0f0)
+    #1 0x7ff64c770100 in `anonymous namespace'::gyAllocate E:\Develop\tools\GeeyoouUI\tests\framework\Test.cpp:33
+    #2 0x7ff64c76dc10 in operator new E:\Develop\tools\GeeyoouUI\tests\framework\Test.cpp:65
+    #3 0x7ff64c8b4420 in geeyoou::Label::Label E:\Develop\tools\GeeyoouUI\src\widget\Label.cpp:44
+
+SUMMARY: AddressSanitizer: heap-use-after-free (C:\Windows\System32\user32.dll+0x18009d210)
+==21044==ABORTING

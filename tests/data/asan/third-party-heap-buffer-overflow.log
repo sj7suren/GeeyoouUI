@@ -1,0 +1,15 @@
+Broad rule, and nothing of ours appears in the report at all.  Third-party.
+=================================================================
+==23788==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x000b3311c904 at pc 0x7ffb2c4e0110 bp 0x0044f6bfd600 sp 0x0044f6bfd608
+READ of size 1 at 0x000b3311c904 thread T0
+    #0 0x7ffb2c4e0110 (C:\Windows\System32\IME\SogouPY.ime+0x180050110)
+    #1 0x7ffb2c4dfa00 (C:\Windows\System32\IME\SogouPY.ime+0x18004fa00)
+    #2 0x7ffbb1a23c40 (C:\Windows\System32\user32.dll+0x180053c40)
+
+0x000b3311c904 is located 4 bytes after 4-byte region [0x000b3311c900,0x000b3311c904)
+allocated by thread T0 here:
+    #0 0x7ffb9f2c0a10 in operator new D:\a\_work\1\s\src\vctools\crt\asan\llvm\compiler-rt\lib\asan\asan_win_new_scalar_thunk.cpp:35
+    #1 0x7ffb2c4de220 (C:\Windows\System32\IME\SogouPY.ime+0x18004e220)
+
+SUMMARY: AddressSanitizer: heap-buffer-overflow (C:\Windows\System32\IME\SogouPY.ime+0x180050110)
+==23788==ABORTING
