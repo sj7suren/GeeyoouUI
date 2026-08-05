@@ -110,6 +110,24 @@ Size ScrollArea::viewportSize() const {
 void ScrollArea::relayout() {
   const Size vp = viewportSize();
   viewport_->setGeometry({0.0f, 0.0f, vp.width, vp.height});
+
+  // A laid-out page grows with the window; a hand-placed one does not.
+  //
+  // Without this the layout engine stops at the page's edge: the controls
+  // inside a page rearrange themselves perfectly, and then the page itself
+  // stays pinned to whatever design size it was built at, so enlarging the
+  // window still just adds margin -- the exact complaint R2 exists to fix.
+  //
+  // Strictly opt-in: content with no layout is left alone, which is why the
+  // five pages still using absolute coordinates cannot be affected by this.
+  // max() rather than assignment, so a page shorter than the viewport still
+  // fills it instead of floating in the middle.
+  if (content_->layout()) {
+    const SizeHint h = content_->sizeHint();
+    content_->setGeometry({0.0f, 0.0f,
+                           std::max(vp.width, h.preferred.width),
+                           std::max(vp.height, h.preferred.height)});
+  }
 }
 
 Rect ScrollArea::vBarRect() const {
