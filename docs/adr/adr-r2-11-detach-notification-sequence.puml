@@ -1,0 +1,122 @@
+@startuml adr-r2-11-detach-notification-sequence
+'
+' ADR-R2-11 -- the ORDER of a detach announcement.
+'
+' This diagram exists because the order is LOAD-BEARING in that decision, not
+' because a picture is nicer than prose.  Every one of the four position rules
+' in section 2 of the ADR is a statement about what has NOT happened yet at the
+' moment the broadcast runs:
+'
+'   * before Window::widgetDetached  -- that call runs application code
+'                                       (closePopup -> popupClosed), so an
+'                                       ancestor may already be dead after it;
+'                                       broadcasting first needs no liveness
+'                                       argument of its own.
+'   * before the unlink              -- the whole departing subtree and the whole
+'                                       ancestor chain are still alive and still
+'                                       linked, so `node == content_` is a
+'                                       comparison between objects that exist.
+'   * before childRemoved            -- that is takeChild's SECOND door.
+'   * before the destruction         -- the caller destroys, and only after the
+'                                       subtree has been handed to it.
+'
+' Read together with docs/adr/adr-r2-11-detach-notification.md.
+'
+' NOT RENDERED: plantuml.jar is not installed on this machine.  The source is
+' checked in; the PNG/SVG is to be produced when it is.  Nobody may claim this
+' figure "ships" before that.
+'
+skinparam backgroundColor #FFFFFF
+skinparam sequenceMessageAlign left
+skinparam ParticipantPadding 12
+skinparam BoxPadding 12
+
+title ADR-R2-11: 广播 -> widgetDetached -> 解链 -> childRemoved -> 销毁\n(顺序是承重的)
+
+participant "应用\nApplication" as App
+participant "Widget::takeChild\n(宿主 parent)" as Take
+participant "announceDetached\n(每节点, 前序)" as Ann
+participant "ScrollArea\n(祖先, 缓存 content_)" as SA
+participant "Window\n(focus_/hovered_/grab/popup)" as Win
+
+App -> Take : removeChild(child) / takeChild(child)
+activate Take
+
+note right of Take
+  REM3-G9 的 Debug assert 在这里:
+  assert(!g_inDetachNotify)
+  -- 钩子里再进这扇门就当场中止
+end note
+
+Take -> Take : child->update()\n(还挂在树上, 所以能定位到 Window)
+Take -> Take : detail::DeathWatch alive(this)
+
+Take -> Ann : announceDetached(parent, child, hint, win)
+activate Ann
+
+== 1. 广播 (第一条语句; 什么都还没动) ==
+
+Ann -> Ann : detail::notifyDetachToAncestors(node)\nfor (a = node->parent(); a; a = a->parent())
+Ann -> SA : onDescendantDetached(node)
+activate SA
+SA -> SA : if (node == content_)  content_  = nullptr\nif (node == viewport_) viewport_ = nullptr
+note right of SA
+  REM3-G9: 只准置空自己的成员指针。
+  不得 update() / emit() / 改树 / 虚调用。
+  == 所以这一步 **不跑应用代码** ==
+end note
+deactivate SA
+
+note over Ann, SA
+  此刻: 子树仍然完整、仍然挂在树上, 整条祖先链全部活着
+  ==> 指针比较绝对安全, 广播不需要自己的存活性论证
+end note
+
+== 2. widgetDetached (这一步会跑应用代码) ==
+
+Ann -> Ann : cancelOn(g_bubbles, node)\ncancelOn(g_geometries, node)
+Ann -> Ann : detail::DeathWatch host(&parent)
+Ann -> Win : widgetDetached(node)
+activate Win
+Win -> Win : 丢掉 focus_ / hovered_ / pressGrab_ / popup_\n中的任何一个指向 node 的
+Win -->> App : closePopup -> popupClosed.emit()  ** 应用代码 **
+note right of Win
+  槽可以销毁别的 widget (D7 只禁止销毁信号自己的宿主)。
+  所以返回之后, parent 与 node 都要重新证明还在。
+end note
+deactivate Win
+
+Ann -> Ann : if (!host.alive()) return;\nif (!stillAChild(parent, node, hint)) return;
+Ann -> Ann : 递归: 对 node 的每个子节点重复上述全部\n(所以是 **每节点** 而不是只有根)
+
+Ann --> Take
+deactivate Ann
+
+Take -> Take : if (!alive.alive()) return nullptr;
+Take -> Take : index = indexOfChild(children_, child)\n(重新找, 不复用旧下标)
+
+== 3. 解链 (到这里才第一次改结构) ==
+
+Take -> Take : owned = std::move(children_[index])\nchildren_.erase(...)\nowned->parent_ = nullptr
+
+== 4. childRemoved (takeChild 的第二道门, 守卫作用域之外) ==
+
+Take -> Take : if (detail::g_layoutHosts != 0) childRemoved(index)
+note right of Take
+  ADR-R2-01 的门控: 不装 Layout 的 widget 一条都不执行。
+  这扇门之后 **不得再有任何成员访问** -- 只剩 return owned;
+end note
+
+Take --> App : return owned  (所有权交给调用者)
+deactivate Take
+
+== 5. 销毁 (由调用者决定, 不由本机制决定) ==
+
+App -> App : removeChild: doomed.reset()\n或 takeChild: 调用者继续持有 -> 子树还活着
+note right of App
+  takeChild 之后子树 **仍然活着**, 只是脱离了树。
+  所以 ~Widget 不需要这个钩子, 而 DeathWatch 的取消
+  策略是 "析构取消, 摘除不取消" (Q4)。
+end note
+
+@enduml
