@@ -340,7 +340,18 @@ void Widget::adoptLayout(std::unique_ptr<Layout> l) {
   performLayout();
 }
 
+// A container answers for its contents; everything else answers with the size
+// it was built at.  See the contract on the declaration.
+//
+// The recursion is bounded by the tree and visits each node once per pass of
+// its parent, so a page costs O(nodes) per layout pass -- not O(nodes) per
+// level.  What it is NOT free of is text measurement: a Label's hint runs the
+// shaper, so a layout with labels in it measures text on every pass.  That is
+// the known limitation recorded in tests/widget/test_layout_alloc.cpp and
+// docs/iterations/02-layout-engine.md; the fix is a per-control width cache in
+// the text round (R3), not here.
 SizeHint Widget::sizeHint() const {
+  if (layout_) return layout_->measure(*this);
   return SizeHint{Size{0.0f, 0.0f}, naturalSize_, Size{kUnbounded, kUnbounded}};
 }
 
@@ -367,10 +378,11 @@ void Widget::latchNaturalSize() {
 }
 
 Rect Widget::contentRect() const {
-  const Rect r = localRect();
+  const Rect r = layoutRect();
   if (!layout_) return r;
   const Margins& m = layout_->margins();
-  return {m.left, m.top, std::max(0.0f, r.width() - m.left - m.right),
+  return {r.x() + m.left, r.y() + m.top,
+          std::max(0.0f, r.width() - m.left - m.right),
           std::max(0.0f, r.height() - m.top - m.bottom)};
 }
 

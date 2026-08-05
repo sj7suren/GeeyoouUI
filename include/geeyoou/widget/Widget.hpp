@@ -144,9 +144,17 @@ class Widget : public StyleSubject {
   }
   Layout* layout() const { return layout_.get(); }
 
-  // What this widget would like to be.  The base answer is its NATURAL size --
-  // the first non-empty size it was ever given -- with no lower bound and no
-  // upper one.
+  // What this widget would like to be.
+  //
+  // A widget that OWNS a layout answers with what that layout needs: it is a
+  // container, and a container's size is a statement about its contents.  Any
+  // other answer makes nesting impossible -- a GroupBox holding a GridLayout,
+  // placed in a page's BoxLayout, would report the size somebody once gave it
+  // by hand, and the whole tree would end up sized by construction order rather
+  // than by what is in it.
+  //
+  // A widget with NO layout answers with its NATURAL size -- the first non-empty
+  // size it was ever given -- with no lower bound and no upper one.
   //
   // It deliberately does NOT read geometry(): a widget's geometry is the OUTPUT
   // of the previous arrange, so measuring from it would make the definition
@@ -267,6 +275,19 @@ class Widget : public StyleSubject {
   virtual void onEnabledChanged() { update(); }
   virtual void onGeometryChanged() {}
 
+  // The rectangle this widget's Layout is arranged into, BEFORE the layout's
+  // own margins are taken out of it.  The whole widget for almost everything.
+  //
+  // A container that draws decoration of its own overrides it and hands back
+  // the inside of that decoration -- GroupBox returns the area under its title
+  // rule.  The alternative is telling every call site the frame's dimensions
+  // (setMargins({12, 34, 12, 12}) at every GroupBox in the application), which
+  // puts a private constant of one widget into every file that uses it, and
+  // draws the first row over the title on the day somebody forgets.  Margins
+  // then compose on top: they stay what the AUTHOR asked for, and the frame
+  // stays what the WIDGET knows.
+  virtual Rect layoutRect() const { return localRect(); }
+
   // Called on every visible widget when Window::enableAnimations() is on.
   // Default is a no-op, and an animating widget must call update() ITSELF --
   // the tick alone never repaints anything, so an idle screen stays idle even
@@ -285,7 +306,7 @@ class Widget : public StyleSubject {
   // Returns false when application code destroyed this widget during arrange();
   // the caller must then touch nothing else, `this` included.
   bool runLayoutIfAny();
-  // localRect() with the layout's margins taken out, in this widget's own
+  // layoutRect() with the layout's margins taken out, in this widget's own
   // coordinate space -- which is the space its children's geometry lives in.
   Rect contentRect() const;
   void markLayoutDirty();
