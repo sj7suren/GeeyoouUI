@@ -7,6 +7,7 @@
 // threads) deliberately do NOT live in this tree -- unlike Qt, where everything
 // inherits QObject.  See docs/architecture.md section 3.3.
 //
+#include <cassert>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -19,6 +20,7 @@
 #include "geeyoou/core/Signal.hpp"
 #include "geeyoou/core/Types.hpp"
 #include "geeyoou/render/StyleSheet.hpp"
+#include "geeyoou/widget/Layout.hpp"
 
 namespace geeyoou {
 
@@ -67,8 +69,20 @@ class Widget : public StyleSubject {
     auto owned = std::make_unique<T>(std::forward<Args>(args)...);
     T* raw = owned.get();
     raw->parent_ = this;
+    // Depth is maintained here because this is the ONLY place in the library
+    // where a widget is linked to a parent.  The subtree case is not
+    // hypothetical: a container builds its own children in its CONSTRUCTOR --
+    // ScrollArea does, AppWindow does -- so those nodes were numbered from zero
+    // a moment ago and have to be rebased.  Paid only by containers, and only
+    // once each.
+    assert(depth_ + 1 < int(kMaxTreeDepth) && "widget tree deeper than kMaxTreeDepth");
+    raw->depth_ = std::uint16_t(depth_ + 1);
+    if (!raw->children_.empty()) raw->rebaseSubtreeDepth();
     children_.push_back(std::move(owned));
     raw->update();
+    // One load and one predicted branch when nobody in the process uses a
+    // layout, which is every widget this library ships today.
+    if (detail::g_layoutHosts != 0) childAppended();
     return raw;
   }
 
@@ -111,6 +125,47 @@ class Widget : public StyleSubject {
   void setVisible(bool on);
   bool isVisible() const { return visible_; }
 
+  // --- layout ---------------------------------------------------------------
+  //
+  // OPTIONAL, and off by default.  A widget with no Layout keeps the absolute
+  // positioning this library was built on (docs/architecture.md section 4), and
+  // pays nothing at all for the engine's existence.
+  //
+  // Constructs the layout in place, binds it to this widget for good, and runs
+  // it once.  Replacing an existing layout destroys the old one; the children
+  // keep whatever geometry they last had until the new layout arranges them.
+  template <class L, class... Args>
+  L* setLayout(Args&&... args) {
+    static_assert(std::is_base_of_v<Layout, L>, "L must derive from Layout");
+    auto owned = std::make_unique<L>(std::forward<Args>(args)...);
+    L* raw = owned.get();
+    adoptLayout(std::move(owned));
+    return raw;
+  }
+  Layout* layout() const { return layout_.get(); }
+
+  // What this widget would like to be.  The base answer is its NATURAL size --
+  // the first non-empty size it was ever given -- with no lower bound and no
+  // upper one.
+  //
+  // It deliberately does NOT read geometry(): a widget's geometry is the OUTPUT
+  // of the previous arrange, so measuring from it would make the definition
+  // circular.  A window dragged smaller step by step would then shrink its
+  // children, measure the shrunk children, shrink them again, and never recover
+  // when the window was dragged back out.  See ADR-R2-09.
+  virtual SizeHint sizeHint() const;
+
+  // "What I want has changed" -- a Label whose text was replaced, a list that
+  // gained rows.  Marks this widget's layout chain dirty and, unless a pass is
+  // already running, re-runs the topmost dirty host once.
+  void invalidateSizeHint();
+
+  // Runs this widget's layout now.  No-op without one.
+  void relayout();
+
+  // What did not fit in the last pass.  All zeroes when there is no layout.
+  const LayoutOverflow& lastLayoutOverflow() const;
+
   // --- enabled state ------------------------------------------------------
   // A disabled widget takes no input and neither do its descendants: disabling
   // a GroupBox greys out the whole parameter block, which is exactly what an
@@ -137,6 +192,10 @@ class Widget : public StyleSubject {
 
   // --- tree ---------------------------------------------------------------
   Widget* parent() const { return parent_; }
+  // Distance from the root, maintained by add<T>.  A root -- a Window, or any
+  // widget that was never added to a parent -- is 0.  Bounded by kMaxTreeDepth,
+  // which debug builds assert.
+  std::uint16_t depth() const { return depth_; }
   Window* window();
   const std::vector<std::unique_ptr<Widget>>& children() const { return children_; }
 
@@ -215,13 +274,37 @@ class Widget : public StyleSubject {
  private:
   virtual Window* asWindow() { return nullptr; }
 
+  // --- layout internals -----------------------------------------------------
+  void adoptLayout(std::unique_ptr<Layout> l);
+  // Returns false when application code destroyed this widget during arrange();
+  // the caller must then touch nothing else, `this` included.
+  bool runLayoutIfAny();
+  // localRect() with the layout's margins taken out, in this widget's own
+  // coordinate space -- which is the space its children's geometry lives in.
+  Rect contentRect() const;
+  void markLayoutDirty();
+  void childAppended();
+  void childRemoved(std::size_t index);
+  void latchNaturalSize();
+  void rebaseSubtreeDepth();
+
   Rect geometry_;
   Point contentOffset_;
   Widget* parent_ = nullptr;
   std::vector<std::unique_ptr<Widget>> children_;
+  // Declared after children_ so it is DESTROYED BEFORE THEM.  A layout that
+  // outlived the widgets it indexes would be holding stale positions during the
+  // rest of teardown; this way it is simply gone first.
+  std::unique_ptr<Layout> layout_;
   bool visible_ = true;
   bool enabled_ = true;
   FocusPolicy focusPolicy_ = FocusPolicy::None;
+  // These four live here on purpose: they fit exactly in the padding that
+  // already followed focusPolicy_, so the layout engine's flags cost zero
+  // bytes per widget.  See the size budget assert in Widget.cpp.
+  bool layoutRunning_ = false;   // M1: a pass is inside this host right now
+  bool layoutDirty_ = false;     // something invalidated it since the last pass
+  std::uint16_t depth_ = 0;      // distance from the root; maintained by add<T>
 
   std::string objectName_;
   std::vector<std::string> classes_;
@@ -230,6 +313,10 @@ class Widget : public StyleSubject {
   mutable StyleProps styleCache_;
   mutable StyleState styleCacheState_ = StyleState::None;
   mutable std::uint64_t styleCacheGen_ = 0;
+  // Latched ONCE, from the first non-empty geometry this widget is ever given
+  // (or when it is first taken into a layout, whichever happens first), and
+  // never written again -- see sizeHint().
+  Size naturalSize_;
 
   friend class Window;
 };
