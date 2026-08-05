@@ -7,3 +7,4 @@ out/
 # What a failing golden test drew, written next to the baseline it disagrees
 # with so the two can be opened side by side.  Diagnostic, never committed.
 *.actual.png
+build-asan/
