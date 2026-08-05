@@ -420,6 +420,62 @@ GEEYOOU_TEST(r2_safety, a_scrollarea_narrowed_after_being_wide_scrolls_back_to_n
   CHECK_NEAR(scrollRange(sa, true), 0.0f, kEps);
 }
 
+// ============== O3: who gives the content the bigger rectangle (docs 10.1) ===
+//
+// The last setContentSize on any migrated page has gone: giving a scroll area's
+// content a LAYOUT is the whole opt-in, and relayout() sizes it from its own
+// hint on every resize.  What PageOps used to pass --
+// content()->sizeHint().preferred -- was computed exactly once, at build time,
+// so a form whose rows grew afterwards scrolled to where it used to end.
+GEEYOOU_TEST(r2_safety, a_scrollarea_sizes_laid_out_content_without_being_told) {
+  ScrollArea sa;
+  GridLayout* rows = sa.content()->setLayout<GridLayout>();
+  rows->setSpacing(6.0f);
+  for (int i = 0; i < 20; ++i) {
+    rows->addRow(sa.content()->add<Sized>(80.0f, 18.0f),
+                 sa.content()->add<Sized>(120.0f, 18.0f));
+  }
+
+  // Nobody calls setContentSize anywhere in this case, which is the point.
+  sa.setGeometry({0.0f, 0.0f, 400.0f, 300.0f});
+  // 20 rows of 18 plus 19 gaps of 6 = 474, which does not fit in 300.
+  CHECK_NEAR(sa.contentSize().height, 474.0f, kEps);
+  CHECK(scrollRange(sa, false) > 0.0f);
+  CHECK_NEAR(scrollRange(sa, true), 0.0f, kEps);
+
+  // ...and it FOLLOWS the area rather than being frozen at whatever it was
+  // first told: given more room than the rows need, the content fills the
+  // viewport instead of floating in the middle of it, and there is nothing left
+  // to scroll to.
+  sa.setGeometry({0.0f, 0.0f, 400.0f, 600.0f});
+  CHECK_NEAR(sa.contentSize().height, 600.0f, kEps);
+  CHECK_NEAR(scrollRange(sa, false), 0.0f, kEps);
+}
+
+// The other half, and the one that matters for the five showcase pages that are
+// still absolutely positioned: content with NO layout is not opted in, so its
+// extent is exactly what setContentSize was told and a resize does not touch
+// it.  Those pages cannot be affected by the opt-in above, and this is the
+// assertion that keeps it that way.
+GEEYOOU_TEST(r2_safety, a_scrollarea_leaves_hand_placed_content_exactly_where_it_was_put) {
+  ScrollArea sa;
+  sa.content()->add<Sized>(50.0f, 40.0f);  // added, but content() has no layout
+  sa.setContentSize({900.0f, 700.0f});
+
+  sa.setGeometry({0.0f, 0.0f, 400.0f, 300.0f});
+  CHECK_NEAR(sa.contentSize().width, 900.0f, kEps);
+  CHECK_NEAR(sa.contentSize().height, 700.0f, kEps);
+
+  // Bigger than the content in both directions: an opt-in that leaked would
+  // grow it to the viewport here, and this is where the five pages would
+  // silently change shape.
+  sa.setGeometry({0.0f, 0.0f, 1200.0f, 900.0f});
+  CHECK_NEAR(sa.contentSize().width, 900.0f, kEps);
+  CHECK_NEAR(sa.contentSize().height, 700.0f, kEps);
+  CHECK_NEAR(scrollRange(sa, true), 0.0f, kEps);
+  CHECK_NEAR(scrollRange(sa, false), 0.0f, kEps);
+}
+
 // ================================================ grid track index clamping ===
 GEEYOOU_TEST(r2_safety, a_grid_index_past_what_a_form_can_be_is_clamped_and_counted) {
   geeyoou::detail::resetLayoutDiagnostics();

@@ -299,7 +299,12 @@ GEEYOOU_TEST(box, measure_reports_what_the_host_would_need) {
   box->addWidget(b);
 
   // Margins and spacing are the host's problem, so measure() includes both.
-  const SizeHint h = box->measure(root);
+  //
+  // Through the HOST, not through box->measure(root).  Layout::measure is
+  // protected now: reaching past Widget::sizeHint() also reaches past the latch
+  // that stops a measurement refilling the buffers an arrange is walking, and a
+  // test suite that took the shortcut was documenting the hole as an idiom.
+  const SizeHint h = root.sizeHint();
   CHECK_NEAR(h.preferred.width, 40.0f + 10.0f + 60.0f + 8.0f, kEps);
   CHECK_NEAR(h.preferred.height, 30.0f + 6.0f, kEps);  // the taller child wins
   CHECK_NEAR(h.min.width, 5.0f + 10.0f + 5.0f + 8.0f, kEps);
@@ -307,7 +312,7 @@ GEEYOOU_TEST(box, measure_reports_what_the_host_would_need) {
 
   // And it moves nothing: measure() is a query.
   const Rect before = a->geometry();
-  (void)box->measure(root);
+  (void)root.sizeHint();
   CHECK(a->geometry() == before);
 }
 

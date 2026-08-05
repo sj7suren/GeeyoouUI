@@ -60,6 +60,14 @@ class StackLayout : public Layout {
     invalidate();
   }
 
+  void onChildAppended() override { ++appended; }
+  void onChildRemoved(std::size_t index) override { removedAt.push_back(index); }
+
+ protected:
+  // Protected, matching the base declarations: the two of them share this
+  // object's working state, and the latch that keeps them out of each other's
+  // way is in Layout::measureFor / Layout::arrangeFor.  A toy layout that
+  // published them again would be modelling the hole rather than the protocol.
   SizeHint measure(const Widget& host) const override {
     ++measures;
     float h = 0.0f;
@@ -92,9 +100,6 @@ class StackLayout : public Layout {
     }
     return of;
   }
-
-  void onChildAppended() override { ++appended; }
-  void onChildRemoved(std::size_t index) override { removedAt.push_back(index); }
 
  private:
   float rowHeight_ = 20.0f;
@@ -283,7 +288,10 @@ GEEYOOU_TEST(layout_engine, layout_is_bound_once_and_arranges_the_content_rect) 
   // panel wants to be.)
   CHECK_EQ(lay->measures, 0);
   const Rect snapshot = a->geometry();
-  const SizeHint hint = lay->measure(root);
+  // Through the host: Widget::sizeHint() IS the public way to measure a
+  // container, and Layout::measure is protected precisely so that it is the
+  // only one.
+  const SizeHint hint = root.sizeHint();
   CHECK_EQ(lay->measures, 1);
   CHECK_NEAR(hint.preferred.height, 90.0f, kEps);  // 3 rows of 30, no spacing
   CHECK(a->geometry() == snapshot);
