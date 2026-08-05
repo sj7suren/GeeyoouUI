@@ -905,3 +905,143 @@ GEEYOOU_TEST(removal, grid_layout_survives_a_sibling_removed_mid_arrange) {
   root.setGeometry({0.0f, 0.0f, 100.0f, 40.0f});
   CHECK_NEAR(survivor->geometry().y(), 20.0f, kEps);
 }
+
+// ================================= E14: onDescendantDetached, the mechanism ===
+//
+// A guard is FRAME-scoped.  It buys the frame that is running one safe return
+// and it does not repair object state, so a container that caches a pointer
+// into its own subtree is still holding a dangling member after the guard has
+// done its job -- and the next repaint walks straight into it, with no
+// application call in between.  That is REM3-RES-1, and onDescendantDetached is
+// the mechanism it needs.
+//
+// WHAT IS TESTED HERE IS THE MECHANISM, NOT A CONTAINER.  ScrollArea,
+// AppWindow and Shell all have this defect today and all three of them will get
+// an override of their own; that is a separate task.  A local container is used
+// instead so this case can be green now and stay green then, and so it can pin
+// the two properties the real containers depend on and cannot state themselves:
+//
+//   * the cached pointer is a GRANDCHILD (ScrollArea::content_ is created with
+//     viewport_->add<Widget>(), and AppWindow::fill_ and Shell's page host are
+//     the same shape), so a notification that stopped at the direct parent
+//     would reach the viewport -- which caches nothing -- and never reach the
+//     container that caches everything;
+//   * there is NO Window anywhere in either case below.  The broadcast is not
+//     gated on one: the Window is the observer of focus and hover, this is a
+//     widget repairing itself.
+namespace {
+
+class CachingBox : public Widget {
+ public:
+  CachingBox() {
+    viewport_ = add<Widget>();
+    cached_ = viewport_->add<Widget>();
+    cached_->setGeometry({0.0f, 0.0f, 10.0f, 10.0f});
+  }
+
+  Widget* viewport() const { return viewport_; }
+  Widget* cached() const { return cached_; }
+
+  int notifications = 0;
+  // Whether the last paint dereferenced the cached pointer.  Release and Debug
+  // can only assert on this flag: a freed Rect still reads as perfectly
+  // plausible floats, which is exactly why this family is invisible outside the
+  // ASan leg.
+  bool touchedCache = false;
+  // ...and what it read.  This member is here for ONE reason, found by running
+  // the red state: `(void)cached_->geometry();` on its own is a load with no
+  // consumer, the optimiser deletes it outright, and a load that was deleted is
+  // a use-after-free AddressSanitizer never sees.  With only the discard, the
+  // hookless build failed the flag assertions below and produced ZERO ASan
+  // reports.  Storing the value into an observable member is what makes the
+  // read survive to the sanitiser.
+  float lastCachedWidth = 0.0f;
+
+ protected:
+  void onDescendantDetached(Widget* node) override {
+    ++notifications;
+    // REM3-G9, in full: null a member pointer, do nothing else.  No update(),
+    // no signal, no removal -- the walk that called this is halfway through a
+    // half-detached tree.
+    if (node == cached_) cached_ = nullptr;
+    if (node == viewport_) viewport_ = nullptr;
+  }
+
+  void onPaint(Painter&, const Rect&) override {
+    if (!cached_) return;
+    touchedCache = true;
+    // The use-after-free, when the hook is missing.  See lastCachedWidth above
+    // for why the value is kept rather than discarded.
+    lastCachedWidth = cached_->geometry().width();
+  }
+
+ private:
+  Widget* viewport_ = nullptr;
+  Widget* cached_ = nullptr;
+};
+
+}  // namespace
+
+GEEYOOU_TEST(removal, a_cached_grandchild_is_cleared_before_the_next_paint) {
+  Widget root;
+  root.setGeometry({0.0f, 0.0f, 200.0f, 200.0f});
+  CachingBox* box = root.add<CachingBox>();
+  box->setGeometry({0.0f, 0.0f, 100.0f, 100.0f});
+
+  Widget* viewport = box->viewport();
+  Widget* cached = box->cached();
+  REQUIRE(viewport != nullptr);
+  REQUIRE(cached != nullptr);
+  REQUIRE(viewport->parent() == box);
+  REQUIRE(cached->parent() == viewport);  // two levels down, not one
+  viewport->setGeometry({0.0f, 0.0f, 100.0f, 100.0f});
+
+  OffscreenImage img(200, 200);
+  REQUIRE(img.valid());
+  const Rect whole(0.0f, 0.0f, 200.0f, 200.0f);
+  auto paintOnce = [&img, &whole](Widget& w) {
+    Canvas canvas;
+    if (!canvas.begin(img.surface(), whole)) return false;
+    Painter p = canvas.painter();
+    w.paintTree(p, whole, whole);
+    canvas.end();
+    return true;
+  };
+
+  // Healthy path first, so the assertion below cannot pass because the paint
+  // never happened.
+  REQUIRE(paintOnce(root));
+  CHECK(box->touchedCache);
+  CHECK_NEAR(box->lastCachedWidth, 10.0f, kEps);
+
+  box->touchedCache = false;
+  viewport->removeChild(cached);
+  CHECK_EQ(box->notifications, 1);
+  CHECK_EQ(box->cached(), static_cast<Widget*>(nullptr));
+
+  // THE LINE THAT GOES RED WITHOUT THE HOOK.  Take the broadcast out of
+  // announceDetached -- or narrow it to node->parent(), which here is the
+  // viewport -- and cached_ is still the freed pointer at this point, this
+  // paint dereferences it, and the ASan leg reports a heap-use-after-free in
+  // CachingBox::onPaint.  Release and Debug pass either way.
+  REQUIRE(paintOnce(root));
+  CHECK(!box->touchedCache);
+}
+
+GEEYOOU_TEST(removal, every_node_of_a_departing_subtree_announces_itself) {
+  Widget root;
+  CachingBox* box = root.add<CachingBox>();
+  Widget* viewport = box->viewport();
+  REQUIRE(viewport != nullptr);
+  REQUIRE(box->cached() != nullptr);
+
+  // Nothing here ever names the grandchild.  It leaves because its parent
+  // does, and the announcement has to find it anyway -- the walk is per NODE of
+  // the departing subtree, which is the same property Window::widgetDetached
+  // has always needed and the reason that walk exists at all.
+  box->removeChild(viewport);
+
+  CHECK_EQ(box->notifications, 2);  // the viewport, then the grandchild
+  CHECK_EQ(box->viewport(), static_cast<Widget*>(nullptr));
+  CHECK_EQ(box->cached(), static_cast<Widget*>(nullptr));
+}
