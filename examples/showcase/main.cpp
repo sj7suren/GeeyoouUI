@@ -82,6 +82,8 @@ int main() {
                  [&app](Widget* c) { return buildHmiPage(c, app); });
   shell->addPage("", "运维控制台", "报警列表 / 滚动表单 / 采集队列", Icon::Warning,
                  [&app](Widget* c) { return buildOpsPage(c, app); });
+  shell->addPage("", "布局引擎", "拖窗口边缘看 stretch / min-max / 跨列的实时反应",
+                 Icon::Copy, [](Widget* c) { return buildLayoutPage(c); });
   shell->addPage("控件族", "基础控件", "按钮 / 开关 / 单选 / 滑块 / 数值设定",
                  Icon::Check, [](Widget* c) { return buildWidgetsPage(c); });
   shell->addPage("", "输入与按钮", "文本输入族与按钮变体、图标按钮", Icon::Edit,

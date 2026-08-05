@@ -7,6 +7,7 @@ add_executable(showcase
   PageTheme.cpp
   PageOverview.cpp
   PageHmi.cpp
+  PageLayout.cpp
   PageWidgets.cpp
   PageInputs.cpp
   PageSelects.cpp
