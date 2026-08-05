@@ -100,9 +100,13 @@ Size buildOpsPage(Widget* content, AppState& app) {
   form->addWidget(scroll, 1);
 
   // The rows inside the scroll area are laid out too -- a grid, one row per
-  // parameter.  Its extent is the one place on this page that still has to be
-  // handed to somebody, because ScrollArea sizes its content by hand and R2
-  // does not touch the four containers.  It is COMPUTED, not typed in.
+  // parameter.  Its extent is NOT handed to anybody: giving the content a
+  // layout is the whole opt-in, and ScrollArea::relayout then sizes it from its
+  // own sizeHint() on every resize.  This is the last setContentSize on any
+  // migrated page (O3), and the reason it could go is that the number it passed
+  // -- content()->sizeHint().preferred -- was computed exactly once, at build
+  // time, and never again: a form whose rows grew later scrolled to where it
+  // used to end.
   auto* rows = scroll->content()->setLayout<GridLayout>();
   rows->setSpacing(kItemGap);
   rows->setMargins({8.0f, 8.0f, 8.0f, 8.0f});
@@ -121,7 +125,6 @@ Size buildOpsPage(Widget* content, AppState& app) {
     sp->setDecimals(1);
     rows->addRow(lbl, sp);
   }
-  scroll->setContentSize(scroll->content()->sizeHint().preferred);
 
   // ---------------- 报警列表 ----------------
   auto* gAlarm = content->add<GroupBox>();
