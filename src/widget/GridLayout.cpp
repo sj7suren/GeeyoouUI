@@ -13,15 +13,27 @@ namespace {
 // Same tolerance, and the same reasoning, as BoxLayout's.
 constexpr float kFit = 0.01f;
 
-std::uint16_t toIndex(int v) {
-  if (v < 0) return 0;
-  if (v > 0xFFFE) return 0xFFFE;
-  return std::uint16_t(v);
+}  // namespace
+
+// Clamped rather than rejected, and recorded rather than fatal: ADR-R2-04.  A
+// screen that has been up for six weeks must not die because one call site
+// computed a row number from a data field that arrived empty -- but a grid
+// silently 131068 tracks wide is not an answer either, so the clamp is at a
+// number a real form can reach and the counter says it happened.
+// Recorded rather than asserted, deliberately: an assert would make this the
+// one diagnostic in the layout engine that behaves differently in the two
+// configurations the gate runs, and the counter is the thing a test -- and an
+// operator reading layoutDiagnostics() after a six-week run -- can actually
+// look at.
+std::uint16_t GridLayout::toIndex(int v) {
+  if (v >= 0 && v <= kMaxTrack) return std::uint16_t(v);
+  detail::layoutIndexClamped();
+  return v < 0 ? std::uint16_t(0) : std::uint16_t(kMaxTrack);
 }
 
-std::uint16_t toSpan(int v) { return v < 1 ? std::uint16_t(1) : toIndex(v); }
-
-}  // namespace
+std::uint16_t GridLayout::toSpan(int v) {
+  return v < 1 ? std::uint16_t(1) : toIndex(v);
+}
 
 // ------------------------------------------------------------------ cells ---
 void GridLayout::addWidget(Widget* child, int row, int col, int rowSpan,
@@ -132,16 +144,19 @@ void GridLayout::measureAxis(const Widget& host, Axis axis) const {
   // buffer, and the cell index in the comparison already makes the order total.
   spanOrder_.clear();
   spanOrder_.resize(cells_.size(), 0);
-  for (std::size_t i = 0; i < cells_.size(); ++i) spanOrder_[i] = std::uint16_t(i);
+  for (std::size_t i = 0; i < cells_.size(); ++i) spanOrder_[i] = std::uint32_t(i);
   std::sort(spanOrder_.begin(), spanOrder_.end(),
-            [this, cols](std::uint16_t a, std::uint16_t b) {
+            [this, cols](std::uint32_t a, std::uint32_t b) {
               const std::uint16_t sa = cols ? cells_[a].colSpan : cells_[a].rowSpan;
               const std::uint16_t sb = cols ? cells_[b].colSpan : cells_[b].rowSpan;
               return sa != sb ? sa < sb : a < b;
             });
 
-  for (const std::uint16_t idx : spanOrder_) {
-    const Cell& c = cells_[idx];
+  for (const std::uint32_t idx : spanOrder_) {
+    // sizeHint() below is an application override, and one that removes a cell
+    // leaves this order longer than the list it indexes.
+    if (idx >= cells_.size()) continue;
+    const Cell c = cells_[idx];  // by value, for the same reason
     const Widget* w = cellWidget(host, c);
     if (!w) continue;
 
@@ -341,27 +356,31 @@ LayoutOverflow GridLayout::arrange(Widget& host, const Rect& content) {
   of.heightShort = solveAxis(Axis::Rows, content.height());
   // colMin_ / rowMin_ now hold the SOLVED track sizes.
 
-  // The preferred vectors have done their job, so they become the running
-  // offset of each track.  Reusing them is what keeps this class down to the
-  // four float buffers it declares -- a fifth and a sixth would be carried by
-  // every grid in the process for the length of one function.
+  // Their own buffers, not a second life for colPref_/rowPref_: see the header.
+  colOff_.clear();
+  colOff_.resize(colMin_.size(), 0.0f);
+  rowOff_.clear();
+  rowOff_.resize(rowMin_.size(), 0.0f);
   float x = 0.0f;
   for (std::size_t i = 0; i < colMin_.size(); ++i) {
-    colPref_[i] = x;
+    colOff_[i] = x;
     x += colMin_[i] + spacing();
   }
   float y = 0.0f;
   for (std::size_t i = 0; i < rowMin_.size(); ++i) {
-    rowPref_[i] = y;
+    rowOff_[i] = y;
     y += rowMin_[i] + spacing();
   }
 
-  // cells_.size() is re-read every step: setGeometry runs application code, and
-  // a handler that removes a child shortens this list through onChildRemoved.
-  // The track vectors are untouched by that, so the arithmetic below stays in
-  // range; whatever shifted down is one pass out of date, and the dirty flag
-  // that same removal raised has already scheduled the re-run that fixes it.
-  for (std::size_t i = 0; i < cells_.size(); ++i) {
+  // TWO bounds, the same pair and for the same reasons as BoxLayout::arrange:
+  // setGeometry runs application code, a handler that removes a child shortens
+  // this list through onChildRemoved, and one that adds a widget and calls
+  // addWidget lengthens it past what the track vectors above were solved for.
+  // `n` is the shape this pass measured; cells_.size() is what the list holds
+  // right now.  Cells that arrived since are placed by the re-run their own
+  // addWidget scheduled, not by guesswork off half-solved tracks.
+  const std::size_t n = cells_.size();
+  for (std::size_t i = 0; i < n && i < cells_.size(); ++i) {
     const Cell c = cells_[i];
     Widget* w = cellWidget(host, c);
     if (!w) continue;
@@ -373,14 +392,18 @@ LayoutOverflow GridLayout::arrange(Widget& host, const Rect& content) {
     float ch = float(c.rowSpan - 1) * spacing();
     for (std::size_t k = 0; k < c.rowSpan; ++k) ch += rowMin_[c.row + k];
 
-    const float cx = colPref_[c.col];
-    const float cy = rowPref_[c.row];
+    const float cx = colOff_[c.col];
+    const float cy = rowOff_[c.row];
     if (cx + cw > content.width() + kFit || cy + ch > content.height() + kFit) {
       ++of.clippedCount;
     }
     // The cell is filled, not aligned inside: R2 has no per-cell alignment API,
     // and inventing one here would be a rule nobody could see from the call site.
     w->setGeometry({content.x() + cx, content.y() + cy, cw, ch});
+    // Application code just ran and may have destroyed the host or replaced
+    // this layout on it.  `host`, cells_ and every track vector above belong to
+    // that widget; nothing below may be read once this goes false.
+    if (!hostAlive()) return {};
   }
   return of;
 }

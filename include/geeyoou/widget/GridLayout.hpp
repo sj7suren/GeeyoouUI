@@ -77,6 +77,11 @@ class GridLayout final : public Layout {
 
   enum class Axis { Columns, Rows };
 
+  // Clamps a caller's row/column number, and a span, into what this class can
+  // address.  Static because they answer for the type, not for a grid.
+  static std::uint16_t toIndex(int v);
+  static std::uint16_t toSpan(int v);
+
   Widget* cellWidget(const Widget& host, const Cell& c) const;
 
   // How many tracks one axis has: the furthest any cell reaches, or the
@@ -104,16 +109,38 @@ class GridLayout final : public Layout {
     return axis == Axis::Columns ? colStretch_ : rowStretch_;
   }
 
+  // The largest row or column index this class accepts.  A grid here is a
+  // parameter form or a mimic panel, not a spreadsheet, and every track costs a
+  // float in six vectors on every pass -- so a typo'd setColumnStretch(100000)
+  // used to make each pass resize them all to 131068 entries.  Anything past
+  // this is clamped, asserted in Debug and counted in
+  // detail::layoutDiagnostics().indexClamped.
+  static constexpr int kMaxTrack = 4096;
+
   std::vector<Cell> cells_;
   // Per-track working set.  Cleared and refilled every pass, never shrunk --
   // the never-shrunk idiom from DataHub::scratch_ -- so a grid whose shape is
   // stable allocates once and then never again.  colMin_/rowMin_ carry the
   // running minimum on the way in and the SOLVED size on the way out.
   mutable std::vector<float> colMin_, colPref_, rowMin_, rowPref_;
+  // The running origin of each track, filled by arrange().
+  //
+  // This used to be a second life for colPref_/rowPref_, on the grounds that
+  // the preferred sizes had done their job by then and a fifth and sixth buffer
+  // would be carried by every grid in the process for the length of one
+  // function.  That was a bad trade: it aliased two meanings onto one buffer,
+  // so any measure() that landed between the two -- and asking a container for
+  // its size hint from inside a geometry change is ordinary application code --
+  // turned every offset back into a preferred size, and every cell after that
+  // point landed on top of the first.  Silently: no dirty flag is raised, so
+  // the wrong geometry is the final picture.  Two vectors, 48 bytes per grid.
+  mutable std::vector<float> colOff_, rowOff_;
   mutable std::vector<std::uint16_t> colStretch_, rowStretch_;
   // Cell indices sorted by span, ascending: the batch order ADR-R2-09 requires.
-  // Rebuilt for each axis in turn, out of the same buffer.
-  mutable std::vector<std::uint16_t> spanOrder_;
+  // Rebuilt for each axis in turn, out of the same buffer.  32 bits, not 16: a
+  // grid may legally hold more than 65535 cells, and an index that wrapped
+  // would measure some of them twice and others never.
+  mutable std::vector<std::uint32_t> spanOrder_;
 };
 
 }  // namespace geeyoou
