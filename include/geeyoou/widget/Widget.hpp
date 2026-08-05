@@ -106,6 +106,13 @@ class Widget : public StyleSubject {
   // object that owns the signal it is running inside: that is contract D7 (see
   // core/Signal.hpp), and nothing here can make destroying a Signal mid-emit
   // safe.
+  //
+  // That licence extends to THIS widget: a handler the announcement runs may
+  // destroy the parent whose takeChild is in flight.  The call then returns
+  // nullptr and touches nothing -- neither this widget nor `child`, which was
+  // owned by it and went with it.  Nothing is logged, asserted or thrown; it is
+  // the ADR-R2-04 answer, and it is the same nullptr the call already returns
+  // when a handler got to `child` first.
   std::unique_ptr<Widget> takeChild(Widget* child);
 
   // takeChild() and let the result die: `child` and its subtree are destroyed.
@@ -113,6 +120,10 @@ class Widget : public StyleSubject {
 
   // Removes every child, last one first -- reverse order of construction, the
   // same order the compiler would have used.
+  //
+  // Same licence and the same degradation as takeChild: a handler that destroys
+  // this widget mid-drain ends the loop where it stands.  The children it had
+  // not reached yet are destroyed anyway -- by ~Widget, which owns them.
   void clearChildren();
 
   // --- geometry (logical pixels, relative to the parent) -------------------
