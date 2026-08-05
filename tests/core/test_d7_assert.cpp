@@ -3,21 +3,33 @@
 // the process to die.
 //
 // D7 (core/Signal.hpp): a slot may destroy anything EXCEPT the object that owns
-// the signal it is running inside.  The enforcement is an assert() in ~Signal,
-// which means it exists ONLY in a build that defines no NDEBUG -- and until
-// build-debug.bat landed, this project had no such build, so the contract had
-// never once been executed.  A rule nothing runs is a comment.
+// the signal it is running inside.  Two mechanisms enforce it, and they are not
+// the same strength:
 //
-// A violation cannot be caught in-process: the whole point is that the stack
+//   * an assert() in ~Signal, which exists only where NDEBUG is not defined.
+//     Until build-debug.bat landed this project had no such build, so the
+//     contract had never once been executed.  A rule nothing runs is a comment.
+//   * a DEGRADED guarantee that is compiled into every build, Release included:
+//     ~Signal clears the control block's `alive` flag and emit() re-reads it
+//     once per slot, so the emission stops at the violation instead of walking
+//     a freed slot list.
+//
+// The Debug half cannot be caught in-process: the whole point is that the stack
 // below the assert is already invalid.  So the case re-runs THIS EXECUTABLE as
 // a child with GEEYOOU_D7_SUICIDE=1, the child breaks the contract on purpose,
 // and the parent reads the outcome back:
 //
 //   Debug   -- the child must die on the assert, and say why on stderr.
-//   Release -- the assert is compiled out, so the child must reach the end of
-//              the violation and exit with a code of its own.  That is not a
-//              pass for the contract; it is this suite stating in writing that
-//              Release does not enforce it.
+//   Release -- the assert is gone, so the child must survive the violation and
+//              exit with the code that means "the emission stopped where it was
+//              supposed to".  That is not a pass for the contract -- violating
+//              it is still a bug in the caller -- but it IS the assertion that
+//              Release fails predictably rather than corrupting the heap, which
+//              is what an unattended upper computer needs from it.
+//
+// The in-process companion, which states the same outcome as an ordinary
+// assertion in the Release suite, is
+// signal.destroying_the_owner_from_a_slot_stops_the_emission.
 //
 #include <cstdio>
 #include <cstdlib>
@@ -36,9 +48,15 @@ namespace {
 
 constexpr const char* kChildEnv = "GEEYOOU_D7_SUICIDE";
 
-// Exit code the child uses for "I violated D7 and nothing stopped me".  Far
-// from anything runAll() can return (a capped failure count, or 125).
-constexpr int kNotCaught = 42;
+// Exit codes the child uses, both far from anything runAll() can return (a
+// capped failure count, or 125).
+//
+// kDegraded is the CONTRACTED Release outcome: the assert was compiled out, the
+// violation happened, and the emission stopped at it.  kRanOn is the old
+// use-after-free behaviour -- emit() kept dispatching out of a slot list that
+// ~Signal had already destroyed -- and is a hard failure, not a warning.
+constexpr int kDegraded = 42;
+constexpr int kRanOn = 43;
 
 bool envFlagOn(const char* name) {
 #ifdef _MSC_VER
@@ -69,17 +87,25 @@ struct Owner {
   Signal<> sig;
 };
 
-void violateD7() {
+// Three slots with the killer FIRST: the two behind it are what tells "the
+// emission stopped" apart from "the emission carried on through freed memory",
+// which from the outside would otherwise both look like a clean exit.
+int violateD7() {
   Owner* owner = new Owner();
+  int behind = 0;
   // The slot destroys the object that owns the signal it is running inside --
   // which unwinds ~Signal into a list emit() is still walking.
   owner->sig.connect([owner] { delete owner; });
+  owner->sig.connect([&behind] { ++behind; });
+  owner->sig.connect([&behind] { ++behind; });
   owner->sig.emit();
+  return behind == 0 ? kDegraded : kRanOn;
 }
 
 }  // namespace
 
-GEEYOOU_TEST(d7, destroying_the_signal_owner_from_a_slot_is_caught_in_debug) {
+GEEYOOU_TEST(d7,
+             destroying_the_signal_owner_is_caught_in_debug_contained_in_release) {
   if (envFlagOn(kChildEnv)) {
     // --- child ---
 #if defined(_MSC_VER)
@@ -96,10 +122,11 @@ GEEYOOU_TEST(d7, destroying_the_signal_owner_from_a_slot_is_caught_in_debug) {
     _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
 #endif
     std::fflush(stdout);
-    violateD7();
-    // Only reachable where the assert was compiled out.
+    const int outcome = violateD7();
+    // Only reachable where the assert was compiled out -- and, since the
+    // degraded guarantee landed, reachable in one piece rather than by luck.
     std::fflush(nullptr);
-    std::exit(kNotCaught);
+    std::exit(outcome);
   }
 
   // --- parent ---
@@ -139,17 +166,28 @@ GEEYOOU_TEST(d7, destroying_the_signal_owner_from_a_slot_is_caught_in_debug) {
   std::remove(log.c_str());
 
 #ifdef NDEBUG
-  // Release: the contract is documented but unenforced.  Asserting that out
-  // loud is the point -- it is why build-debug.bat exists.
-  CHECK_EQ(rc, kNotCaught);
+  // Release: the assert is gone, so what is under test is the degraded
+  // guarantee.  The child must have SURVIVED the violation (a crash, or the
+  // WER exit codes a heap corruption produces, is neither of the two codes
+  // below) and must have stopped the emission (kRanOn, not kDegraded, is what
+  // deleting the `alive` check would produce here).
+  if (rc == kRanOn) {
+    GEEYOOU_FAIL(
+        "D7 违约后 emit 继续分发了后续槽——降级保护失效，这正是 UAF 窗口");
+  } else {
+    CHECK_EQ(rc, kDegraded);
+  }
   geeyoou::test::note(
-      "[note] d7：Release 构建里 assert 被编译掉，D7 违约不会被拦截"
-      "（用 build-debug.bat 跑 Debug 才会触发）");
+      "[note] d7：Release 构建里 assert 被编译掉，D7 违约不会被“拦截”，"
+      "但会被降级为确定性行为——发射就地停止，违约槽之后的槽不再触发"
+      "（子进程退出码 42 即此）。要在违约现场当场中止，仍须用 "
+      "build-debug.bat 跑 Debug。");
 #else
   // Debug: the child must have died, and died ON THE CONTRACT rather than on
   // some unrelated crash further down.
   CHECK_NE(rc, 0);
-  CHECK_NE(rc, kNotCaught);
+  CHECK_NE(rc, kDegraded);
+  CHECK_NE(rc, kRanOn);
   const bool named = text.find("Signal destroyed from inside its own emit") !=
                      std::string::npos;
   if (!named) {
