@@ -402,3 +402,344 @@ void ScrollArea::relayout() {
 4. ~~**`Widget::relayout()` 与三个容器的 `relayout()` 同名**~~ —— **已解决**：基类那个方法改名为 `Widget::performLayout()`。理由写在 `Widget.hpp` 上：`AppWindow` / `ScrollArea` / `Shell` 各自已有 `relayout()`，其中 `ScrollArea::relayout()` 还是 `private`，因此同名的基类成员会被三个容器静态隐藏、被第四个挡在访问权限外；给唯一一个没有调用点的方法改名，比改一个已发布的 API 便宜。
 5. **多线程**：与全库一致，布局引擎只在 UI 线程使用。`g_layouts` / `g_layoutDepth` / `g_layoutHosts` / `g_arrangeHost` 都是普通 `static`，非 `thread_local`——与 `g_bubbles` 同一条理由（`docs/architecture.md` §3.11）。
 6. **`ScrollArea` / `ListView` 的 hint 是常数**（320×200 / 六行）。这是刻意的（见 §7），但那两个常数本身没有出处，只是"够用"。将来如果需要"最多长到内容那么大"，得先想清楚循环怎么断。
+
+---
+
+## 11. 【R3 草稿 · E1】`sizeHint()` **调用者**守卫 —— 设计定案
+
+> 状态：**草稿，待 `eng-frontend-ui` 书面评审。放行前 E2 不得开工。**
+> 本节只定形状与语义，不含实现。实现是 E2，落点是 E3，枚举表是 E5，用例是 E6。
+
+### 11.0 缺陷复述：契约写错了主语
+
+R2 第 2 轮把契约写在 `Layout.hpp:168-174`：「**实现 `Layout` 的类**在每次重入应用代码后检查 `hostAlive()`」。24 扇门里 16 扇因此合格。漏掉的两扇不在 `Layout` 子类里，而在 **`Widget` 子类**里——它们是 `sizeHint()` 的**调用者**，不是 `Layout` 的实现者，契约的主语根本没覆盖到它们：
+
+| 现场 | 门 | 门后干了什么 |
+|---|---|---|
+| `GroupBox.cpp:53` | `Widget::sizeHint()` → `layout_->measureFor` → 子项 `sizeHint()` override → 应用代码 | `:54` 读 `layout_`、`:62` 读 `title_`、`:65` 在已释放对象上做虚调用 `style(styleState())` |
+| `ScrollArea.cpp:158` | `content_->sizeHint()` → 同上 | `:159` 读 `geometry_`、`:164`/`:165` **向已释放的 viewport / content 写入 16 字节 `Rect`** |
+
+`Widget.cpp:406-410` 的 `GeometryGuard` 保的是 **`setGeometry` 自己那一帧**；上面这两帧在它**下面**（`relayout()` 由 `onGeometryChanged` 调起），不查任何游标。**守卫加在了调用者身上，真正跨越信任边界的却是被调用的那一帧。**
+
+**为什么不能用"门前预读"了事**（`Widget.cpp:58-60` 记过这条的局限）：预读只治**读**。`ScrollArea:164/165` 是**写**——把 16 字节写进已释放的 viewport。预读一个字都救不了。这是 `ScrollArea` 必须上游标、而不是"改成先算后用"的硬理由。
+
+**为什么不能改成"测量期间禁止改树"**：那等于在 `sizeHint()` 期间作废 D7（`core/Signal.hpp`：槽可以销毁别的对象），且没有 `abort` 就无法执行——而 ADR-R2-04 明令**记录而非致命**。方向反了。
+
+**本轮唯一可接受的形状**（eng-lead 拍板）：**一处设施 + N 处调用 + 一张枚举表 + 一条能变红的用例**。设施**复刻 `Widget.cpp:73-113` 的 `LiveGuard`**，不另起炉灶——理由就是 `Widget.cpp:70-72` 自己写过的那句：*a second hand-rolled copy of this pattern is a second place to forget a check*。
+
+---
+
+### 11.1 六问定案
+
+#### Q1 —— 第四条 `LiveCursor` 链表 vs 开放现有 `GeometryGuard`
+
+**选：第四条链表 `g_hints`。**
+
+| 方案 | 判决 |
+|---|---|
+| **A. 新链表 `g_hints` + `HintGuard`** | **采用** |
+| B. 把 `g_geometries` / `GeometryGuard` 提到头文件里给子类复用 | 否决 |
+| C. 给 `LiveCursor` 加一个 kind 字段，`cancelOn` 按 kind 过滤 | 否决 |
+
+**为什么不是 B（决定性）**：`announceDetached:247-248` **取消** `g_geometries`。而按 Q4 的结论，hint 帧在**仅 detach** 时**必须不取消**。共用一条链表 = 一条链表被迫执行两套取消策略，而 `cancelOn` 是按链表整条走的，做不到分策略。**两种取消策略 ⇒ 两条链表，这不是偏好问题。**
+
+**为什么不是 B（第二条）**：`ScrollArea::relayout:164` 调 `viewport_->setGeometry`，那一帧自己会往 `g_geometries` 压一个**真正的** `GeometryGuard`。共用后同一条链表上交织着两种语义，任何将来对这条链表的谓词（"现在有没有一个 `setGeometry` 站在 X 上？"）都会静默答错——这正是 `detail::layoutPassActive()` 在合并链表上会犯的错。
+
+**为什么不是 B（第三条）**：B 号称省下的是"一个全局变量"。但 B 同样要把 `g_geometries` 从 `Widget.cpp` 的匿名 namespace 搬进公共头文件，头文件暴露面**一模一样**，真正省下的只有 **8 字节 BSS**。
+
+**为什么不是 C**：给一个在三条热路径上被构造的 `struct` 加字段，并在 `cancelOn` 的每个节点上加一次分支，换 8 字节 BSS。方向反了。
+
+**新链表的真实成本**：`LiveCursor* g_hints` 一个指针（8 字节 BSS）+ `~Widget` 里一行 `cancelOn`。守卫对象本身的大小、压栈/弹栈指令数与复用方案**逐条相同**——即 B 在**每帧**开销上并不比 A 便宜哪怕一条指令。
+
+**命名**：链表 `g_hints`、守卫 `HintGuard`，与既有 `g_bubbles/BubbleGuard`、`g_geometries/GeometryGuard`、`g_layouts/LayoutGuard` 同构。
+**刻意不叫 `g_measures`/`MeasureGuard`**：`Layout.cpp:46` 已经有一个 `g_measureDepth`（数的是 `Layout::measureFor` 帧），两者是近义词而不是同一件事，同名会让下一个人把它们读成一对。
+**刻意按"门"命名而不是按"调用者"命名**：调用者不止一个（`sizeHint()` 与 `relayout()`），而 R2 这次翻车的根因恰恰是**给了错误的主语**——用门命名是把教训写进名字。
+
+#### Q2 —— `LiveCursor` 要不要提升到 `detail::` 并进 `Widget.hpp`
+
+**要。** 提升三样进 `Widget.hpp` 尾部的 `namespace detail`：`LiveCursor`、`LiveGuard<>` 模板、`extern LiveCursor* g_hints`。
+
+**必须提升的机械理由**：守卫是**纯栈对象**（Q6），栈对象的完整类型必须在使用点可见；而使用点在 `GroupBox.cpp` / `ScrollArea.cpp`，不在 `Widget.cpp`。
+
+**`g_bubbles` / `g_geometries` / `g_layouts` 三条链表继续留在 `Widget.cpp` 的匿名 namespace**——`LiveGuard` 是以「变量引用」为模板参数的模板，C++11 起允许内部链接实体作模板实参，所以模板搬到头文件不强迫任何一条既有链表跟着搬。只有 `g_hints` 需要外部链接。**四条链表里三条仍然是私有的**，暴露面增量 = 一个类型 + 一个模板 + 一个指针。
+
+**可见性等级：`detail::`，不是 `protected`。**
+
+| 方案 | 判决 |
+|---|---|
+| **`geeyoou::detail::HintGuard`** | **采用** |
+| `protected: class Widget::HintGuard`（嵌套类） | 否决 |
+| `friend class GroupBox; friend class ScrollArea;` + `Widget` 私有 helper | 否决 |
+
+* **为什么不是 `friend`**：验收标准明令「不需要任何 `friend` 声明」，且 friend 是 O(N) 增长——每多一个需要守卫的控件就要回头改一次 `Widget.hpp`，而 R3 之后必然还会有第三个、第四个调用点（见 11.4 表）。
+* **为什么不是 `protected` 嵌套类（这是唯一有分量的对手）**：
+  1. **可测性决定**。E5/E6 要断言"链表退栈后回到空"，需要读 `g_hints` 的深度。`protected` 嵌套意味着诊断口只能通过继承或 `friend` 拿到；`detail::` 里放一个 `hintCursorDepth()` 与既有 `detail::parkedLayoutCount()`、`detail::layoutDiagnostics()` 完全同构。**不可测的设计就是坏设计**，`Widget::depth()` 当初就是为这条加的。
+  2. **`protected` 买不到它看起来买到的封装**。库外的应用控件全都 `: public Widget`，`protected` 对它们一样可见。两个方案在"应用代码能不能拿到"这件事上**结果相同**，而 `detail::` 不要求应用先继承。
+  3. **一致性**。`detail::g_layoutHosts` 已经是 `Layout.hpp` 里的 `extern` 变量，`detail::parkLayout` / `layoutDiagnostics` 同理。本仓库对"引擎内部件放公共头文件"已经有既定写法；换一种写法就是多一份要学的约定。
+  4. `protected` 嵌套还会让 `BubbleGuard` 等三个别名变成 `Widget::LiveGuard<g_bubbles>`——把一个 `Widget` 的调用方永远不会用到的模板塞进每个读头文件的人的视野里。
+
+**库外应用代码能不能拿到？** 技术上能——`geeyoou::detail::` 没有访问控制，和今天的 `detail::g_layoutHosts` 一模一样。这是**有意的、且被上面第 2 条论证过是免费的**：`protected` 同样拦不住任何一个应用控件。约定层面 `detail::` 就是"不对外承诺"的标记，`docs/architecture.md` 已有这条。
+
+#### Q3 —— const 正确性
+
+`GroupBox::sizeHint() const` 里 `this` 是 `const GroupBox*`，而 `LiveCursor::node` 是 `Widget*`（`g_bubbles` 的 `moveTo()`/`node()` 需要非常量）。
+
+| 方案 | 判决 |
+|---|---|
+| a. 把 `LiveCursor::node` 改成 `const Widget*` | 否决 |
+| b. 按 constness 模板化 / 另开一套 const 游标 | 否决 |
+| **c. `HintGuard` 构造函数内 `const_cast`，游标只比较不解引用** | **采用** |
+
+* **为什么不是 a**：`dispatchMouse/dispatchKey` 要 `w->onMouse(local)`（非常量）、`bubble.moveTo(w->parent_)`。改成 `const Widget*` 就把 `const_cast` 推进**全库重入压力最大的那条路径**，还得推进两处。用一个 const 换两个 const_cast，且换到了更危险的地方。
+* **为什么不是 b**：`cancelOn` 就得走两种节点类型，`~Widget` 里就得有八行而不是四行。**这正是 Kenji 禁掉的"第二份手抄"。**
+* **c 为什么安全**，三条，逐条可独立验证：
+  1. **游标存的是身份，不是访问路径。** 全库对游标 `node` 的操作只有三种：`cancelOn` 里的 `c->node == doomed` 比较、`c->node = nullptr` 写空、`alive()` 里的 `!= nullptr`。**没有任何地方解引用它。** 这不是新规矩——`Widget.cpp:216-218` 的 `stillAChild()` 已经写着 *"Only pointer VALUES are compared -- `w` is never dereferenced"*，本设施沿用同一条既有规则。
+  2. **`const_cast` 只有在通过它去修改一个真正 const 的对象时才是 UB。** 被测量的 widget 从来不是 const 对象——它躺在父节点 `children_` 的 `unique_ptr<Widget>` 里，`const` 只是当前这条访问路径的属性。何况我们连写都没写。
+  3. **把"不解引用"从评审规则变成编译期规则。** `HintGuard` **私有继承** `LiveGuard<g_hints>` 并只 `using` 出 `alive()`——**不导出 `node()`，不导出 `moveTo()`**。于是"没人能从 hint 游标里拿到指针"是类型层面的事实，而不是靠 code review 记住。私有继承不是"另起炉灶"：零新逻辑、零新成员、对象布局逐位相同，它就是那个 `LiveGuard`。
+  4. `const_cast` 因此**全库只出现一次**，就在它的理由注释旁边；三个既有守卫的 `LiveGuard(Widget*)` 签名**一字不改**（不放宽成 `const Widget*`，避免 `BubbleGuard` 被误接一个常量指针）。
+
+#### Q4 —— `~Widget:292-296` 加不加第四行？`announceDetached:247-248` 加不加？
+
+**`~Widget`：加。`announceDetached`：不加。** 两个答案分别独立论证，**不引用 `g_layouts` 在 `announceDetached` 里的那段理由**（那段理由讲的是 `layoutRunning_` 会被卡死，本设施没有任何标志位，那条论证够不着这里）。
+
+**`~Widget` 为什么加**：`~Widget` 是"每一次真实离场唯一都会经过的门"（`Widget.cpp:250-252` 已确立），而游标记的就是一个**指针**，指针恰恰在这里失效。子孙不需要遍历：`children_` 在函数体之后才析构，每个子孙都会自己走到这里取消自己的游标——**这一条正是 Q5 的三游标方案能免掉任何树遍历的前提。** 落位：与既有三行**并排放在一起**，在 `layout_` 停车块**之前**。停车块读的是 `layoutRunning_` / `buffersBusy_`，不读游标链表，所以先后对正确性无影响；并排放是因为"一处设施 + 四条链表"必须在视觉上是**一件事**，散开就是下一次漏检的种子。
+
+**`announceDetached` 为什么不加**，正面规则 + 反证：
+
+* **正面规则（R3-G4）：游标在指针死掉的地方取消，而 detach 不杀指针。** `takeChild` 把节点交给调用方的 `unique_ptr`，节点**活着**，它的成员**可读**，它的子树**跟着它走**。取消一个活对象上的游标，等于在没有任何安全收益的前提下伪造一个降级答案。
+* **那 `g_bubbles`/`g_geometries` 为什么在那里取消？** 因为它们是**沿树行走**的帧：气泡接下来要读 `w->parent_` 继续往上走，`setGeometry` 接下来要 `window()` 找窗口报脏——两者的剩余工作都是**相对于一条父链定义的**，而 detach 刚把那条父链作废。hint 帧不是这种帧：`ScrollArea::relayout` 门后只读**自己的** `geometry_` 并写**自己的**子孙，全部随它一起走；`GroupBox::sizeHint` 门后只读自己的 `title_`/`layout_`/`style()`。**判据不是"是否安全"，是"剩余工作是否依赖刚被作废的父链"，而它不依赖。**
+* **反证一（`ScrollArea`）**：若取消，一次合法的、从子项 `sizeHint()` override 里发起的 `takeChild(sa)` 会让 `relayout()` 中途 `return`，viewport 停在**上一帧**的尺寸，而 `sa` 活着、马上要被重新挂上去——**一个静默冻结的视口**。这与 `g_layouts` 当年取消后造成的"子树几何永久冻结"是同一类损害，只是从另一个方向到达。
+* **反证二（`GroupBox`）**：若取消，`sizeHint()` 会把一个只由门前局部量拼出来的 hint 交给一个**活着的** Layout，而没有任何东西标记它是假的。**从"会崩"退化成"会静默答错"，后者更难抓。**
+* **一处诚实的副作用**：`GroupBox::sizeHint()` 门后的 `style(styleState())` 会走父链（`isEffectivelyEnabled()` / `styleParentSubject()`）。detach 之后 `parent_` 已被置空，父链在自己身上终止，样式级联少了祖先 ⇒ **答案可能不同，但完全良定义**。那是一个 detached widget 的**正确**答案，不是缺陷。这一点我核过，不影响结论。
+
+#### Q5 —— `this` 存活是否蕴含 `viewport_` / `content_` 存活？
+
+**不蕴含。这不是不变量，证不出来，所以按题目要求走"加固"这一支。**
+
+反例（全部只用**公开 API**，无需 friend、无需 hack）：
+
+```cpp
+sa->content()->parent()->removeChild(sa->content());   // content_ 悬垂，ScrollArea 活着
+sa->removeChild(sa->children()[0].get());              // viewport_ 连同 content_ 一起悬垂
+```
+
+`content()` 是公开访问器，`children()` 是公开访问器，`removeChild` 是公开 API，`ScrollArea` 没有任何钩子会把这两个裸指针置空。**所以不写进头文件当不变量，改为把两个指针一起纳入守卫。**
+
+**加固形状：`ScrollArea::relayout()` 的受保护区里放 3 个 `HintGuard`——`this`、`viewport_`、`content_`；`GroupBox::sizeHint()` 放 1 个——`this`（门后只碰 `this`）。**
+
+**为什么不是"只守 `viewport_`，靠 `this` 死则 viewport 必死来省两个"**：那个蕴含要靠一次对 `takeChild`/`removeChild` 顺序的**穷举**才能成立（`sa->takeChild(viewport_)` 后再销毁 `sa`，viewport 活而 `this` 死），而本缺陷族**四次复发，每一次都是某个穷举少了一个 case**。因此定成规则：
+
+> **R3-G2：守卫你将要解引用的每一个指针。链表节点是栈上的两个指针，穷举一个 case 的成本远高于多压一个游标。**
+
+**残留（必须写明，见 11.6 R3-RES-1）**：守卫是**帧作用域**的。它救下这一帧，但**不修复 `viewport_`/`content_` 在 `ScrollArea` 余生里继续悬垂**——`contentSize()`、`scrollOffset()`、`content()` 在下一次调用时照样 UAF。那是**另一个缺陷**，R3-E1 不扩范围去修，但也不假装不存在。
+
+#### Q6 —— 纯栈、零分配
+
+**是，且是结构性的，不是靠约定。**
+
+`LiveCursor` = 两个指针，作为 `HintGuard` 的**成员**（不是指针、不是 `optional`、不是容器），`HintGuard` 只以**具名局部量**出现。没有 `vector`、没有 `new`、没有 TLS 查找（普通 `static`，与 `g_bubbles` 同一条理由：树是 UI 线程独占，`docs/architecture.md` §3.11 / §3.4）。嵌套天然由链表承载。
+
+soak 的 `liveAllocs` 序列（`test_layout_soak.cpp:145`，`allocCount() - freeCount()`）因此**逐位不动**。`parkedLayoutCount()` 同理不受影响：本设施不进停车场，它不持有 `Layout`。
+
+配套禁令写进 E3 验收：**`HintGuard` 的拷贝/移动构造与赋值全部 `= delete`（继承自 `LiveGuard`，自动生效），不得有工厂函数返回它，不得放进任何容器。** 游标节点的地址就是它的身份，一旦被搬动链表就断。
+
+---
+
+### 11.2 API 形状（唯一权威；E2 照此实现，不得增删）
+
+落点：`include/geeyoou/widget/Widget.hpp` **尾部**，`class Widget` 定义之后，`namespace geeyoou::detail` 内——与 `Layout.hpp` 尾部放 `detail::g_layoutHosts` / `detail::layoutDiagnostics()` 的位置对齐。**不新建头文件**（本仓库没有 `detail/` 头文件目录，取消点又全在 `Widget.cpp`，多一个文件只是多一次跳转）。
+
+```cpp
+namespace detail {
+
+// ONE in-flight stack frame standing on a widget it does not own.  Moved here
+// from Widget.cpp's anonymous namespace, unchanged: the frames that need it now
+// live in widget SUBCLASSES (GroupBox, ScrollArea), not in Widget.  Three of the
+// four lists stay private to Widget.cpp; only g_hints needs external linkage.
+struct LiveCursor {
+  Widget* node = nullptr;
+  LiveCursor* outer = nullptr;
+};
+
+template <LiveCursor*& List>
+class LiveGuard { /* verbatim from Widget.cpp:83-103 */ };
+
+// Frames that have called sizeHint() -- application code -- and are not finished
+// with the tree.  Named after the DOOR rather than the caller: there is no
+// single caller (GroupBox::sizeHint and ScrollArea::relayout are both callers),
+// and naming the obligation after the implementer instead of the door is the
+// exact mistake R2 shipped.
+extern LiveCursor* g_hints;
+
+class HintGuard : private LiveGuard<g_hints> {
+ public:
+  // const_cast, in the ONE place in the library that needs it, and safe by
+  // construction: this cursor is COMPARED and never dereferenced -- which is
+  // why alive() is the only thing exported.  node() and moveTo() are
+  // deliberately NOT re-exposed.
+  explicit HintGuard(const Widget* w)
+      : LiveGuard<g_hints>(const_cast<Widget*>(w)) {}
+
+  using LiveGuard<g_hints>::alive;
+};
+
+// Depth of the hint cursor list.  Diagnostic only, and the reason it exists is
+// that a list which does not come back to zero is a guard somebody kept alive
+// past its frame -- which is untestable without this.
+std::size_t hintCursorDepth();
+
+// A hint frame found its cursor cancelled and bailed.  Recorded, never fatal
+// (ADR-R2-04), and it is what makes E6's regression assert a POSITIVE fact
+// instead of "it did not crash".  Field lives in LayoutDiagnostics.
+void hintFrameCancelled();
+
+}  // namespace detail
+```
+
+**三个成员**：
+
+| 成员 | 可见性 | 作用 |
+|---|---|---|
+| `explicit HintGuard(const Widget*)` | public，inline | 构造：把栈上游标压入 `g_hints`（实测 5 条指令，见 §11.5） |
+| `~HintGuard()` | public，隐式（继承自 `LiveGuard`，非虚） | 析构：弹出游标（实测 2 条）。非虚是对的——私有基类，永不通过基类指针 delete |
+| `bool alive() const` | public，`using` 导出，inline | 查询：`cursor_.node != nullptr` |
+
+拷贝/移动：**四个全部删除**（`LiveGuard` 已删，私有继承后派生类隐式删除）。
+
+**`Widget` 本体改动**：`~Widget` 加一行 `cancelOn(g_hints, this);`。**不加任何成员** ⇒ `Widget.cpp:36` 的 `static_assert(sizeof(Widget) <= sizeof(WidgetSizeBeforeR2) + 16)` **原样成立**，一个字节都不动。
+**`LayoutDiagnostics` 加一个 `std::uint32_t hintFramesCancelled = 0;`**——它是 `detail` 里的诊断结构，不在 `Widget` 里，与尺寸预算无关。
+
+**两个使用点都不需要 `friend`**（验收标准之一）：`GroupBox` / `ScrollArea` 公开继承 `Widget`，`const GroupBox*` → `const Widget*` 与 `Widget*` → `const Widget*` 都是隐式转换，`detail::` 无访问控制。
+
+---
+
+### 11.3 死亡后返回什么 —— 语义规则（**E3 的验收依据，写死**）
+
+> **R3-G1（核心）**：守卫触发（`alive()` 为 false）之后，该帧**不得读取任何**通过 `this` 或任何被守卫指针到达的存储——成员、虚函数、`localRect()`、`geometry()`、`style()`、`layout()` 一律禁止。返回值**只能**由两类东西构成：
+> **(a)** 在**门之前**已经拷贝到本帧栈上的局部量；**(b)** 文件作用域常量、函数标量参数。
+> 返回 `void` 的帧直接 `return;`。
+
+> **R3-G2**：守卫你将要解引用的**每一个**指针（Q5）。
+
+> **R3-G3**：检查**紧贴门之后**，在下一条语句**之前**。不是"return 之前的某处"。
+
+> **R3-G4**：游标在**指针死掉**的地方取消（`~Widget`），detach 不取消（Q4）。
+
+> **R3-G5**：**不得为了让降级答案更好看而把门后的计算上提到门前。** 上提会在**健康路径**上引入过期值。具体见下面 `GroupBox` 的 `titleW`。
+
+**两处的降级答案，逐字写死：**
+
+**`GroupBox::sizeHint() const`** —— 门在 `:53`。门前局部量只有 `top`(`:49`)、`frameW`(`:50`)、`frameH`(`:51`)。因此：
+
+```
+降级返回： h.min = h.preferred = {frameW, frameH};  h.max 保持默认 {kUnbounded, kUnbounded}
+即"只剩这个框本身"，preferred == min，单调、不虚报。
+```
+
+`inner`（`:53-58`，读 `layout()`）与 `titleW`（`:62-65`，读 `title_` + `style()` + `measureText`）**一律按 0 计，不得计算**。
+
+⚠️ **`titleW` 明令不上提到门前**（R3-G5）：门内的应用代码完全可以调 `groupBox->setTitle(...)`，上提后健康路径会返回一个**过期**的标题宽度。为了改善一条降级路径而在主路径上引入过期值是坏交易。代价是降级答案丢掉标题下限——可接受，因为按 R3-G4 这条路只在对象**已经死了**时才走，那个下限没有消费者。
+
+**`ScrollArea::relayout()`** —— 门在 `:158`（`content_->sizeHint()`）。降级动作：**`return;`**，viewport 与 content 保持上一帧几何。**不得**执行 `:159` 的 `localRect()`（读 `this->geometry_`），**不得**执行 `:164`/`:165` 的任何写入。
+
+---
+
+### 11.4 门枚举表（E5 的输入；E2 只动 ✅ 行）
+
+**门（door）的定义**，R3 只认两类：
+**D-a** = 对 `Widget::sizeHint()` 的任何调用（虚函数，应用可覆写）；
+**D-b** = 对 `Widget::setGeometry()` 的调用，且目标可能拥有 `Layout` 或有应用覆写的 `onGeometryChanged()`。
+
+| # | 位置 | 类 | 门后读/写什么 | 需守卫的指针 | R3 动作 |
+|---|---|---|---|---|---|
+| 1 | `GroupBox.cpp:53` `Widget::sizeHint()` | D-a | `:54` `layout_`、`:62` `title_`、`:65` 虚调用 | `this` | ✅ 1 个守卫 + 门后立即查 |
+| 2 | `ScrollArea.cpp:158` `content_->sizeHint()` | D-a | `:159` `geometry_`；`:164` **写** viewport；`:165` **写** content | `this`, `viewport_`, `content_` | ✅ 3 个守卫 + 门后立即查 |
+| 3 | `ScrollArea.cpp:164` `viewport_->setGeometry` | D-b **（条件性）** | `:165` 写 content | 复用 #2 的三个 | ✅ **第二次检查** |
+| 4 | `ScrollArea.cpp:165` `content_->setGeometry` | D-b | **无**（下一句就是 `return`） | — | ❌ 不加检查（会是死代码），**加注释**：此后追加任何语句都必须先补一次检查 |
+| 5 | `Widget.cpp:464` `layout_->measureFor(*this)` | D-a | **无**（`return` 该调用的结果） | — | ❌ 不加，登记备查 |
+| 6 | `IconButton.cpp:29` `PushButton::sizeHint()` | **不是门** | — | — | ❌ 理由见下 |
+| 7 | showcase `PageIcons.cpp:633` `sa->setContentSize(content->sizeHint().preferred)` | D-a，门后动 `sa` | `sa` | （库外） | ❌ R3 不改 examples；**作为"契约主语是调用者"的活样本登记** |
+| 8 | showcase 四页 `return content->sizeHint().preferred;` | D-a，门后无读 | — | — | ❌ 无动作 |
+
+**#3 为什么必须查**：`viewport_` 是 `ScrollArea` 构造函数里 `add<Widget>()` 出来的**普通 `Widget`**，今天 `onGeometryChanged()` 是基类空实现、且没有 layout，所以 `:164` 今天不是门。但应用能拿到它：`sa->content()->parent()->setLayout<BoxLayout>()` 一句就让 `:164` 变成真门。**"今天不是门"不是不变量，而且这条正是本缺陷族的典型形状。** 一次可预测的分支换掉它，划算。
+
+**#6 为什么不是门**：`PushButton::sizeHint()` 是**限定名调用**（静态绑定），函数体只走 `text_`/`loadingText_`/`icon_` + `measureText` + `style()`，**从不调 `Widget::sizeHint()`、从不碰 `Layout`、从不发信号**。它经由 `styleState()` 这个虚函数确有理论暴露面，但那与 `onPaint` 同级，**不在 R3 的门定义内**，登记为残留 R3-RES-2 而不是本轮工作。
+
+**#7 是本轮最该被记住的一条**：它证明这个义务**天然属于调用者**。R3 不改 examples（R2 的出门条件之一是 examples 尽量不动），但它必须出现在表里，否则下一个人会以为库内改完就完了。
+
+---
+
+### 11.5 开销量化（**实测 codegen**，非估算）
+
+不跑 benchmark，但也不靠估。E1 在 scratchpad 里编了一份形状等价的探针（`cl /std:c++20 /W4 /permissive- /O2`，MSVC 14.50 / VS18，x64），`/FA` 取汇编。**仓库未被改动，探针不进仓库。**
+
+**`ScrollArea::relayout()` 受保护区**（3 个守卫、2 处检查、门用不可内联的外部函数模拟）——实测全函数**除两次门调用外共 23 条指令**：
+
+| 段 | 实测 | 说明 |
+|---|---|---|
+| 三个守卫的构造 | **9** | 1 次 `g_hints` 载入 + 2 `lea`/`mov` 把三个游标串起来 + 3 次存 node + 1 次存回 `g_hints` |
+| 三个守卫的析构 | **2** | `mov rax,[a.outer]` / `mov [g_hints],rax` |
+| 6 次 `alive()` | **12** | 每次 = `cmp qword ptr [rsp+k], 0` + `je` |
+
+**关键实测事实（比设计预期更好）**：编译器把三个 LIFO 守卫的构造/析构**合并**了——无论几个守卫，对全局 `g_hints` 的读改写**各只有一次**（进 1 次、出 1 次）。所以"三个守卫"在全局变量上的争用与"一个守卫"**完全相同**，Q5 的加固没有为多守的两个指针付全局访问的代价。
+
+**`GroupBox::sizeHint()` 受保护区**（1 个守卫、1 处检查）：实测 **9 条指令**（构造 5 + 析构 2 + 检查 2）。
+
+**没有分支预测灾难**：6 个条件跳转全部是「本帧栈槽 vs 0」，生产中**恒不跳转**，稳态误预测 ≈ 0；无间接跳转、无数据相关循环、无 `switch`。对照被否决的替代方案（"用完再扫一遍 `children()` 确认指针还在"）：那是 O(N) 次指针追逐载入且分支结果数据相关——**那才是分支预测灾难。**
+
+**同一帧的分母**：`:158` 的 `content_->sizeHint()` 要把整页 layout 测一遍，按 §10.2 每个 `Label` 至少一次 `BLGlyphBuffer` + 一次 shaping，`PageOps` 有几十个。量级 **10⁴ ~ 10⁵ 条指令**，外加 Blend2D 自己的运行时分配。守卫占 **≲0.1%**。即便 144 Hz 满速拖拽，全年折算也是微秒级。
+
+**`~Widget` 的增量**：多一次 `cancelOn(g_hints, this)`。没有测量在栈上时（含全部销毁场景）= 1 全局载 + 1 `test` + 1 `jcc` = **3 条**，冷路径。有测量在栈上时走链表，长度上界是 hint 帧嵌套深度（受 `kMaxTreeDepth = 64` 约束，实测 1~3）。
+
+**ADR-R2-01「不装 Layout 的 widget 不为引擎付代价」继续成立**，逐条：
+
+* `ScrollArea::relayout()` 的三个守卫落在 `if (content_->layout())` **内部**——今天库里每一个 `ScrollArea`、以及 5 个绝对坐标 showcase 页，**一条都不执行**。
+* `GroupBox::sizeHint()` 的守卫只在有人问 hint 时才执行，而问的人只有 Layout 或应用；进程里没有 Layout 就没人问。
+* 唯一的无条件增量是 `~Widget` 里那 3 条指令，与 R1/R2 已经加进去的另外三行 `cancelOn` 同形同量。ADR-R2-01 约束的是**每帧**代价，析构不在其列。
+* `sizeof(Widget)` **不变**（0 新成员）；`g_hints` 是 8 字节 BSS，与 widget 数量无关。
+
+---
+
+### 11.6 残留（不在 E1~E6 范围，登记待裁）
+
+* **R3-RES-1（重要）**：守卫是**帧作用域**的。`ScrollArea::viewport_` / `content_` 在守卫触发后**仍然是悬垂成员**，`contentSize()` / `scrollOffset()` / `content()` 下一次被调用时照样 UAF。彻底修法需要一个子类可见的"我的子节点没了"钩子（`Widget::childRemoved` 目前是 private 且非虚；改虚不增加 `sizeof(Widget)`，因为 vptr 已在）。**R3-E1 不扩范围，请架构团队裁定放哪一轮。**
+* **R3-RES-2**：`PushButton::sizeHint()` 经 `styleState()`（虚）的理论暴露面。与 `onPaint` 同级，不在门定义内。
+* **R3-RES-3**：examples 侧的调用者义务（枚举表 #7）未落地。
+
+---
+
+### 11.7 E2 施工清单（评审放行后才开工）
+
+1. `Widget.hpp` 尾部新增 `detail` 块：`LiveCursor`（从 `Widget.cpp:73-76` 原样搬）、`LiveGuard<>`（从 `:83-103` 原样搬）、`extern LiveCursor* g_hints`、`HintGuard`、`hintCursorDepth()`、`hintFrameCancelled()`。
+2. `Widget.cpp`：删掉搬走的两处定义、`using detail::LiveCursor` 之类的最小适配；定义 `detail::g_hints = nullptr`、`hintCursorDepth()`；`~Widget` 加第四行 `cancelOn(g_hints, this);`（与既有三行并排，在 `layout_` 停车块之前）。
+3. `Layout.hpp` / `Layout.cpp`：`LayoutDiagnostics` 加 `hintFramesCancelled`，实现 `detail::hintFrameCancelled()`（饱和自增，与既有四个计数器同写法）。
+4. **E2 到此为止**——调用点（`GroupBox` / `ScrollArea`）是 E3，不在同一次提交里。
+5. 提交约定：**每文件一个 commit**。
+
+**E2 明确不做**：不改 `Layout.hpp:168-174` 的既有契约文字（那条对 `Layout` 实现者仍然正确，只是不完备）；不动 examples；不动 `announceDetached`；不给 `Widget` 加任何成员。
+
+---
+
+### 11.8 可行性探针：哪些是**实测过**的，哪些还只是论证
+
+E1 只出设计不写实现，但设计里有四条"编译器说了算"的断言，靠读代码断不了，所以在 scratchpad 里编了一份**形状等价**的独立探针跑过一遍（`cl /nologo /std:c++20 /W4 /permissive- /EHsc /O2`，MSVC 14.50 / VS18 x64）。**仓库源码一个字未改**，探针不入库。
+
+**已实测通过（Leo 可复核，不必采信我的话）：**
+
+| 断言 | 结果 |
+|---|---|
+| `LiveGuard<>` 放头文件后，仍能以 `Widget.cpp` **匿名 namespace** 里的 `g_bubbles`（内部链接）作模板实参实例化 ⇒ 四条链表里**三条继续私有** | ✅ `/W4 /permissive-` 零警告通过 |
+| `HintGuard : private LiveGuard<g_hints>` + `using ...::alive;` 后，**`node()` 在类型层面不可达**（SFINAE 探测 `HasNode<HintGuard>` 为 false，`HasNode<LiveGuard<g_hints>>` 为 true 作对照） | ✅ `static_assert` 通过 —— Q3 的 `const_cast` 安全性因此是**编译期事实**，不是评审规则 |
+| 子类的 **const 成员函数**能用 `this` 直接构造，**零 `friend`**；非 const 私有方法用 `Widget*` 同样直接构造 | ✅ 两处都通过 |
+| `sizeof(HintGuard) == sizeof(LiveCursor) == 2 * sizeof(void*)`；拷贝构造/移动构造/拷贝赋值**全部不可用**；`nothrow` 可析构 | ✅ 五条 `static_assert` 全过 |
+| 运行时：游标链表进出配平回 0；`~Widget` 的 `cancelOn` 确实把 `alive()` 翻成 false | ✅ 探针 `main` 打印 `depth 0 → 0`，`alive 1 → 0` |
+| §11.5 的指令数 | ✅ `/FA` 实测汇编，见上表 |
+
+**仍然只是论证、未实测（评审请重点看这几条）：**
+
+1. **Q4 的两个取消策略**（`~Widget` 加、`announceDetached` 不加）是**语义论证**，探针没有 detach 语义。E6 必须各写一条用例把两侧钉住：detach 后 hint 帧**继续正常返回**、destroy 后 hint 帧**降级返回**。
+2. **§11.3 的降级返回值**是我定的，还没有任何代码消费过它。E3 落地后由 E6 断言逐位。
+3. **枚举表 11.4 的完整性**。我按 `sizeHint()` / `setGeometry()` 两类门在 `src/` + `examples/` 全库 grep 过一遍，但"完整"这个词的分量应由 E5 独立复核后再下——**这正是 R2 判 FAIL 的那个位置，我不自评。**
+4. **E2 落地后 `Widget.cpp:36` 的尺寸 `static_assert`**：论证上必然成立（0 新成员），但要等真编过全库才算数。
+
+**按团队纪律，本节到此为止：我不下"已验证"结论。设计交 `eng-frontend-ui`（Leo）书面评审，实现与测试交后续任务。**
