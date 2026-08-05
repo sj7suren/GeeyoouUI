@@ -50,7 +50,43 @@ SizeHint GroupBox::sizeHint() const {
   const float frameW = 2.0f * kInsetX;
   const float frameH = top + kInsetBottom;
 
+  // CP-G1 (docs/iterations/02-layout-engine.md section 11.3).  The next line is
+  // a DOOR: Widget::sizeHint() is this container's own layout's measure(), that
+  // measure asks every child, and any one of those overrides is application
+  // code entitled to destroy widgets -- this GroupBox included.  The frame does
+  // not stop at the door: the `if (!layout())` below reads layout_, the titleW
+  // initialiser reads title_, and it makes a VIRTUAL call through
+  // style(styleState()).  All three go through `this` and nothing else -- no
+  // member POINTER is dereferenced anywhere below -- so one cursor covers the
+  // whole frame and one check answers for it (REM3-G2).
+  //
+  // (Section 11.3 names those three statements :54, :62 and :65, from the HEAD
+  // this was written against.  They have moved down by the size of this
+  // comment; the statements are what the table means, not the numbers.)
+  const detail::DeathWatch self(this);
   SizeHint inner = Widget::sizeHint();
+  if (!self.alive()) {
+    // REM3-G1: `this` is a dangling pointer from here on, so NOTHING below may
+    // be read -- not layout(), not title_, not style().  The only legal inputs
+    // left are frameW and frameH, computed at the top of this function in front
+    // of the door, and they are enough for the one honest answer available:
+    // "all that is left of me is the frame".  `inner` and `titleW` count as
+    // zero BY DEFINITION here;
+    // they are not computed, because computing them is the defect.
+    //
+    // preferred == min, and max stays at its default {kUnbounded, kUnbounded}:
+    // monotone, and it never over-claims room for a widget that no longer
+    // exists.
+    //
+    // frameH carries the title's 34px because `top` read title_ BEFORE the
+    // door.  That is not an endorsement of the cross-door tear registered as
+    // REM3-RES-5 -- it is what REM3-G1 leaves available, and REM3-G5 forbids
+    // moving that read to fix it.  The tear is a W2 item with a case of its own.
+    detail::frameDegraded();
+    SizeHint dead;
+    dead.min = dead.preferred = Size{frameW, frameH};
+    return dead;
+  }
   if (!layout()) {
     inner.min = Size{0.0f, 0.0f};
     inner.preferred = Size{(std::max)(0.0f, inner.preferred.width - frameW),
