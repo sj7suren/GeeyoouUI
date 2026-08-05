@@ -554,6 +554,187 @@ GEEYOOU_TEST(layout_engine, the_host_counter_returns_to_zero) {
            static_cast<const Widget*>(nullptr));
 }
 
+// ========================================================== death watch ===
+//
+// E2 moved the liveness cursor and its guard out of Widget.cpp's anonymous
+// namespace into detail:: in Widget.hpp, and merged the removal path's list
+// with the one a measurement is going to need under the name the two share --
+// what CANCELS them (docs/iterations/02-layout-engine.md section 11.1).  No
+// call site in the library asks a new question yet: GroupBox and ScrollArea are
+// the next round.
+//
+// So these three cases pin the FACILITY and nothing else, which is worth doing
+// precisely because a facility-only change fails in ways the rest of the suite
+// structurally cannot see:
+//
+//   * unreachable from where it has to be reachable from surfaces as a compile
+//     error two rounds later, in the middle of a fix, in a file whose author is
+//     then told the design was wrong;
+//   * cancelled by the wrong door leaves every number in every other case
+//     looking perfectly plausible -- a frame that gave up on a widget which
+//     never died still returns A answer;
+//   * and a guard that changed anything at all on the healthy path would be
+//     paid by every widget in the library forever, for a case that by
+//     construction almost never happens.
+
+GEEYOOU_TEST(layout_engine, a_death_watch_is_reachable_from_a_widget_subclass) {
+  // The two shapes the next round needs, taken here rather than there: a CONST
+  // member function -- GroupBox::sizeHint() is one, and `this` is a
+  // const Widget* inside it, which is the entire reason DeathWatch holds the
+  // library's single const_cast -- and a non-const PRIVATE method, which is
+  // what ScrollArea::relayout() is.  Neither needs a friend declaration, and
+  // this file is not the library: if detail:: were not enough, this case would
+  // not compile.
+  class Panel : public Widget {
+   public:
+    mutable std::size_t depthInsideConstHint = 0;
+    mutable bool aliveInsideConstHint = false;
+    std::size_t depthInsidePrivateMethod = 0;
+
+    void maintain() { fromANonConstPrivateMethod(); }
+
+    SizeHint sizeHint() const override {
+      geeyoou::detail::DeathWatch self(this);  // const Widget*, no cast here
+      aliveInsideConstHint = self.alive();
+      depthInsideConstHint = geeyoou::detail::deathWatchDepth();
+      return Widget::sizeHint();
+    }
+
+   private:
+    void fromANonConstPrivateMethod() {
+      geeyoou::detail::DeathWatch self(this);  // Widget*, same constructor
+      depthInsidePrivateMethod = geeyoou::detail::deathWatchDepth();
+    }
+  };
+
+  CHECK_EQ(geeyoou::detail::deathWatchDepth(), std::size_t(0));
+
+  Widget root;
+  Panel* panel = root.add<Panel>();
+  {
+    geeyoou::detail::DeathWatch outer(&root);
+    CHECK_EQ(geeyoou::detail::deathWatchDepth(), std::size_t(1));
+
+    // Nesting is the list, and the list is why nothing allocates: a second
+    // frame on top of the first is a second stack object linked to the first.
+    (void)panel->sizeHint();
+    CHECK(panel->aliveInsideConstHint);
+    CHECK_EQ(panel->depthInsideConstHint, std::size_t(2));
+
+    panel->maintain();
+    CHECK_EQ(panel->depthInsidePrivateMethod, std::size_t(2));
+
+    // Both inner frames have returned; the outer one is untouched by either.
+    CHECK(outer.alive());
+    CHECK_EQ(geeyoou::detail::deathWatchDepth(), std::size_t(1));
+  }
+  CHECK_EQ(geeyoou::detail::deathWatchDepth(), std::size_t(0));
+}
+
+GEEYOOU_TEST(layout_engine, a_death_watch_survives_a_detach_and_not_a_destruction) {
+  // The property the list is NAMED after, and the only behavioural line E2
+  // touched: ~Widget cancels it, and nothing else does.
+  Widget root;
+  Widget* child = root.add<Widget>();
+  Widget* grandchild = child->add<Widget>();
+
+  geeyoou::detail::DeathWatch onChild(child);
+  geeyoou::detail::DeathWatch onGrandchild(grandchild);
+  CHECK(onChild.alive());
+  CHECK(onGrandchild.alive());
+
+  // DETACHED, not dead.  takeChild hands the subtree back alive: its members
+  // are readable, its own children came with it, and a frame standing on it has
+  // lost nothing.  Cancelling here would report a degradation for a widget that
+  // never died -- and would leave the caller holding a subtree the frame had
+  // already decided to stop looking at.
+  std::unique_ptr<Widget> taken = root.takeChild(child);
+  CHECK(taken.get() == child);
+  CHECK(onChild.alive());
+  CHECK(onGrandchild.alive());
+
+  // DESTROYED.  ~Widget is the one door every real departure goes through, and
+  // a cursor holds a pointer, which is exactly the thing that stops being valid
+  // there.  The grandchild goes with it and cancels its own cursor on the way
+  // -- which is why no guard has to walk a subtree.
+  taken.reset();
+  CHECK(!onChild.alive());
+  CHECK(!onGrandchild.alive());
+
+  // Cancelling nulls the node; it does not unlink it.  It cannot: the cursor is
+  // a stack object owned by a frame that has not returned yet, and unlinking it
+  // early would leave that frame's destructor writing through a stale outer
+  // pointer.
+  CHECK_EQ(geeyoou::detail::deathWatchDepth(), std::size_t(2));
+}
+
+GEEYOOU_TEST(layout_engine, a_death_watch_costs_a_healthy_pass_nothing) {
+  // Two IDENTICAL trees given the same fifty geometries, one with three guards
+  // standing on live widgets for the whole run and one with none.  Two trees
+  // rather than one tree run twice: naturalSize_ latches and layoutDirty_
+  // settles, so a second run on the same tree is not the same experiment.
+  geeyoou::detail::resetLayoutDiagnostics();
+  CHECK_EQ(geeyoou::detail::deathWatchDepth(), std::size_t(0));
+
+  auto build = [](Widget& root, std::vector<ProbeWidget*>& kids) {
+    StackLayout* lay = root.setLayout<StackLayout>();
+    lay->setRowHeight(24.0f);
+    lay->setSpacing(5.0f);
+    for (int i = 0; i < 6; ++i) kids.push_back(root.add<ProbeWidget>());
+    return lay;
+  };
+  // Coprime-ish steps so the clipped/short arithmetic lands somewhere different
+  // almost every round, rather than settling into one shape that would make the
+  // comparison below agree for the wrong reason.
+  auto geometryFor = [](int i) {
+    return Rect{0.0f, 0.0f, 300.0f + float(i) * 7.0f, 200.0f + float(i % 13) * 3.0f};
+  };
+
+  Widget plain;
+  std::vector<ProbeWidget*> plainKids;
+  StackLayout* plainLay = build(plain, plainKids);
+  for (int i = 0; i < 50; ++i) plain.setGeometry(geometryFor(i));
+
+  Widget guarded;
+  std::vector<ProbeWidget*> guardedKids;
+  StackLayout* guardedLay = build(guarded, guardedKids);
+  {
+    geeyoou::detail::DeathWatch self(&guarded);
+    geeyoou::detail::DeathWatch first(guardedKids.front());
+    geeyoou::detail::DeathWatch last(guardedKids.back());
+    CHECK_EQ(geeyoou::detail::deathWatchDepth(), std::size_t(3));
+
+    for (int i = 0; i < 50; ++i) guarded.setGeometry(geometryFor(i));
+
+    // Nobody died, so nobody may have been reported dead.
+    CHECK(self.alive());
+    CHECK(first.alive());
+    CHECK(last.alive());
+  }
+  CHECK_EQ(geeyoou::detail::deathWatchDepth(), std::size_t(0));
+
+  // Same work, to the call: the engine measured and arranged the same number of
+  // times, and every child received the same number of geometry changes.  A
+  // guard that had perturbed the pass -- by looking like a layout in flight,
+  // say, which is what threading these frames onto g_layouts would have done --
+  // shows up here as a different count, not as a wrong picture.
+  CHECK_EQ(guardedLay->measures, plainLay->measures);
+  CHECK_EQ(guardedLay->arranges, plainLay->arranges);
+  CHECK_EQ(guardedKids.size(), plainKids.size());
+  for (std::size_t i = 0; i < plainKids.size(); ++i) {
+    CHECK(guardedKids[i]->geometry() == plainKids[i]->geometry());
+    CHECK_EQ(guardedKids[i]->geometryChanges, plainKids[i]->geometryChanges);
+  }
+  CHECK(guarded.geometry() == plain.geometry());
+
+  // And the counter the next round's give-up branches will raise is still at
+  // zero.  This is the assertion that catches a guard wired the wrong way
+  // round: such a guard degrades a live frame, and a degraded frame still
+  // returns an answer that looks like an answer.
+  CHECK_EQ(int(geeyoou::detail::layoutDiagnostics().framesDegraded), 0);
+  geeyoou::detail::resetLayoutDiagnostics();
+}
+
 // ============================================================= M2 / M4 ===
 //
 // Coverage gap the R2 handoff reported open (docs/iterations/02-layout-engine.md
