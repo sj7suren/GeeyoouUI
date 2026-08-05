@@ -27,6 +27,8 @@ class RadioButton : public Widget {
   void setChecked(bool on);
   bool isChecked() const { return checked_; }
 
+  SizeHint sizeHint() const override;
+
   Signal<bool> toggled;
 
  protected:

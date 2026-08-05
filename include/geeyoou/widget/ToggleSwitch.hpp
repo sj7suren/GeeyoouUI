@@ -26,6 +26,8 @@ class ToggleSwitch : public Widget {
   // Colour used for the "on" state; defaults to the theme's ok green.
   void setOnColor(Color c);
 
+  SizeHint sizeHint() const override;
+
   Signal<bool> toggled;
 
  protected:

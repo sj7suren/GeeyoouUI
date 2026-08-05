@@ -6,10 +6,34 @@
 #include "geeyoou/render/Theme.hpp"
 
 namespace geeyoou {
+namespace {
+// The dot onPaint() draws at full height, the gap it leaves before the label,
+// and the touch target the row wants.  Deliberately the same three numbers as
+// CheckBox: a radio and a check box stacked in one column that disagreed by a
+// pixel would read as a rendering fault.
+constexpr float kDotSide = 16.0f;
+constexpr float kLabelGap = 9.0f;
+constexpr float kRowHeight = 22.0f;
+}  // namespace
 
 void RadioButton::setText(std::string utf8) {
   text_ = std::move(utf8);
   update();
+  invalidateSizeHint();
+}
+
+// Dot + gap + label, and the width does not shrink -- the CheckBox argument
+// verbatim: there is nothing a narrower radio can do except cut its label in
+// half, and half of "手动" is a different instruction, not a smaller one.
+SizeHint RadioButton::sizeHint() const {
+  const float fontSize = style(styleState()).fontSizeOr(Theme::current().fontBody);
+  const float labelW =
+      text_.empty() ? 0.0f : kLabelGap + measureText(text_, fontSize).width;
+
+  SizeHint h;
+  h.preferred = Size{kDotSide + labelW, kRowHeight};
+  h.min = Size{kDotSide + labelW, kDotSide};
+  return h;
 }
 
 void RadioButton::uncheckSiblings() {
@@ -43,7 +67,7 @@ void RadioButton::onPaint(Painter& p, const Rect&) {
   const Rect r = localRect();
   const bool on = isEffectivelyEnabled();
 
-  const float side = std::min(16.0f, r.height());
+  const float side = std::min(kDotSide, r.height());
   const Point c{side * 0.5f, r.center().y};
   const float radius = side * 0.5f;
 
@@ -66,7 +90,7 @@ void RadioButton::onPaint(Painter& p, const Rect&) {
   }
 
   if (!text_.empty()) {
-    p.drawText({side + 9.0f, r.center().y}, text_, t.fontBody,
+    p.drawText({side + kLabelGap, r.center().y}, text_, t.fontBody,
                on ? t.text : t.textDisabled, HAlign::Left, VAlign::Middle);
   }
 }

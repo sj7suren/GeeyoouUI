@@ -6,10 +6,37 @@
 #include "geeyoou/render/Theme.hpp"
 
 namespace geeyoou {
+namespace {
+// The pill onPaint() draws, and the gap before the label.  onPaint() derives
+// the track from the height it actually has (std::min below), so these are the
+// numbers at which it stops shrinking -- which makes them exactly the right
+// numbers for the hint.
+constexpr float kTrackHeight = 20.0f;
+constexpr float kTrackAspect = 1.85f;
+constexpr float kLabelGap = 10.0f;
+// Six pixels of touch target above and below the pill.
+constexpr float kRowHeight = 26.0f;
+}  // namespace
 
 void ToggleSwitch::setText(std::string utf8) {
   text_ = std::move(utf8);
   update();
+  invalidateSizeHint();
+}
+
+// Pill + gap + label.  The width does not shrink, for the CheckBox reason: the
+// label is what says WHICH pump this switch starts.
+SizeHint ToggleSwitch::sizeHint() const {
+  const float trackW = kTrackHeight * kTrackAspect;
+  const float labelW =
+      text_.empty()
+          ? 0.0f
+          : kLabelGap + measureText(text_, Theme::current().fontBody).width;
+
+  SizeHint h;
+  h.preferred = Size{trackW + labelW, kRowHeight};
+  h.min = Size{trackW + labelW, kTrackHeight};
+  return h;
 }
 
 void ToggleSwitch::setOnColor(Color c) {
@@ -29,8 +56,8 @@ void ToggleSwitch::onPaint(Painter& p, const Rect&) {
   const Rect r = localRect();
   const bool en = isEffectivelyEnabled();
 
-  const float h = std::min(20.0f, r.height());
-  const float w = h * 1.85f;
+  const float h = std::min(kTrackHeight, r.height());
+  const float w = h * kTrackAspect;
   const Rect track(0.0f, r.center().y - h * 0.5f, w, h);
   const float radius = h * 0.5f;
 
@@ -55,7 +82,7 @@ void ToggleSwitch::onPaint(Painter& p, const Rect&) {
   }
 
   if (!text_.empty()) {
-    p.drawText({w + 10.0f, r.center().y}, text_, t.fontBody,
+    p.drawText({w + kLabelGap, r.center().y}, text_, t.fontBody,
                en ? t.text : t.textDisabled, HAlign::Left, VAlign::Middle);
   }
 }
