@@ -21,6 +21,7 @@
 //
 #include "geeyoou/widget/Widget.hpp"
 
+#include <cstddef>
 #include <memory>
 #include <vector>
 
@@ -31,6 +32,8 @@
 #include "geeyoou/render/Canvas.hpp"
 #include "geeyoou/render/Offscreen.hpp"
 #include "geeyoou/render/Painter.hpp"
+#include "geeyoou/widget/BoxLayout.hpp"
+#include "geeyoou/widget/GridLayout.hpp"
 #include "geeyoou/widget/Window.hpp"
 
 using geeyoou::Canvas;
@@ -48,6 +51,8 @@ using geeyoou::Signal;
 using geeyoou::Widget;
 
 namespace {
+
+constexpr float kEps = 0.0005f;
 
 // Counts its own destruction through a pointer the CALLER owns -- the widget is
 // gone by the time the assertion runs, so the counter cannot live in it.
@@ -640,4 +645,174 @@ GEEYOOU_TEST(removal, the_removed_subtree_leaves_focus_order_paint_and_hit_test)
   REQUIRE(paintOnce(root));
   CHECK_EQ(keptPaints, 1);
   CHECK_EQ(gonePaints, 0);  // nothing left to draw, and nothing tried
+}
+
+// ============================================ arrange-time removal (C3) ===
+//
+// BoxLayout::arrange and GridLayout::arrange each set a child's geometry via
+// setGeometry(), which runs onGeometryChanged() -- application code -- before
+// the loop moves to the next item.  That code is entitled to remove a LATER
+// sibling from the host (the same discipline as every other place in this
+// file).  Both arrange() implementations say, in their own comments, that they
+// survive it: the removed item's slot in scratch_/colMin_ goes stale for the
+// rest of THIS pass, but the removal also raises the dirty flag, and M1's
+// do/while picks that up for one guaranteed extra round that re-gathers from
+// the (now-shorter) item list and converges on the right answer.  Nobody had
+// ever written the case that actually removes a widget from inside arrange();
+// this is that case, for both layouts.
+namespace {
+
+// Fixed-size stand-in, local to this file: sizeHint() answers with whatever
+// `set()` was given and nothing else moves.
+class FixedSize : public Widget {
+ public:
+  void set(float w, float h) {
+    hint_.min = geeyoou::Size{w, h};
+    hint_.preferred = geeyoou::Size{w, h};
+    hint_.max = geeyoou::Size{w, h};
+  }
+  geeyoou::SizeHint sizeHint() const override { return hint_; }
+
+ private:
+  geeyoou::SizeHint hint_;
+};
+
+// Removes ONE named sibling from ONE named host, the first time its own
+// geometry is set, and never again -- a second setGeometry() (the re-run M1
+// schedules) must be a no-op, not a second removal of something already gone.
+class RemovesASiblingOnceGeometrySet : public Widget {
+ public:
+  void arm(Widget* host, Widget* victim) {
+    host_ = host;
+    victim_ = victim;
+  }
+  int removals = 0;
+
+  geeyoou::SizeHint sizeHint() const override {
+    return geeyoou::SizeHint{{50.0f, 20.0f}, {50.0f, 20.0f}, {50.0f, 20.0f}};
+  }
+
+ protected:
+  void onGeometryChanged() override {
+    if (!host_ || !victim_) return;
+    Widget* v = victim_;
+    Widget* h = host_;
+    host_ = nullptr;
+    victim_ = nullptr;
+    h->removeChild(v);
+    ++removals;
+  }
+
+ private:
+  Widget* host_ = nullptr;
+  Widget* victim_ = nullptr;
+};
+
+}  // namespace
+
+GEEYOOU_TEST(removal, box_layout_survives_a_sibling_removed_mid_arrange) {
+  Widget root;
+  geeyoou::BoxLayout* box =
+      root.setLayout<geeyoou::BoxLayout>(geeyoou::BoxLayout::Orientation::Horizontal);
+  box->setSpacing(0.0f);
+
+  FixedSize* a = root.add<FixedSize>();
+  a->set(50.0f, 20.0f);
+  box->addWidget(a);
+
+  // Hidden until armed: a hidden item is skipped entirely by gather()/arrange()
+  // (BoxLayout.cpp), so this keeps `b` at its untouched default geometry
+  // through every automatic re-arrange the construction below triggers on its
+  // own (each addWidget() re-runs the pass immediately).  Without this, `b`
+  // would already have settled into its final position before the case gets a
+  // chance to arm it, and the M3 idempotence short-circuit would then silently
+  // swallow the very setGeometry() this case exists to observe.
+  RemovesASiblingOnceGeometrySet* b = root.add<RemovesASiblingOnceGeometrySet>();
+  b->setVisible(false);
+  box->addWidget(b);
+
+  FixedSize* victim = root.add<FixedSize>();  // removed from underneath the pass
+  victim->set(50.0f, 20.0f);
+  box->addWidget(victim);
+
+  FixedSize* survivor = root.add<FixedSize>();  // moves up to close the gap
+  survivor->set(50.0f, 20.0f);
+  box->addWidget(survivor);
+
+  b->arm(&root, victim);
+  root.setGeometry({0.0f, 0.0f, 400.0f, 20.0f});
+
+  // Revealing `b` is what actually triggers the pass under test: its geometry
+  // is genuinely new this time, so M3 lets it through, `b`'s
+  // onGeometryChanged() fires, and it removes `victim` from mid-arrange.  Does
+  // not crash and does not read past scratch_'s bounds: that is most of what
+  // this case is for.
+  b->setVisible(true);
+
+  CHECK_EQ(b->removals, 1);
+  CHECK_EQ(root.children().size(), std::size_t(3));
+  CHECK_EQ(box->itemCount(), std::size_t(3));
+
+  // The dirty flag the removal raised bought exactly the extra round M1
+  // guarantees, and that round re-gathers from the shorter list -- so the
+  // FINAL geometry is the converged, correct one: A, B, survivor, no gap
+  // where `victim` used to sit.
+  CHECK_NEAR(a->geometry().x(), 0.0f, kEps);
+  CHECK_NEAR(b->geometry().x(), 50.0f, kEps);
+  CHECK_NEAR(survivor->geometry().x(), 100.0f, kEps);
+
+  // Still usable afterwards -- a further real resize converges the same way.
+  root.setGeometry({0.0f, 0.0f, 500.0f, 20.0f});
+  CHECK_NEAR(survivor->geometry().x(), 100.0f, kEps);
+}
+
+GEEYOOU_TEST(removal, grid_layout_survives_a_sibling_removed_mid_arrange) {
+  Widget root;
+  geeyoou::GridLayout* grid = root.setLayout<geeyoou::GridLayout>();
+  grid->setSpacing(0.0f);
+
+  FixedSize* a = root.add<FixedSize>();
+  a->set(50.0f, 20.0f);
+  grid->addWidget(a, 0, 0);
+
+  // Same reason as the BoxLayout case above: hidden until armed, so it has
+  // not already settled into its final cell by the time the pass under test
+  // runs.
+  RemovesASiblingOnceGeometrySet* b = root.add<RemovesASiblingOnceGeometrySet>();
+  b->setVisible(false);
+  grid->addWidget(b, 0, 1);
+
+  FixedSize* victim = root.add<FixedSize>();  // (row 1, col 0) -- removed mid-pass
+  victim->set(50.0f, 20.0f);
+  grid->addWidget(victim, 1, 0);
+
+  FixedSize* survivor = root.add<FixedSize>();  // (row 1, col 1)
+  survivor->set(50.0f, 20.0f);
+  grid->addWidget(survivor, 1, 1);
+
+  b->arm(&root, victim);
+  root.setGeometry({0.0f, 0.0f, 100.0f, 40.0f});
+
+  // Revealing `b` triggers the pass under test.
+  b->setVisible(true);
+
+  CHECK_EQ(b->removals, 1);
+  CHECK_EQ(root.children().size(), std::size_t(3));
+
+  // GridLayout keeps declared cells rather than reindexing rows/columns, so
+  // the grid shape (2x2) is unchanged; only the widget that occupied (1,0)
+  // is gone.  What matters here is that the surviving cells still converge to
+  // sane, non-overlapping geometry rather than something built from a stale
+  // scratch slot.
+  CHECK_NEAR(a->geometry().x(), 0.0f, kEps);
+  CHECK_NEAR(a->geometry().y(), 0.0f, kEps);
+  CHECK_NEAR(b->geometry().x(), 50.0f, kEps);
+  CHECK_NEAR(b->geometry().y(), 0.0f, kEps);
+  CHECK_NEAR(survivor->geometry().x(), 50.0f, kEps);
+  CHECK_NEAR(survivor->geometry().y(), 20.0f, kEps);
+
+  // Still usable: a further resize converges the same way, with no leftover
+  // reference to the removed cell.
+  root.setGeometry({0.0f, 0.0f, 100.0f, 40.0f});
+  CHECK_NEAR(survivor->geometry().y(), 20.0f, kEps);
 }

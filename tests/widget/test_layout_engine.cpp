@@ -10,12 +10,19 @@
 //
 #include <algorithm>
 #include <cstddef>
+#include <cstdio>
+#include <cstdlib>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "framework/Test.hpp"
 #include "geeyoou/widget/Layout.hpp"
 #include "geeyoou/widget/Widget.hpp"
+
+#if defined(_MSC_VER)
+#include <crtdbg.h>
+#endif
 
 using geeyoou::Layout;
 using geeyoou::LayoutOverflow;
@@ -537,4 +544,240 @@ GEEYOOU_TEST(layout_engine, the_host_counter_returns_to_zero) {
   CHECK(!geeyoou::detail::layoutPassActive());
   CHECK_EQ(geeyoou::detail::currentLayoutHost(),
            static_cast<const Widget*>(nullptr));
+}
+
+// ============================================================= M2 / M4 ===
+//
+// Coverage gap the R2 handoff reported open (docs/iterations/02-layout-engine.md
+// section 10.4, items 1 and 2): the downward one-way assert and the pass-depth
+// ceiling had counters and recording paths, but no case had ever made either of
+// them fire.
+namespace {
+
+// --- M2: an arrange() that reaches past its own host DIRECT children -------
+//
+// Same subprocess shape as d7.destroying_the_signal_owner_is_caught_in_debug_
+// contained_in_release (test_d7_assert.cpp): the assert lives in
+// Widget::setGeometry under #ifndef NDEBUG, so hitting it aborts the process --
+// which is only observable from a PARENT that re-runs this executable as a
+// child and reads the child exit code and stderr back.
+constexpr const char* kM2Env = "GEEYOOU_M2_VIOLATION";
+
+bool envFlagOnM2(const char* name) {
+#ifdef _MSC_VER
+  std::size_t len = 0;
+  char buf[16] = {};
+  if (getenv_s(&len, buf, sizeof(buf), name) != 0) return false;
+  return len > 1 && buf[0] != '0';
+#else
+  const char* v = std::getenv(name);
+  return v && v[0] != '\0' && v[0] != '0';
+#endif
+}
+
+std::string selfPathM2() {
+#ifdef _MSC_VER
+  char* p = nullptr;
+  if (_get_pgmptr(&p) != 0 || !p) return {};
+  return p;
+#else
+  return {};
+#endif
+}
+
+// Violates ADR-R2-08 / the Layout.hpp structural rule 2 on purpose: instead of
+// placing children that belong directly to the host, it reaches one level
+// further down and setGeometry()s a GRANDCHILD.  That is exactly the mistake
+// M2 exists to catch -- a Layout that thinks it owns more of the tree than
+// the direct children of its host.
+class GrandchildReachingLayout : public Layout {
+ public:
+  SizeHint measure(const Widget&) const override { return SizeHint{}; }
+
+  LayoutOverflow arrange(Widget& host, const Rect& content) override {
+    // setLayout<L>() runs arrange() once immediately, with zero children --
+    // guard against that first, harmless call so only the REAL, populated
+    // pass triggers the violation below.
+    if (host.children().empty()) return LayoutOverflow{};
+    Widget& child = *host.children()[0];
+    if (child.children().empty()) return LayoutOverflow{};
+    Widget& grandchild = *child.children()[0];
+    grandchild.setGeometry(content);  // <-- the violation
+    return LayoutOverflow{};
+  }
+};
+
+int violateM2() {
+  Widget root;
+  GrandchildReachingLayout* lay = root.setLayout<GrandchildReachingLayout>();
+  (void)lay;
+  Widget* child = root.add<Widget>();
+  child->add<Widget>();
+  root.setGeometry({0.0f, 0.0f, 100.0f, 100.0f});  // arrange() runs; should abort in Debug
+  return 55;  // reached only where the assert was compiled out
+}
+
+}  // namespace
+
+GEEYOOU_TEST(layout_engine,
+             m2_reaching_past_direct_children_is_caught_in_debug) {
+  if (envFlagOnM2(kM2Env)) {
+    // --- child ---
+#if defined(_MSC_VER)
+    _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+    _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
+    _set_error_mode(_OUT_TO_STDERR);
+    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+#endif
+    std::fflush(stdout);
+    const int outcome = violateM2();
+    std::fflush(nullptr);
+    std::exit(outcome);
+  }
+
+  // --- parent ---
+  const std::string exe = selfPathM2();
+  REQUIRE(!exe.empty());
+
+  const std::string log = exe + ".m2.log";
+  const std::string cmd = "\"\"" + exe + "\" > \"" + log + "\" 2>&1\"";
+
+#ifdef _MSC_VER
+  REQUIRE(_putenv_s(kM2Env, "1") == 0);
+#endif
+  const int rc = std::system(cmd.c_str());
+#ifdef _MSC_VER
+  _putenv_s(kM2Env, "");
+#endif
+
+  std::string text;
+  std::FILE* f = nullptr;
+#ifdef _MSC_VER
+  if (fopen_s(&f, log.c_str(), "rb") != 0) f = nullptr;
+#else
+  f = std::fopen(log.c_str(), "rb");
+#endif
+  if (f) {
+    char buf[4096];
+    std::size_t n = 0;
+    while ((n = std::fread(buf, 1, sizeof(buf), f)) != 0) text.append(buf, n);
+    std::fclose(f);
+  }
+  std::remove(log.c_str());
+
+#ifdef NDEBUG
+  CHECK_EQ(rc, 55);
+  geeyoou::test::note(
+      "[note] layout_engine.m2: Release build compiles the M2 assert out -- "
+      "this guard is Debug-only by design, so the child only has to survive.");
+#else
+  CHECK_NE(rc, 0);
+  CHECK_NE(rc, 55);
+  const bool named =
+      text.find("Layout::arrange may only setGeometry on its host's direct "
+                "children") != std::string::npos;
+  if (!named) {
+    GEEYOOU_FAIL("child did not stop at the M2 assert, tail of its output: " +
+                 text.substr(text.size() > 400 ? text.size() - 400 : 0));
+  }
+#endif
+}
+
+// --- M4: the pass-depth ceiling ----------------------------------------------
+//
+// Needs a widget tree 64+ levels deep with a Layout at every level along the
+// path, so that Widget::runLayoutIfAny's synchronous recursion (arrange ->
+// setGeometry -> child runLayoutIfAny -> arrange -> ...) pushes g_layoutDepth
+// past kMaxTreeDepth.  Debug's add<T> asserts depth_+1 < kMaxTreeDepth, which
+// forbids building a tree that deep in the first place -- so this case is
+// Release-only, exactly as docs/iterations/02-layout-engine.md section 10.4
+// item 2 says it has to be.  Building the same chain in Debug would abort the
+// WHOLE test process on an unrelated widget-depth assert before a single
+// arrange() ran, which is worse than not covering M4 at all.
+namespace {
+
+class SingleChildLayout : public Layout {
+ public:
+  int arranges = 0;
+
+  SizeHint measure(const Widget&) const override { return SizeHint{}; }
+
+  LayoutOverflow arrange(Widget& host, const Rect& content) override {
+    ++arranges;
+    if (!host.children().empty()) host.children()[0]->setGeometry(content);
+    return LayoutOverflow{};
+  }
+};
+
+#if defined(NDEBUG)
+constexpr bool kCanBuildDeepTree = true;
+#else
+constexpr bool kCanBuildDeepTree = false;
+#endif
+
+// The case body, in its own function so the Debug configuration can DISCARD it
+// rather than skip past it.
+//
+// The early `return` this replaces left the whole rest of the case unreachable
+// whenever kCanBuildDeepTree was false, which /W4 reported as seventeen C4702s
+// on the Debug side of a two-configuration gate -- and a gate that is noisy on
+// one side is a gate nobody reads on either.  A discarded if-constexpr branch
+// is never code-generated, so there is nothing left to call unreachable.
+//
+// The parameter is named ctx_ because that is the name the CHECK macros pick
+// up; see framework/Test.hpp.
+void checkM4Ceiling([[maybe_unused]] geeyoou::test::Context& ctx_) {
+  constexpr int kChainLen = 80;  // > kMaxTreeDepth (64)
+  Widget root;
+  std::vector<Widget*> chain;
+  std::vector<SingleChildLayout*> layouts;
+  chain.push_back(&root);
+
+  Widget* cur = &root;
+  for (int i = 0; i < kChainLen; ++i) {
+    layouts.push_back(cur->setLayout<SingleChildLayout>());
+    Widget* next = cur->add<Widget>();
+    chain.push_back(next);
+    cur = next;
+  }
+
+  geeyoou::detail::resetLayoutDiagnostics();
+  CHECK_EQ(int(geeyoou::detail::layoutDiagnostics().depthExceeded), 0);
+
+  std::vector<int> before(layouts.size());
+  for (std::size_t i = 0; i < layouts.size(); ++i) before[i] = layouts[i]->arranges;
+
+  root.setGeometry({0.0f, 0.0f, 555.0f, 555.0f});
+
+  CHECK_EQ(int(geeyoou::detail::layoutDiagnostics().depthExceeded), 1);
+  CHECK_EQ(geeyoou::detail::layoutDiagnostics().lastDepthExceededHost,
+           static_cast<const Widget*>(chain[64]));
+
+  for (int i = 0; i < 64; ++i) {
+    CHECK_EQ(layouts[std::size_t(i)]->arranges, before[std::size_t(i)] + 1);
+  }
+  for (std::size_t i = 64; i < layouts.size(); ++i) {
+    CHECK_EQ(layouts[i]->arranges, before[i]);
+  }
+
+  CHECK(chain[64]->geometry() == Rect(0.0f, 0.0f, 555.0f, 555.0f));
+  CHECK(!(chain[65]->geometry() == Rect(0.0f, 0.0f, 555.0f, 555.0f)));
+
+  geeyoou::detail::resetLayoutDiagnostics();
+}
+
+}  // namespace
+
+GEEYOOU_TEST(layout_engine, m4_a_pass_that_nests_past_the_ceiling_is_recorded_not_fatal) {
+  if constexpr (kCanBuildDeepTree) {
+    checkM4Ceiling(ctx_);
+  } else {
+    geeyoou::test::note(
+        "[skip] layout_engine.m4_a_pass_that_nests_past_the_ceiling_is_recorded_not_fatal: "
+        "M4 needs 64+ nested Layout hosts; Debug add<T> kMaxTreeDepth assert would abort "
+        "tree construction itself first (docs/iterations/02-layout-engine.md section 10.4.2). "
+        "This case only runs in the Release-configured process.");
+  }
 }

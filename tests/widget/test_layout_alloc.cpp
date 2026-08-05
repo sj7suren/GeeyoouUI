@@ -30,11 +30,13 @@
 #include "framework/Test.hpp"
 #include "geeyoou/widget/BoxLayout.hpp"
 #include "geeyoou/widget/GridLayout.hpp"
+#include "geeyoou/widget/GroupBox.hpp"
 #include "geeyoou/widget/Label.hpp"
 #include "geeyoou/widget/Widget.hpp"
 
 using geeyoou::BoxLayout;
 using geeyoou::GridLayout;
+using geeyoou::GroupBox;
 using geeyoou::Label;
 using geeyoou::Size;
 using geeyoou::SizeHint;
@@ -279,6 +281,66 @@ GEEYOOU_TEST(layout_alloc, capacity_only_ever_grows) {
   for (int i = 0; i < 100; ++i) root.setGeometry(geometryFor(i));
   if constexpr (kStlAllocatesPerContainer) {
     noteSkipped("layout_alloc.capacity_only_ever_grows");
+  } else {
+    CHECK_EQ(guard.count(), std::uint64_t(0));
+    CHECK_EQ(guard.frees(), std::uint64_t(0));
+  }
+}
+
+
+// ============================================================ C5 gap ===
+//
+// GroupBox is the one widget in the library whose sizeHint() is NOT the base
+// class's naturalSize_ answer: Widget::sizeHint() forwards to layout_->
+// measure() when a layout is present (docs/iterations/02-layout-engine.md
+// section 7), and GroupBox::sizeHint() calls THAT and adds its frame on top.
+// A GroupBox sitting inside an outer BoxLayout therefore gets measure()d on
+// every single pass of the outer box -- the exact call the two "arrange
+// allocates nothing" cases above already cover for a bare host, but never for
+// one reached through this forwarding path.  If GroupBox::sizeHint() ever grew
+// a temporary (a vector, a string concatenation) on the way to composing its
+// answer, this is the case that would say so; the two above cannot, because
+// neither of them puts a GroupBox in the tree.
+GEEYOOU_TEST(layout_alloc, groupbox_measure_through_an_outer_box_allocates_nothing) {
+  Widget root;
+  BoxLayout* outer = root.setLayout<BoxLayout>(BoxLayout::Orientation::Vertical);
+  outer->setSpacing(6.0f);
+
+  GroupBox* panel = root.add<GroupBox>();
+  panel->setTitle("Parameters");
+  outer->addWidget(panel, 1);
+
+  GridLayout* inner = panel->setLayout<GridLayout>();
+  inner->setSpacing(4.0f);
+  inner->setMargins({0.0f, 0.0f, 0.0f, 0.0f});
+
+  FixedWidget* kids[4] = {};
+  for (int i = 0; i < 4; ++i) {
+    kids[i] = panel->add<FixedWidget>();
+    kids[i]->set({20.0f, 12.0f}, {40.0f + float(i), 20.0f});
+    inner->addWidget(kids[i], i / 2, i % 2);
+  }
+  inner->setColumnStretch(1, 1);
+
+  // Warm-up: first pass may allocate, and this is where GridLayout's and
+  // BoxLayout's scratch buffers reach the size they will keep.
+  root.setGeometry({0.0f, 0.0f, 400.0f, 300.0f});
+  // kids[1] lives in column 1, the one setColumnStretch(1, 1) made elastic --
+  // its width tracks whatever is left over after column 0, so unlike kids[0]
+  // it genuinely moves on nearly every one of the hundred geometries below.
+  // kids[0] would make this case pass for the wrong reason: M3 legitimately
+  // short-circuits it once column 0 settles, since a fixed, non-stretching
+  // column does not care how wide the window got.
+  const int settled = kids[1]->geometryChanges;
+  CHECK(settled > 0);
+
+  AllocGuard guard;
+  guard.reset();
+  for (int i = 0; i < 100; ++i) root.setGeometry(geometryFor(i));
+
+  CHECK_EQ(kids[1]->geometryChanges, settled + 100);
+  if constexpr (kStlAllocatesPerContainer) {
+    noteSkipped("layout_alloc.groupbox_measure_through_an_outer_box_allocates_nothing");
   } else {
     CHECK_EQ(guard.count(), std::uint64_t(0));
     CHECK_EQ(guard.frees(), std::uint64_t(0));

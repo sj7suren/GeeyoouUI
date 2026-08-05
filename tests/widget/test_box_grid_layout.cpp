@@ -610,3 +610,58 @@ GEEYOOU_TEST(hint, group_box_reports_its_own_layout_plus_its_frame) {
                              geeyoou::Theme::current().fontBody)
             .width);
 }
+
+
+// ============================================================ C4 gap ===
+//
+// The distribution has three regimes -- see BoxLayout::distribute -- and only
+// two had a dedicated case: "free <= 0" (too_little_room_clamps_at_the_minimum)
+// and "free covers every preferred, leftover by stretch"
+// (the_leftover_is_split_by_weight_and_the_remainder_is_placed).  The middle
+// one -- enough room for every item's MINIMUM but not for every item's
+// PREFERRED, so stage 1 squeezes everyone proportionally to how much they
+// still want -- had no case of its own.
+GEEYOOU_TEST(box, stage1_squeezes_proportionally_when_preferred_exceeds_free_space) {
+  Widget root;
+  BoxLayout* box = root.setLayout<BoxLayout>(BoxLayout::Orientation::Horizontal);
+  box->setSpacing(10.0f);  // two internal gaps -> 20px of separators
+
+  // Same minimum, different "want" (preferred - minimum): 80, 120, 160 --
+  // chosen so free space split proportionally lands on clean-ish numbers.
+  // Stretch is set to 1 on every item on purpose: stage 1 must consume ALL of
+  // the free space on its own here, leaving nothing for the stretch round to
+  // hand out, even though every item is nominally willing to take more.
+  FixedWidget* a = addFixed(root, {20.0f, 10.0f}, {100.0f, 10.0f});
+  FixedWidget* b = addFixed(root, {20.0f, 10.0f}, {140.0f, 10.0f});
+  FixedWidget* c = addFixed(root, {20.0f, 10.0f}, {180.0f, 10.0f});
+  box->addWidget(a, 1);
+  box->addWidget(b, 1);
+  box->addWidget(c, 1);
+
+  // free = avail - separators - sum(min) = 261 - 20 - 60 = 181, which is less
+  // than sum(want) = 80 + 120 + 160 = 360: exactly the "want > free" regime.
+  root.setGeometry({0.0f, 0.0f, 261.0f, 20.0f});
+
+  // share_i = floor(free * want_i / sum(want)):
+  //   a: floor(181 * 80  / 360) = 40  -> 20 + 40  = 60
+  //   b: floor(181 * 120 / 360) = 60  -> 20 + 60  = 80
+  //   c: floor(181 * 160 / 360) = 80  -> 20 + 80  = 100, +1 remainder (largest
+  //      want, ties to the last) = 101
+  CHECK_NEAR(a->geometry().width(), 60.0f, kEps);
+  CHECK_NEAR(b->geometry().width(), 80.0f, kEps);
+  CHECK_NEAR(c->geometry().width(), 101.0f, kEps);
+
+  CHECK_NEAR(a->geometry().x(), 0.0f, kEps);
+  CHECK_NEAR(b->geometry().x(), 70.0f, kEps);    // 60 + 10 spacing
+  CHECK_NEAR(c->geometry().x(), 160.0f, kEps);   // 70 + 80 + 10 spacing
+
+  // Every minimum was satisfied -- this is a squeeze BELOW preferred, not a
+  // shortfall below minimum -- so nothing is reported as clipped.
+  CHECK(!root.lastLayoutOverflow().any());
+
+  // None of them ever reached their preferred size, which is the whole point
+  // of the regime: growth stopped inside [min, preferred), never past it.
+  CHECK_LT(a->geometry().width(), 100.0f);
+  CHECK_LT(b->geometry().width(), 140.0f);
+  CHECK_LT(c->geometry().width(), 180.0f);
+}
