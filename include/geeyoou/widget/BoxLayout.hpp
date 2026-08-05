@@ -78,6 +78,13 @@ class BoxLayout final : public Layout {
   // clear() and resize() it, so after the first pass at a given item count they
   // allocate nothing at all.
   //
+  // ONE buffer shared by the two of them is only safe because Layout::measureFor
+  // refuses to re-enter a layout that is already measuring or arranging.  It
+  // holds exactly the item count of the pass that filled it and not one float
+  // more, so both loops that walk it bound themselves by ITS length as well as
+  // by items_.size(): a handler that appends an item mid-pass moves the second
+  // and not the first.
+  //
   //   [0] size along the box's axis, grown in place by spread()
   //   [1] stretch weight
   //   [2] maximum along the axis

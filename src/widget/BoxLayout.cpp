@@ -113,8 +113,14 @@ BoxLayout::Totals BoxLayout::gather(const Widget& host) const {
   scratch_.resize(n * kStride, 0.0f);
 
   bool prevWidget = false;
-  for (std::size_t i = 0; i < n; ++i) {
-    const Item& it = items_[i];
+  // Two bounds, because sizeHint() below is an application-supplied override
+  // and may do anything the public API allows -- including removing a child,
+  // which shortens items_ through onChildRemoved.  `n` is what scratch_ was
+  // sized for; items_.size() is what the list holds right now.
+  for (std::size_t i = 0; i < n && i < items_.size(); ++i) {
+    // BY VALUE.  A reference into items_ does not survive the same handler
+    // appending to it, and eight bytes is not worth a dangling one.
+    const Item it = items_[i];
     float* track = &scratch_[i * kStride];
 
     if (it.childIndex == kNoChild) {
@@ -140,6 +146,11 @@ BoxLayout::Totals BoxLayout::gather(const Widget& host) const {
     }
 
     const SizeHint h = c->sizeHint();
+    // Re-taken AFTER the call: `track` above is only still valid because
+    // Layout::measureFor refuses to re-enter this function and refill scratch_,
+    // and a pointer whose validity depends on a latch two files away is not one
+    // to keep across a virtual call.
+    track = &scratch_[i * kStride];
     const float mn = mainOf(h.min);
     const float pf = (std::max)(mainOf(h.preferred), mn);
     const float mx = (std::max)(mainOf(h.max), pf);
@@ -172,7 +183,10 @@ BoxLayout::Totals BoxLayout::gather(const Widget& host) const {
 // same numbers in always produce the same pixels out, so an item cannot gain a
 // pixel one frame and lose it the next as a neighbour is nudged.
 float BoxLayout::spread(float free, bool toPreferred) const {
-  const std::size_t n = items_.size();
+  // The number of TRACKS, taken from the buffer being indexed rather than from
+  // items_ -- gather() sized it to the item count of this pass, and by the time
+  // distribute() runs, a sizeHint() override may already have moved that count.
+  const std::size_t n = scratch_.size() / kStride;
   if (free <= 0.0f) return 0.0f;
 
   float totalWeight = 0.0f;
@@ -284,16 +298,28 @@ LayoutOverflow BoxLayout::arrange(Widget& host, const Rect& content) {
   float pos = horizontal ? content.x() : content.y();
   const float end = pos + avail;
 
-  // items_.size() is re-read every step: setGeometry below runs application
-  // code, and a handler that removes a child takes an item out of this list
-  // through onChildRemoved.  scratch_ keeps the length it was given at the top
-  // of the pass, so the indices below stay in range; the geometry of whatever
-  // shifted down is then one pass out of date, which the dirty flag that same
-  // removal raised has already scheduled a re-run to fix.
+  // TWO bounds, and both of them are load-bearing.  setGeometry below runs
+  // application code, and that code may move the item count in EITHER
+  // direction through the ordinary public API:
+  //
+  //   * it shrinks when a handler removes a child (onChildRemoved compacts
+  //     items_), which is what items_.size() catches;
+  //   * it GROWS when a handler does host->add<T>() + box->addWidget(), which
+  //     is what `n` catches -- scratch_ was sized for the count this pass
+  //     started with and holds no spare room at all, so indexing it by an item
+  //     that arrived since is a heap-buffer-overflow.
+  //
+  // The second half is what the previous note here got wrong: "scratch_ keeps
+  // the length it was given, so the indices stay in range" is only true while
+  // the list is shrinking.  Items that arrive mid-pass are simply not placed
+  // this round; the dirty flag their addWidget raised has already scheduled the
+  // re-run that places them, and the same is true of whatever shifted down.
+  const std::size_t n = scratch_.size() / kStride;
   bool prevWidget = false;
-  for (std::size_t i = 0; i < items_.size(); ++i) {
-    const Item& it = items_[i];
-    const float size = scratch_[i * kStride];
+  for (std::size_t i = 0; i < n && i < items_.size(); ++i) {
+    const Item it = items_[i];  // by value: setGeometry may reallocate items_
+    const float* track = &scratch_[i * kStride];
+    const float size = track[0];
 
     if (it.childIndex == kNoChild) {  // a spacer takes room and nothing else
       pos += size;
@@ -304,7 +330,6 @@ LayoutOverflow BoxLayout::arrange(Widget& host, const Rect& content) {
     if (!c) continue;  // hidden, or removed by a handler earlier in this pass
 
     if (prevWidget) pos += spacing();
-    const float* track = &scratch_[i * kStride];
     const float cross = clampf(crossAvail, track[4], track[5]);
 
     // "Did not fit", on either axis.  The cross size is clamped UP to the
@@ -315,6 +340,11 @@ LayoutOverflow BoxLayout::arrange(Widget& host, const Rect& content) {
 
     c->setGeometry(horizontal ? Rect{pos, crossStart, size, cross}
                               : Rect{crossStart, pos, cross, size});
+    // The setGeometry above may have destroyed the host, or replaced this
+    // layout on it.  `host` is a dangling reference from here on and so is
+    // every member -- the object itself only outlives the host because Widget
+    // parks it, which buys the chance to notice, not the right to carry on.
+    if (!hostAlive()) return {};
     pos += size;
     prevWidget = true;
   }
