@@ -31,6 +31,16 @@ class GroupBox : public Widget {
 
  protected:
   void onPaint(Painter& p, const Rect& dirtyLocal) override;
+  // The library's only override of M-1's door, and section 11.4 of
+  // docs/iterations/02-layout-engine.md carries it as such.  SAFE AS WRITTEN,
+  // and the reason is checkable rather than a judgement: GroupBox::contentRect
+  // contains no door at all -- it reads title_, calls localRect() (non-virtual,
+  // reads geometry_) and does arithmetic, so it matches none of P1, P2 or P3
+  // and cannot reach application code.
+  //
+  // That is a property of THIS override and of nothing else, which is why the
+  // caller guards anyway: Widget::contentRect is written against the hook, not
+  // against the one implementation of it that ships today.
   Rect layoutRect() const override { return contentRect(); }
 
  private:
