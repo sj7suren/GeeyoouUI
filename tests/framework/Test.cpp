@@ -25,6 +25,7 @@
 // function-local static would introduce exactly the chicken-and-egg this avoids.
 namespace {
 std::atomic<std::uint64_t> g_allocCount{0};
+std::atomic<std::uint64_t> g_freeCount{0};
 
 void* gyAllocate(std::size_t bytes) {
   g_allocCount.fetch_add(1, std::memory_order_relaxed);
@@ -39,6 +40,22 @@ void* gyAllocateAligned(std::size_t bytes, std::size_t align) {
   void* p = _aligned_malloc(bytes != 0 ? bytes : 1, align);
   if (!p) throw std::bad_alloc();
   return p;
+}
+
+// delete(nullptr) is legal and extremely common (every unique_ptr that was
+// moved from ends in one), so it must not register as a free -- otherwise the
+// zero-free gates below would be measuring how many empty pointers went out of
+// scope.
+void gyFree(void* p) {
+  if (!p) return;
+  g_freeCount.fetch_add(1, std::memory_order_relaxed);
+  std::free(p);
+}
+
+void gyFreeAligned(void* p) {
+  if (!p) return;
+  g_freeCount.fetch_add(1, std::memory_order_relaxed);
+  _aligned_free(p);
 }
 }  // namespace
 
@@ -60,16 +77,16 @@ void* operator new[](std::size_t n, std::align_val_t a) {
   return gyAllocateAligned(n, static_cast<std::size_t>(a));
 }
 
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete[](void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
-void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
-void operator delete(void* p, const std::nothrow_t&) noexcept { std::free(p); }
-void operator delete[](void* p, const std::nothrow_t&) noexcept { std::free(p); }
-void operator delete(void* p, std::align_val_t) noexcept { _aligned_free(p); }
-void operator delete[](void* p, std::align_val_t) noexcept { _aligned_free(p); }
-void operator delete(void* p, std::size_t, std::align_val_t) noexcept { _aligned_free(p); }
-void operator delete[](void* p, std::size_t, std::align_val_t) noexcept { _aligned_free(p); }
+void operator delete(void* p) noexcept { gyFree(p); }
+void operator delete[](void* p) noexcept { gyFree(p); }
+void operator delete(void* p, std::size_t) noexcept { gyFree(p); }
+void operator delete[](void* p, std::size_t) noexcept { gyFree(p); }
+void operator delete(void* p, const std::nothrow_t&) noexcept { gyFree(p); }
+void operator delete[](void* p, const std::nothrow_t&) noexcept { gyFree(p); }
+void operator delete(void* p, std::align_val_t) noexcept { gyFreeAligned(p); }
+void operator delete[](void* p, std::align_val_t) noexcept { gyFreeAligned(p); }
+void operator delete(void* p, std::size_t, std::align_val_t) noexcept { gyFreeAligned(p); }
+void operator delete[](void* p, std::size_t, std::align_val_t) noexcept { gyFreeAligned(p); }
 
 namespace geeyoou::test {
 namespace {
@@ -88,6 +105,10 @@ const char* g_invalidReason = nullptr;
 
 std::uint64_t allocCount() {
   return g_allocCount.load(std::memory_order_relaxed);
+}
+
+std::uint64_t freeCount() {
+  return g_freeCount.load(std::memory_order_relaxed);
 }
 
 Registrar::Registrar(const char* s, const char* n, TestFn f)

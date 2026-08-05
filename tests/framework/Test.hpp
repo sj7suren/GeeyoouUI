@@ -92,15 +92,28 @@ std::string toText(const T& v) {
 // std::vector make inside the library under test.
 std::uint64_t allocCount();
 
+// ...and every FREE.  Counting only allocations would call a buffer that is
+// released and immediately reallocated at the same size "free", which is
+// exactly the shape of the mistake the never-shrunk scratch idiom exists to
+// prevent: a vector that is shrink_to_fit'd and regrown allocates once per
+// pass while the allocation count of a single pass still reads zero if you
+// only look at the delta of a balanced pair.
+std::uint64_t freeCount();
+
 class AllocGuard {
  public:
-  AllocGuard() : start_(allocCount()) {}
+  AllocGuard() : start_(allocCount()), freeStart_(freeCount()) {}
 
   std::uint64_t count() const { return allocCount() - start_; }
-  void reset() { start_ = allocCount(); }
+  std::uint64_t frees() const { return freeCount() - freeStart_; }
+  void reset() {
+    start_ = allocCount();
+    freeStart_ = freeCount();
+  }
 
  private:
   std::uint64_t start_;
+  std::uint64_t freeStart_;
 };
 
 }  // namespace geeyoou::test
