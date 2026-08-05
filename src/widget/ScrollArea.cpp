@@ -18,7 +18,60 @@ ScrollArea::ScrollArea() {
   content_->setGeometry({0.0f, 0.0f, 0.0f, 0.0f});
 }
 
+// --- E15: what this widget answers once its parts have been taken away -------
+//
+// REM3-RES-1's other half.  A guard gets ONE FRAME home safely and does not
+// repair object state, so from E1 until E14 a ScrollArea whose content had been
+// removed kept the freed pointer and died on the next repaint -- with no
+// application call in between, which is what put this outside what any frame
+// guard can reach.
+//
+// THE HOOK IS THREE LINES AND MAY BE NOTHING MORE (REM3-G9).  It runs from
+// inside announceDetached's pre-order walk, over a tree that is half detached
+// and has not been unlinked: an update(), a signal, a removal or any virtual
+// call from here re-enters the door that walk just closed.  Comparing pointers
+// is safe by construction -- `node`, this widget and the whole departing
+// subtree are all alive at this instant, which is exactly why the broadcast is
+// placed where it is.
+//
+// TWO TESTS, NOT ONE.  Removing the viewport announces the content too (it is a
+// node of the same departing subtree, and the walk is per node), so both arms
+// fire on that removal; removing the content alone fires only the first.
+void ScrollArea::onDescendantDetached(Widget* node) {
+  if (node == content_) content_ = nullptr;
+  if (node == viewport_) viewport_ = nullptr;
+}
+
+// WHAT THE DEGRADED ANSWERS ARE, and why they are not a self-heal.
+//
+// Rebuilding the viewport and the content here would be easy and would be
+// WRONG: the application took its own content out, and silently standing a
+// different widget in its place turns "this crashes" into "content() quietly
+// answers with something the application never put there" -- the same trade
+// this whole remediation exists to refuse (ADR-R2-04's shape, one level up).
+// So the degradation is PERMANENT, and it is the correct answer rather than a
+// regrettable one.  Putting content back is a missing API, registered as
+// ScrollArea::setContentWidget and deliberately out of this round.
+//
+// The table (section 11.12): content() -> nullptr, contentSize() -> {0,0},
+// scrollOffset()/maxScroll() -> {0,0}, viewportSize() -> localRect().size(),
+// both bars false, the four mutators return without writing any geometry,
+// onPaint still draws the frame and no track or thumb, and no scroll input is
+// accepted.
+//
+// MOST OF THAT FALLS OUT OF ONE GUARD rather than being written twice.  bars()
+// answering "no bars" makes viewportSize() the whole local rect, which makes
+// every bar and thumb rect empty, which makes onPaint's `bar` lambda return at
+// its first line and maxScroll() {0,0} arithmetically.  Only the five entry
+// points that DEREFERENCE a member need one of their own, and they are the five
+// below.
 void ScrollArea::setContentSize(Size size) {
+  // E15.  Before the cursors, not after: the guards below are for a frame that
+  // has something to guard, and DeathWatch on a null member is a caller bug by
+  // its own contract (Widget.hpp) -- "a null member is the site's own null
+  // check to make, not something a guard may impersonate".  This is that check.
+  if (!hasParts()) return;
+
   // CP-C1 and CP-C2 (docs/iterations/02-layout-engine.md section 11.3).  TWO
   // doors in five lines, and everything after either of them is reached through
   // one of three pointers:
@@ -104,7 +157,15 @@ SizeHint ScrollArea::sizeHint() const {
   return h;
 }
 
-Point ScrollArea::scrollOffset() const { return viewport_->contentOffset(); }
+// {0,0} rather than the offset the viewport still happened to carry: an area
+// with no content cannot be scrolled anywhere, so "where is it scrolled to" has
+// exactly one honest answer.  Guarded on BOTH members, not just the one it
+// dereferences -- an offset that survives its content is a number nothing can
+// be done with, and scrollTo() below refuses to change it.
+Point ScrollArea::scrollOffset() const {
+  if (!hasParts()) return {0.0f, 0.0f};
+  return viewport_->contentOffset();
+}
 
 Point ScrollArea::maxScroll() const {
   const Size vp = viewportSize();
@@ -113,6 +174,12 @@ Point ScrollArea::maxScroll() const {
 }
 
 void ScrollArea::scrollTo(Point offset) {
+  // E15.  maxScroll() and scrollOffset() would both answer {0,0} on their own,
+  // so the clamp below would already refuse to move -- but the write goes
+  // through viewport_, and a method that reaches a member pointer states its
+  // own precondition rather than inheriting one from two callees.
+  if (!hasParts()) return;
+
   const Point m = maxScroll();
   const Point clamped{std::clamp(offset.x, 0.0f, m.x),
                       std::clamp(offset.y, 0.0f, m.y)};
@@ -129,6 +196,10 @@ void ScrollArea::scrollBy(float dx, float dy) {
 }
 
 void ScrollArea::ensureVisible(const Rect& r) {
+  // E15.  "Reveal this rectangle" has no meaning without a content to reveal it
+  // in; the alternative is scrolling an empty viewport to an arbitrary place.
+  if (!hasParts()) return;
+
   const Size vp = viewportSize();
   Point o = scrollOffset();
   if (r.top() < o.y) o.y = r.top();
@@ -163,6 +234,18 @@ void ScrollArea::onGeometryChanged() { relayout(); }
 // own can bring a vertical one with it, and that question is asked once.
 // Vertical still wins the tie, which is the right bias for lists.
 void ScrollArea::bars(bool& vbar, bool& hbar) const {
+  // E15, AND THE ONE GUARD THE PAINT PATH ACTUALLY NEEDS.  Everything drawn --
+  // both tracks, both thumbs -- is derived from this answer, so "no parts, no
+  // bars" here is what keeps onPaint free of null tests and what makes
+  // viewportSize() below the whole local rect.  It is also the frame that
+  // matters: the repaint after a removal needs no application call to happen,
+  // which is what put this defect outside every frame guard.
+  if (!hasParts()) {
+    vbar = false;
+    hbar = false;
+    return;
+  }
+
   const Rect r = localRect();
   const Size cs = contentSize();
   vbar = cs.height > r.height();
@@ -194,6 +277,13 @@ Size ScrollArea::viewportSize() const {
 }
 
 void ScrollArea::relayout() {
+  // E15.  Both arms below write geometry THROUGH the two members -- the branch
+  // test itself is `content_->layout()` -- so this is the precondition of the
+  // whole function rather than of one path.  Returning here is also what makes
+  // "the area kept the size it had" true after a removal: nothing is placed,
+  // because there is nothing left to place.
+  if (!hasParts()) return;
+
   // A laid-out page grows with the window; a hand-placed one does not.
   //
   // Without this the layout engine stops at the page's edge: the controls
@@ -340,6 +430,13 @@ void ScrollArea::onPaint(Painter& p, const Rect&) {
 // ------------------------------------------------------------------ input ---
 void ScrollArea::onMouse(const MouseEvent& e) {
   if (!isEffectivelyEnabled()) return;
+  // E15.  No content, no scrolling, and therefore NO ACCEPT: an area that
+  // swallowed the wheel and then did nothing with it would stop the event
+  // bubbling to whatever encloses it, so an operator's wheel would die on a
+  // widget that has nothing to show.  Refusing lets the parent scroll instead.
+  // The stale hover flags this leaves behind cannot be seen: both bar rects are
+  // empty, so nothing that reads them is drawn.
+  if (!hasParts()) return;
 
   switch (e.action) {
     case MouseAction::Wheel:
@@ -430,6 +527,9 @@ void ScrollArea::onMouse(const MouseEvent& e) {
 
 void ScrollArea::onKey(const KeyEvent& e) {
   if (!e.pressed) return;
+  // E15, same reason as onMouse: PageDown on an emptied area belongs to
+  // whatever encloses it, not to a scroll area with nothing to scroll.
+  if (!hasParts()) return;
   const Size vp = viewportSize();
   switch (e.key) {
     case Key::Up:       scrollBy(0.0f, -step_); e.accept(); break;
