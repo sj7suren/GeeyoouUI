@@ -60,6 +60,7 @@ using geeyoou::ScrollArea;
 using geeyoou::Size;
 using geeyoou::SizeHint;
 using geeyoou::Widget;
+using geeyoou::WindowHeader;
 
 namespace {
 
@@ -456,6 +457,67 @@ GEEYOOU_TEST(detach_notify, an_appwindow_that_lost_its_content_lays_out_and_pain
   win.setHeaderVisible(false);
   win.setBorderVisible(false);
   CHECK_EQ(win.content(), static_cast<Widget*>(nullptr));
+}
+
+// E15's own blast radius, closed one round late.  header_ could not be null
+// before E15 -- it was assigned in the constructor and never written again --
+// so this slot dereferenced it unconditionally and was right to.  E15 made the
+// member nullable and did not revisit the slot, leaving a null dereference on a
+// path an application reaches BY PRESSING THE MAXIMISE BUTTON.
+//
+// Degrading from a dangling pointer to a null one is an improvement (a
+// deterministic crash beats a use-after-free), but "crashes every time you
+// maximise" is not a resting state.
+//
+// This case goes RED without the null test: not a sanitiser report, a straight
+// access violation, so it is visible on all three legs rather than just the
+// ASan one -- unlike the rest of this file.
+GEEYOOU_TEST(detach_notify, an_appwindow_that_lost_its_header_survives_a_maximize_change) {
+  AppWindow win("geeyoou detach notify", 400, 300);
+  REQUIRE(win.header() != nullptr);
+  REQUIRE(win.content() != nullptr);
+
+  // Control group FIRST, so the guard cannot pass by turning the slot into a
+  // no-op: with a header present the state still tracks.  maximizedChanged is
+  // emitted here exactly as the platform emits it (Window.cpp's
+  // onWindowStateChanged hook is one line: maximizedChanged.emit(isMaximized())),
+  // which keeps the case free of a real window-manager round trip.
+  win.maximizedChanged.emit(true);
+  CHECK(win.header()->isMaximized());
+  win.maximizedChanged.emit(false);
+  CHECK(!win.header()->isMaximized());
+
+  const Rect contentBefore = win.content()->geometry();
+
+  // Take the title bar out of the tree.  header() answers nullptr from here on.
+  win.removeChild(win.header());
+  CHECK_EQ(win.header(), static_cast<WindowHeader*>(nullptr));
+
+  // THE READ THAT USED TO CRASH.  Both edges, because the slot is not
+  // symmetric-by-construction and a guard that only covered one of them would
+  // still leave the other live.
+  win.maximizedChanged.emit(true);
+  win.maximizedChanged.emit(false);
+
+  // Nothing was rebuilt -- REM3-G9 / the no-self-heal rule.
+  CHECK_EQ(win.header(), static_cast<WindowHeader*>(nullptr));
+
+  // And relayout() stayed at its first line rather than half-laying-out a
+  // window with no header: the content area keeps the geometry it had.  The
+  // values are CONSUMED, per the file header.
+  const Rect contentAfter = win.content()->geometry();
+  CHECK_NEAR(contentAfter.x(), contentBefore.x(), kEps);
+  CHECK_NEAR(contentAfter.y(), contentBefore.y(), kEps);
+  CHECK_NEAR(contentAfter.width(), contentBefore.width(), kEps);
+  CHECK_NEAR(contentAfter.height(), contentBefore.height(), kEps);
+
+  // The window still paints, three times, with no header in it.
+  PaintRig rig;
+  REQUIRE(rig.valid());
+  REQUIRE(rig.once(win));
+  REQUIRE(rig.once(win));
+  REQUIRE(rig.once(win));
+  CHECK_EQ(win.header(), static_cast<WindowHeader*>(nullptr));
 }
 
 // ============================================== B7: the member re-read branches ===
