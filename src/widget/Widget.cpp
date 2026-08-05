@@ -40,7 +40,7 @@ static_assert(sizeof(Widget) <= sizeof(WidgetSizeBeforeR2) + 16,
 
 // --- in-flight frames a widget can die underneath ----------------------------
 //
-// THREE places in this file hand control to application code and then carry on
+// FOUR places in this file hand control to application code and then carry on
 // touching the widget they were standing on:
 //
 //   * dispatchMouse/dispatchKey walk from the target widget up to the root,
@@ -48,7 +48,10 @@ static_assert(sizeof(Widget) <= sizeof(WidgetSizeBeforeR2) + 16,
 //   * setGeometry calls onGeometryChanged -- AppWindow::relayout emits
 //     contentResized from inside one -- and then reads visible_ and repaints;
 //   * runLayoutIfAny calls Layout::arrange, which calls setGeometry on every
-//     child, and then writes the pass result back.
+//     child, and then writes the pass result back;
+//   * takeChild announces the departing subtree -- which closes a departing
+//     popup and emits popupClosed -- and then goes on reading the child list of
+//     the widget it is removing FROM.  REM3-RES-4; see announceDetached.
 //
 // Application code may destroy widgets from any of them (contract D7 in
 // core/Signal.hpp lets a slot destroy other objects), so every one of those
@@ -68,7 +71,7 @@ static_assert(sizeof(Widget) <= sizeof(WidgetSizeBeforeR2) + 16,
 // (docs/architecture.md section 3.4), and a TLS lookup on every mouse move and
 // every setGeometry would be paid to describe a case that cannot happen.
 //
-// ONE mechanism written once, three lists: a second hand-rolled copy of this
+// ONE mechanism written once, four lists: a second hand-rolled copy of this
 // pattern is a second place to forget a check.
 struct LiveCursor {
   Widget* node = nullptr;
@@ -78,6 +81,8 @@ struct LiveCursor {
 LiveCursor* g_bubbles = nullptr;      // dispatchMouse / dispatchKey
 LiveCursor* g_geometries = nullptr;   // setGeometry, across onGeometryChanged
 LiveCursor* g_layouts = nullptr;      // runLayoutIfAny, across arrange
+LiveCursor* g_detaches = nullptr;     // takeChild / announceDetached, across
+                                      // Window::widgetDetached
 std::uint32_t g_layoutDepth = 0;
 
 template <LiveCursor*& List>
@@ -104,6 +109,29 @@ class LiveGuard {
 
 using BubbleGuard = LiveGuard<g_bubbles>;
 using GeometryGuard = LiveGuard<g_geometries>;
+
+// A fourth LIST rather than a fourth use of one of the three above, because
+// what cancels a cursor is as much a part of its meaning as what reads it, and
+// none of the existing three answers the removal path's question -- "is the
+// widget I am removing FROM still alive?":
+//
+//   * g_bubbles and g_geometries are cancelled by announceDetached for every
+//     node that is merely DETACHED.  A widget being moved between two
+//     containers is perfectly alive, so a takeChild standing on it would hand
+//     back nullptr and leave the child attached -- a degradation reported for a
+//     host that never died.
+//   * g_layouts has two readers besides its own guards: detail::
+//     layoutPassActive()/currentLayoutHost(), and markLayoutDirty's "a pass is
+//     already running, do not start another".  A cursor parked there for the
+//     duration of an announcement would tell the whole engine a layout pass is
+//     in progress, and the re-layout the removal itself asks for -- childRemoved
+//     -> markLayoutDirty -- would be swallowed by the very check that exists to
+//     stop re-entrant passes.  That is the frozen-subtree failure the comment in
+//     announceDetached below already records once.
+//
+// g_detaches is cancelled by ~Widget and by nothing else, which is exactly
+// "dead, not merely detached".
+using DetachGuard = LiveGuard<g_detaches>;
 
 // Cancels every cursor in `list` standing on `doomed`.
 void cancelOn(LiveCursor* list, const Widget* doomed) {
@@ -233,6 +261,12 @@ bool stillAChild(const Widget& parent, const Widget* w, std::size_t& hint) {
 // popup, which emits popupClosed -- and contract D7 lets a slot destroy other
 // objects.  Two consequences, and both cost a re-check rather than a copy:
 //
+//   * `parent` itself may be gone when widgetDetached returns -- REM3-RES-4.  A
+//     slot may remove the widget this announcement is walking the child list
+//     OF, and every check below starts by reading that list.  It is the same
+//     hazard as the one above, one level up, and it is the reason `parent` is
+//     taken by non-const reference: the liveness cursor is a Widget*, and the
+//     alternative was a const_cast at the one place that must not be casual.
 //   * `node` itself may be gone when widgetDetached returns (a slot is entitled
 //     to removeChild(node) from wherever it is parented).  Everything below
 //     dereferences it, so it is proved to still be in `parent` first.
@@ -242,7 +276,7 @@ bool stillAChild(const Widget& parent, const Widget* w, std::size_t& hint) {
 //     skips a whole subtree -- whose nodes keep the window's focus/hover/grab
 //     pointers aimed at memory that is about to be freed.  So the list is
 //     snapshotted and each entry re-checked against the live one.
-void announceDetached(const Widget& parent, Widget* node, std::size_t nodeHint,
+void announceDetached(Widget& parent, Widget* node, std::size_t nodeHint,
                       Window* win) {
   cancelOn(g_bubbles, node);
   cancelOn(g_geometries, node);
@@ -260,7 +294,15 @@ void announceDetached(const Widget& parent, Widget* node, std::size_t nodeHint,
   // subtree's geometry is frozen for the rest of the process.  takeChild() from
   // inside a layout pass is ordinary application code (a page moving a panel
   // between two containers on a resize), and it made the panel a picture.
+  //
+  // The cursor on `parent`, on the other hand, is taken here and nowhere else:
+  // it is this frame's own, it covers the one call below that runs application
+  // code, and the check is the statement immediately after that call.  REM3-G3.
+  DetachGuard host(&parent);
   if (win) win->widgetDetached(node);
+  // Order matters: `parent` is dereferenced by everything after this, the
+  // liveness test dereferences nothing, so it comes first.
+  if (!host.alive()) return;
   if (!stillAChild(parent, node, nodeHint)) return;
   if (node->children().empty()) return;  // the common case: no snapshot, no allocation
 
@@ -269,6 +311,11 @@ void announceDetached(const Widget& parent, Widget* node, std::size_t nodeHint,
   for (const std::unique_ptr<Widget>& c : node->children()) kids.push_back(c.get());
 
   for (std::size_t i = 0; i < kids.size(); ++i) {
+    // Announcing a sibling can take `parent` away -- the recursive call below
+    // reaches the same widgetDetached, and the slot behind it is under no
+    // obligation to stop at this subtree.  Asked before the line under it,
+    // which reads parent.children().
+    if (!host.alive()) return;
     // Announcing a sibling can take `node` away too -- it is a legal thing for a
     // slot to do, and node->children() below would then be a read of freed
     // memory.
@@ -294,6 +341,10 @@ Widget::~Widget() {
   // on this widget.
   cancelOn(g_geometries, this);
   cancelOn(g_layouts, this);
+  // ...and for a removal standing on this widget as the PARENT it is removing
+  // from.  Here rather than in announceDetached on purpose: a detached widget
+  // still owns its children and its takeChild is still entitled to finish.
+  cancelOn(g_detaches, this);
 
   if (layout_) {
     --detail::g_layoutHosts;
@@ -314,6 +365,23 @@ Widget::~Widget() {
   }
 }
 
+// DEGRADED RESULT, and what it means (ADR-R2-04: record, do not abort).
+//
+// The announcement below runs application code, and a slot may destroy THIS
+// widget -- removing an ancestor of it is enough, and is a legal thing for a
+// slot to do (D7 forbids only destroying the signal's own owner).  When that
+// happens `this` is freed while this call is still on its stack, and everything
+// after the announcement -- the index lookup, the vector erase, childRemoved --
+// is a write into freed memory.  REM3-RES-4, the fifth instance of this family
+// and the first one in the core.
+//
+// So: if `this` did not survive the announcement, takeChild returns nullptr and
+// touches NOTHING -- no member of `this`, and not `child` either.  Both are
+// already gone: `child` was in the vector `this` owns, so it was destroyed with
+// it, which also means there is nothing left that the caller could have been
+// given ownership of.  The nullptr is therefore not a lost result, it is the
+// only honest description of the situation, and it is the same nullptr this
+// function already returns when a slot removed `child` first.
 std::unique_ptr<Widget> Widget::takeChild(Widget* child) {
   if (!child) return nullptr;
   const std::size_t hint = indexOfChild(children_, child);
@@ -323,7 +391,16 @@ std::unique_ptr<Widget> Widget::takeChild(Widget* child) {
   // maps through the parent chain to find the Window it must report damage to.
   if (child->visible_) child->update();
 
-  announceDetached(*this, child, hint, window());
+  {
+    // REM3-G3: the check goes immediately after the door, inside the scope that
+    // holds the cursor.  Two cursors on this widget end up on g_detaches for
+    // this call -- this one and announceDetached's own -- and that is what the
+    // list is for: the callee's covers the callee's frame and dies with it,
+    // this one covers the rest of this function.
+    DetachGuard alive(this);
+    announceDetached(*this, child, hint, window());
+    if (!alive.alive()) return nullptr;  // freed under us -- see above
+  }
 
   // Re-found rather than reused: announceDetached can run popupClosed slots,
   // and one of those may already have removed `child` -- or a sibling ahead of
@@ -346,11 +423,18 @@ void Widget::removeChild(Widget* child) {
 }
 
 void Widget::clearChildren() {
+  // The SAME hazard takeChild degrades on, one frame up and with no result to
+  // degrade: removeChild announces, the announcement runs application code, and
+  // a slot may destroy this widget.  Every line of the loop below re-reads
+  // children_, so takeChild returning nullptr safely is not enough on its own --
+  // this frame has to be told too.  REM3-RES-4.
+  DetachGuard alive(this);
   // Back to front: reverse order of construction, and no element ever has to be
   // shifted down the vector.
   while (!children_.empty()) {
     const std::size_t before = children_.size();
     removeChild(children_.back().get());
+    if (!alive.alive()) return;  // freed under us -- children_ included
     // A detach handler may remove children itself, which is fine; what it must
     // not be able to do is grow the list back faster than we drain it.  Bailing
     // out beats spinning forever.
