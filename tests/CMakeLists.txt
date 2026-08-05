@@ -23,6 +23,7 @@ add_executable(geeyoou_tests
   widget/test_layout_alloc.cpp
   widget/test_size_hints.cpp
   widget/test_showcase_pages.cpp
+  widget/test_icon_gallery.cpp
   widget/test_r2_safety.cpp
   widget/test_r2_remediation.cpp
   widget/test_rem3_doors.cpp
