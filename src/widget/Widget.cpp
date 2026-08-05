@@ -58,6 +58,15 @@ static_assert(sizeof(Widget) <= sizeof(WidgetSizeBeforeR2) + 16,
 // reads is a potential use-after-free: the systemic risk recorded in
 // docs/iterations/01-lifecycle-and-tests.md.
 //
+// STILL FOUR after E14, and that is the point of REM3-G9.  announceDetached now
+// makes a virtual call of its own -- onDescendantDetached, on every ancestor of
+// every departing node -- which by P1 looks exactly like a fifth door.  It is
+// not one, because the contract on that hook forbids it from reaching
+// application code at all: it may null its own member pointers and nothing
+// else, and Debug builds assert on the one re-entry that would corrupt the walk
+// (see takeChild).  A hook that stops obeying that contract is a fifth door and
+// belongs in this list.
+//
 // Pre-reading what is needed BEFORE the call only covers the narrow case where
 // the handler removes exactly the current node.  A liveness cursor covers all
 // of them, and is sound because what leaves the tree is always a whole SUBTREE:
@@ -233,6 +242,28 @@ class ArrangeSuspend {
 // --- detach bookkeeping ------------------------------------------------------
 constexpr std::size_t kNotAChild = std::size_t(-1);
 
+#ifndef NDEBUG
+// REM3-G9's enforcement, and the only reader is the assert in takeChild below.
+// Debug-only because there is no second reader: g_arrangeHost above is NOT
+// Debug-only precisely because it grew one, and the difference is worth keeping
+// visible rather than making every flag in this file look the same.
+bool g_inDetachNotify = false;
+
+// Saves and restores rather than clearing, so this is correct even if the
+// assert it feeds is ever compiled out and the case it forbids happens anyway.
+class DetachNotifyScope {
+ public:
+  DetachNotifyScope() : saved_(g_inDetachNotify) { g_inDetachNotify = true; }
+  ~DetachNotifyScope() { g_inDetachNotify = saved_; }
+
+  DetachNotifyScope(const DetachNotifyScope&) = delete;
+  DetachNotifyScope& operator=(const DetachNotifyScope&) = delete;
+
+ private:
+  bool saved_;
+};
+#endif
+
 std::size_t indexOfChild(const std::vector<std::unique_ptr<Widget>>& v,
                          const Widget* child) {
   for (std::size_t i = 0; i < v.size(); ++i) {
@@ -289,6 +320,24 @@ bool stillAChild(const Widget& parent, const Widget* w, std::size_t& hint) {
 //     snapshotted and each entry re-checked against the live one.
 void announceDetached(Widget& parent, Widget* node, std::size_t nodeHint,
                       Window* win) {
+  // E14, and FIRST in the body for two reasons that are both about what is
+  // still true at this instant: nothing has been unlinked yet, and no
+  // application code has run yet.  So every ancestor is alive, the whole
+  // departing subtree is alive, and an override comparing pointers is doing so
+  // against objects that certainly exist.  Put it after widgetDetached instead
+  // -- which closes a departing popup and emits popupClosed -- and an ancestor
+  // may already have died inside it, so the broadcast would need a liveness
+  // argument of its own.  It has none this way.
+  //
+  // Unconditional, and NOT under `if (win)`: a ScrollArea that is not attached
+  // to any Window has exactly the same dangling content_ (the test suite is
+  // full of them).  The Window is the observer of focus and hover; this is the
+  // widget repairing itself.
+  //
+  // No new traversal: this rides the pre-order walk that was already here, and
+  // it is per NODE, so every node of the departing subtree announces itself up
+  // its own ancestor chain.
+  detail::notifyDetachToAncestors(node);
   cancelOn(g_bubbles, node);
   cancelOn(g_geometries, node);
   // NOTHING is done to g_layouts here, and the layout is not parked either.
@@ -345,6 +394,43 @@ void announceDetached(Widget& parent, Widget* node, std::size_t nodeHint,
 namespace detail {
 
 LiveCursor* g_deathWatch = nullptr;
+
+// E14.  A free function in `detail` rather than a member of Widget because the
+// only caller is announceDetached above, which has internal linkage and so
+// cannot be named as a friend in the header; Layout befriends detail::parkLayout
+// for the same reason.
+//
+// WHY THE WHOLE ANCESTOR CHAIN and not the parent alone: the pointer a container
+// caches is a GRANDCHILD in every real case in this library -- ScrollArea's
+// content_ is created with viewport_->add<Widget>(), and AppWindow::fill_ and
+// Shell's page host repeat the shape.  A parent-only notification would reach
+// the viewport, which caches nothing, and never reach the ScrollArea, which
+// caches everything.  Three containers, three grandchildren; the depth is the
+// rule here, not the exception.
+//
+// COST: this is O(depth) per departing node, so O(nodes x depth) per removal.
+// Paid only on a real detach -- not on destruction, and not on any paint,
+// layout or event path -- and the loop is a pointer chase plus a virtual call
+// per level whose default is an empty body.  Nothing is allocated and nothing
+// is remembered between calls.
+//
+// WHY ~Widget DOES NOT NEED IT.  A subtree can leave a tree that is STILL ALIVE
+// only through Widget::takeChild: `children_.erase` appears exactly once in the
+// whole library (Widget.cpp, in takeChild), and `parent_` is assigned in exactly
+// two places, add<T> and takeChild.  Every other departure is the holder itself
+// being destroyed -- and ~Widget destroys children_ right after its own body, so
+// a cached pointer in a dying container names an object that dies with it.  A
+// hook there would be telling an object about to be freed that its member is
+// about to be freed.
+void notifyDetachToAncestors(Widget* node) {
+#ifndef NDEBUG
+  // REM3-G9.  The tree is half detached for the duration of this loop; the
+  // assert this arms is in takeChild, which is the one entry point that could
+  // re-enter the walk above.
+  const DetachNotifyScope inNotify;
+#endif
+  for (Widget* a = node->parent(); a; a = a->parent()) a->onDescendantDetached(node);
+}
 
 std::size_t deathWatchDepth() {
   std::size_t n = 0;
@@ -412,6 +498,24 @@ Widget::~Widget() {
 // only honest description of the situation, and it is the same nullptr this
 // function already returns when a slot removed `child` first.
 std::unique_ptr<Widget> Widget::takeChild(Widget* child) {
+#ifndef NDEBUG
+  // REM3-G9.  onDescendantDetached runs in the middle of announceDetached's
+  // pre-order walk, over a tree that is half detached: the departing subtree is
+  // still linked in, the Window has not been told, and the snapshot the walk is
+  // iterating was taken before the hook ran.  Removing anything from in there
+  // re-enters this function, and the walk resumes over a vector that no longer
+  // means what it meant when it was snapshotted.
+  //
+  // ONE assert, and this is the site because this is the only door: takeChild
+  // is the sole caller of announceDetached and the sole place `children_.erase`
+  // appears, so it is the only way a hook can reach the walk it is standing in.
+  // It does NOT catch the other things REM3-G9 forbids -- an update(), an
+  // emit(), a virtual call -- and it is not meant to; those are contract, and
+  // the one that corrupts the traversal is the one worth a runtime cost.
+  // Debug-only, abort on hit, same standing as M2's assert in setGeometry.
+  assert(!g_inDetachNotify &&
+         "REM3-G9: onDescendantDetached may only null its own member pointers");
+#endif
   if (!child) return nullptr;
   const std::size_t hint = indexOfChild(children_, child);
   if (hint == kNotAChild) return nullptr;
@@ -787,10 +891,20 @@ bool Widget::runLayoutIfAny() {
     // NO frameDegraded() here, and it is a decision rather than an omission.
     // The counter exists because giving up is otherwise an ABSENCE -- a frame
     // returning void or a fabricated hint leaves no trace (Layout.hpp, next to
-    // the counter).  This frame's give-up is not an absence: it returns FALSE,
-    // and setGeometry consumes it.  Recording it as well would also make this
-    // check disagree with the identical one after arrangeFor below, which has
-    // been silent since R2.
+    // the counter).  This frame's give-up is not an absence: it is IN THE
+    // RETURN VALUE.  That is the whole of the exception, now written into the
+    // rule itself rather than only here, and this function is its only instance
+    // in the library.
+    //
+    // Not "because setGeometry consumes it": that is one caller of three.
+    // performLayout (below) and markLayoutDirty discard the bool, and they are
+    // safe for an unrelated reason -- each ends immediately after this call, so
+    // there is no member access after the door for the result to protect.  The
+    // exemption rests on the value being VISIBLE to a caller, not on any caller
+    // looking at it.
+    //
+    // Recording it as well would also make this check disagree with the
+    // identical one after arrangeFor below, which has been silent since R2.
     if (!guard.alive()) return false;
     // Captured, not re-read: application code run from inside arrange() may
     // replace this widget's layout, and the result below belongs to the object
