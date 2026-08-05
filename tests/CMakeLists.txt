@@ -18,6 +18,8 @@ add_executable(geeyoou_tests
   widget/test_popup_lifetime.cpp
   widget/test_geometry_baseline.cpp
   widget/test_layout_engine.cpp
+  widget/test_box_grid_layout.cpp
+  widget/test_layout_alloc.cpp
   render/test_style_cascade.cpp
   visual/test_golden.cpp
 
