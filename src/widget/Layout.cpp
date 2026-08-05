@@ -40,6 +40,13 @@ namespace {
 // exactly as an arrange does.  Counting arranges alone was the gap -- a pure
 // sizeHint(), which is what ScrollArea::relayout issues, is not a pass.
 //
+// TWO readers now, and the second one is M-2 in measureFor below: this is also
+// the measuring half's depth CEILING.  It was kept correctly and read by the
+// park list for a whole round without ever being compared against anything,
+// which is the same asymmetry the guard family keeps producing -- the handrail
+// was built for the arranging half and the measuring half got the bookkeeping
+// without the rail.
+//
 // A plain static, not a thread_local: the widget tree is UI-thread-only by
 // construction (docs/architecture.md section 3.4), the same ruling every other
 // global in the engine is made under.
@@ -87,6 +94,66 @@ class MeasureFrame {
 
 SizeHint Layout::measureFor(const Widget& host) const {
   if (buffersBusy_) return lastMeasure_;  // see the declaration
+
+  // M-2, the measuring half's ceiling, and the mirror of the one
+  // Widget::runLayoutIfAny keeps for arranging (M4: g_layoutDepth against
+  // kMaxTreeDepth).  WHAT IT CATCHES that the latch above does not:
+  //
+  //   * a layout measuring ITSELF again, and a two-layout cycle A -> B -> A,
+  //     are both stopped by buffersBusy_ -- control comes back to A and finds
+  //     A's own latch set;
+  //   * a CHAIN A -> B -> C -> ... -> N is not.  Every level is a different
+  //     Layout object with its own latch, and no level is a layout PASS, so
+  //     g_layoutDepth stays at zero throughout and M4 never sees it.  All it
+  //     takes is an application sizeHint() override that asks a widget in
+  //     another tree for its size hint -- which is a thing sizeHint() exists to
+  //     let people do.  The end of that chain is an exhausted stack: a denial
+  //     of service rather than a corrupted heap, but the same shape as the
+  //     guard family in section 11 of docs/iterations/02-layout-engine.md --
+  //     the rail was designed around the arranging half.
+  //
+  // RECORDED, NEVER FATAL (ADR-R2-04).  The answer is lastMeasure_ -- the same
+  // answer the latch above gives, for the same reason: it is the number the
+  // outer measurement is already working from, and handing it back terminates
+  // the recursion instead of the process.  No abort, no throw; a control room
+  // screen does not die because one panel asked a silly question.
+  //
+  // WHY THE TEST IS HERE, in front of the frame rather than inside it.  Two
+  // properties have to hold, and this position is what makes both of them
+  // trivial rather than argued:
+  //
+  //   * COUNT BALANCE.  A refused call never touches g_measureDepth at all, so
+  //     there is no increment to pair with a decrement -- and MeasureFrame's
+  //     destructor, which is the park list's SECOND drain point (see it below),
+  //     keeps its exact meaning: this frame neither parked anything nor became
+  //     the outermost measurement, and the frames still on the stack drain the
+  //     list on their way out as they always did.  Testing inside
+  //     MeasureFrame's constructor instead would make "did this frame count?" a
+  //     question its destructor has to answer too, i.e. a second flag whose
+  //     only job is to keep the two halves in step -- and a counter kept in two
+  //     places is how this file got a park list with two drain points in the
+  //     first place.
+  //   * NOT READING A FREED OBJECT.  lastMeasure_ is read through `this`, so
+  //     `this` has to be alive, and here it certainly is: NO DOOR HAS BEEN
+  //     CROSSED IN THIS FRAME YET.  The caller dereferenced layout_ one
+  //     statement ago (Widget::sizeHint), and nothing between there and here
+  //     runs application code.  Move this test one line down, past
+  //     measure(host), and that argument is gone -- the give-up would then need
+  //     a cursor of its own, exactly as the call sites in GroupBox and
+  //     ScrollArea do.
+  //
+  // AFTER the latch, not before, so the existing behaviour is bit for bit what
+  // it was: both branches return lastMeasure_ and only the record differs, and
+  // a re-entrant measurement of the SAME layout is documented, expected and
+  // self-terminating -- not a runaway chain, and it must not be counted as one.
+  //
+  // depthExceeded, the counter M4 already raises, rather than a sixth of its
+  // own: it is the same fact ("nested past kMaxTreeDepth") and the same reader
+  // wants it.  The host recorded is the one that was REFUSED, matching M4.
+  if (g_measureDepth >= kMaxTreeDepth) {
+    detail::layoutDepthExceeded(&host);
+    return lastMeasure_;
+  }
 
   // Taken by VALUE and returned from a local: by the time the scope below
   // closes, `this` may have been parked and freed -- the host can be destroyed
