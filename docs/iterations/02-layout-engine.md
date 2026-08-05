@@ -747,12 +747,25 @@ void frameDegraded();
 
 > **REM3-G8**：`detail::frameDegraded()` **每帧最多记一次**。计数器数的是"帧"，不是"检查"；每个降级分支写一次、随即 `return`，天然满足。
 
+> **REM3-G8 的例外条款（Leo 评审 E5/E6 后补进规则本体；此前它只写在代码注释里）**：
+> **一个帧的放弃若在返回值里对调用者可见，则不记。**
+> 计数器存在的理由是"放弃否则是一个**缺席**"（`Layout.hpp` 计数器旁的原话）——返回 `void`、或返回一个编造出来的 hint 的帧不留痕迹；而一个交回给调用者的 `false` 不是缺席。
+> **全库唯一实例是 `Widget::runLayoutIfAny`。** 它有**三个**调用者：`setGeometry`（`Widget.cpp:529`，`if (layout_ && !runLayoutIfAny()) return;` —— 消费）、`performLayout`（`:612` —— 丢弃）、`markLayoutDirty`（`:722` —— 丢弃）。两处丢弃是安全的，但理由**不同**：它们在这次调用之后**函数立刻结束**，门后没有任何成员访问。
+> ⚠️ **所以豁免的依据是"放弃出现在返回值里"，不是"调用者消费了它"**——后者三取一。第 1/2 版把理由写成"`setGeometry` 消费这个 `false`"，那是三分之一的事实。
+> **不补这一条的后果**：下一个只读契约的人会给 `runLayoutIfAny` 补一次记录，于是 soak 的 `× 5`（`test_layout_soak.cpp` 末尾）与 rem3_doors 的 `+2` 同时改变含义，而没有任何东西说明为什么。
+
 > **REM3-G8 的推论（E3/E4 落地后由实测补正；这是 E6 的验收依据，第 1 / 2 版哪里都没写过）**：
 > **"每帧最多一次"不等于"每次操作最多一次"，更不等于"每扇门一次"。**
 > 一次 `ScrollArea::setContentSize` 可以**合法地记两次**：`relayout()` 是**它自己的一帧**，它的 CP-S1 / CP-S2 记一次；返回之后 `setContentSize` 是**另一帧**，它从头到尾站在同样那三个指针上，它的 CP-C2 再记一次。按 G8 这是**正确的**——计数器数的是帧，两个帧就是两条记录。
 > ⚠️ **因此 E6（以及此后任何人）不得写 `framesDegraded == 门的数量`**，也不得写"== 死掉的对象数"或"== 失败的操作数"。
 > soak 的实测是 `framesDegraded = 403 × 5 = 2015`（`GY_SOAK_CYCLES=400` 加 3 轮热身）。**那个 5 是因为 soak 的五组各自都在自己那一帧的第一个检查点上就被打死**，不是因为库里有五扇门；把其中一组的钩子往后挪一扇门，这个数就会变——而且是**正确地**变。
 > 用例：`tests/widget/test_rem3_doors.cpp` 的 `one_operation_can_degrade_two_frames`（一次 `setContentSize`，两条记录），以及 `tests/widget/test_layout_soak.cpp` 末尾那条常驻断言（连同它为什么恰好是 5 的逐组推导）。
+
+> **REM3-G9（E14 新增；⚠️ 编号见下）**：**`Widget::onDescendantDetached()` 的实现只允许把自己的成员指针置空。禁止在其中运行任何应用代码——不得发信号、不得 `update()`、不得 `removeChild` / `takeChild` / `clearChildren`、不得调用虚函数。**
+> **理由**：这一趟正走在 `announceDetached` 的**递归中间**，树处于**半解链**状态——离场子树还挂在原处、Window 还没被通知、外层循环正在遍历一份**在钩子跑之前就拍好的快照**。在这里跑应用代码，等于把刚关掉的那扇门重新打开。
+> **执行**：Debug 下由 `Widget.cpp` 匿名 namespace 的 `g_inDetachNotify` 标志（RAII 保存/恢复）+ **一条 `assert`** 拦截，落点在 `Widget::takeChild` 的函数首。与 M2 的断言同级同风格：`#ifndef NDEBUG`、命中即 abort、Release 里一个字节都不生成。
+> **为什么落点是 `takeChild` 而不是别处**：它是 `announceDetached` 的**唯一**调用者，也是全库 `children_.erase` 的**唯一**出现处，所以它是钩子回到那趟遍历的**唯一**通路。断言**不覆盖** G9 禁止的其余各项（`update()`、`emit()`、虚调用）——那些是契约，**只有会破坏遍历的那一项值得付运行时代价**。这一句是有意写下的边界，不是遗漏。
+> **⚠️ 编号冲突，请架构团队复签**：本条在 E14 任务书里被称作 **REM3-G6**，但 `REM3-G6` 已被"`g_deathWatch` 不得增加决策读者"占用（见上）。同一张表里两个 G6 会让两条都无法被引用，所以本轮按**下一个空号 G9** 落地。**若架构团队要的是另一种编号（例如把旧 G6 改名），请裁定，我改。**
 
 #### 逐检查点降级表（**这是 E3/E4 的施工图；按检查点写死，不按门**）
 
@@ -796,8 +809,10 @@ void frameDegraded();
 第 1 版把门定义成 D-a/D-b 两类，是**围着两个已知缺陷点画的圈**，不是扫出来的（Leo 的判词，我核对后同意：它收录了更弱的 `viewport_->setGeometry`，却漏了 `AppWindow::relayout` 这个每帧都跑的无条件命中）。本版改成谓词 + 封闭原语清单：
 
 > **门（door）**：语句 `S` 是帧 `F` 的一扇门，当且仅当 `S` 能把控制权交给**应用代码**。判定用**封闭的原语清单**（可 grep，可维护）：
-> * **P1**：对任何 widget 的**虚成员**调用（`sizeHint()`、`onGeometryChanged()`、`onPaint()`、`styleState()`、`styleType()`、**`layoutRect()`** …）。**限定名调用不算 P1**（`PushButton::sizeHint()` 是静态绑定），但见下面的传递性条款。
+> * **P1**：对**任何应用可派生的库多态基类**的**虚成员**调用。主语的封闭清单：**`Widget` / `Layout` / `SelectBase` / `StyleSubject`**（`sizeHint()`、`onGeometryChanged()`、`onPaint()`、`styleState()`、`styleType()`、**`layoutRect()`**、**`Layout::onInvalidated()` / `onChildAppended()` / `onChildRemoved()`**、`SelectBase::buildRows()` / `onOpened()` / `onClosed()` …）。**限定名调用不算 P1**（`PushButton::sizeHint()` 是静态绑定），但见下面的传递性条款。
 >   ⚠️ **`layoutRect()` 是 E5 复核时补进这个括号的。它一直在谓词的覆盖范围内，只是从来没有被扫到过**——原因见 §11.9 的更正：本节的第一刀是一张 grep **名字表**，而 P1 说的是"任何虚调用"，**虚调用是按名字 grep 不出来的**。
+>   ⚠️⚠️ **主语是 E9 复核时从"widget"改宽的，这是与上一条不同的第二个洞。**`Layout` 不是 widget，于是 `Layout::onInvalidated()` / `onChildAppended()` / `onChildRemoved()`（`Layout.hpp` 的 protected virtual，注释白纸黑字写着是给子类用的扩展点）**P1 管不着、P2 没登记**，两头落空——而它们是货真价实的门，见下面的 N1/N2/N3。
+>   **两个洞的区别值得写死**（Leo 的判词，我核对后同意）：`layoutRect()` 漏掉是因为「**虚调用 grep 不出名字**」，`Layout` 三个钩子漏掉是因为「**主语写窄了**」。补第一个（§11.9 的声明侧生成）**不会**自动补上第二个——声明侧扫描的根目录如果只有 `Widget.hpp`，`Layout.hpp` 的三个钩子照样扫不到。所以 §11.9 lint 第四条的扫描根同时改成 `include/geeyoou/**/*.hpp`。
 > * **P2**：调用**已知能到达应用代码的库函数**：`setGeometry` / `setVisible` / `setLayout` / `invalidateSizeHint` / `add<T>` / `takeChild` / `removeChild` / `clearChildren` / `Window::openPopup` / `Window::closePopup` / `Widget::performLayout` / `Layout::arrange` / `Layout::measure(For)`，**以及任何被本清单登记过的库函数**（传递性在这里显式展开，见下）。
 > * **P3**：`signal.emit(...)`。
 >
@@ -819,7 +834,7 @@ void frameDegraded();
 | # | 位置（HEAD） | 门原语 | 门后经 `this`/成员的读写 | 需守卫 | 级 | 轮 | 动作 |
 |---|---|---|---|---|---|---|---|
 | 1 | `GroupBox.cpp:53` | P1 `Widget::sizeHint()` | `:54` `layout_`、`:62` `title_`、`:65` 虚调用 | `this` | S2 | **W1** | ✅ CP-G1 |
-| 2 | `GroupBox.cpp:65` | P1 `styleState()` | 门后 `:69-75` **只读局部量** | — | — | — | ❌ 非危险（谓词判出，不是免检） |
+| 2 | `GroupBox.cpp:98-103`（`sizeHint` 的 `titleW`） | P1 `styleState()` | **同一条语句内、门之后**：`style(...)` 读 `styleCache_`/`styleCacheGen_` 并走 parent 链；随后 `measureText(title_, ...)` 读 `title_` | `this` | **S3** | **W3** | ❌ **判词已更正**，见下；并入 #23 的族（REM3-RES-2，走契约不走守卫） |
 | 3 | `ScrollArea.cpp:158` | P1 `content_->sizeHint()` | `:159` `geometry_`；`:164` **写** viewport；`:165` **写** content | `this,viewport_,content_` | S1 | **W1** | ✅ CP-S1 |
 | 4 | `ScrollArea.cpp:164` | P2 `setGeometry`（条件性，见下） | `:165` 读 `this->content_` 并写 content | `this,content_` | S1 | **W1** | ✅ CP-S2 |
 | 5 | `ScrollArea.cpp:165` | P2 `setGeometry` | **无**（下一句 `return`） | — | — | — | ❌ 死代码；**加注释** |
@@ -868,6 +883,21 @@ void frameDegraded();
 
 第三条是一条**隐式不变量，此前哪里都没写**，而 `:395-399` 的注释读起来像这个函数只有一道门（"this one covers the rest of this function"）。下一个人在 `:416` 后面追加一行成员访问，就把 #13b 从"非危险"变成 S1，而没有任何东西会提醒他。**E2 因此在 `:416` 上方补一条注释**：这是本函数的第二道门，其后不得再出现任何成员访问，否则 `:394-403` 的守卫作用域必须延长到函数末尾。（只加注释，不加检查：按谓词判定它今天确实非危险，加一个恒真的检查是死代码，与 §11.3 对 `ScrollArea:165`/`:174` 的处理同一条规矩。）
 
+**#2 的判词是错的，本轮更正（E9 复核；这是本表里第一处"同一个形状两个相反结论"）**。第 1/2 版写的是"门后 `:69-75` 只读局部量"。现场不是这样——`GroupBox.cpp:98-103` 是**一条**语句：
+
+```cpp
+const float titleW =
+    title_.empty()
+        ? 0.0f
+        : measureText(title_, style(styleState()).fontSizeOr(Theme::current().fontBody))
+                  .width +
+              kTitlePad;
+```
+
+`styleState()` 是门（P1，protected virtual）。`style(...)` 是**同一条语句里、门之后**对 `this` 的成员调用——它读 `styleCache_` / `styleCacheState_` / `styleCacheGen_`，未命中还要沿 parent 链上溯；`measureText(title_, …)` 跟在它后面，又读一次 `title_`。**这不是"只读局部量"。** CP-G1 的游标此刻确实还在栈上（`self` 覆盖整个函数），但游标不等于检查：**`styleState()` 与这两次读之间没有任何 `alive()`**，REM3-G3 要的"紧贴门之后的检查"在这里一条都没有。
+
+**这与 #23（`PushButton::sizeHint():88`，同样是 `styleState()` 之后接着读自己的成员）是完全相同的形状，却得到了相反的结论**——#23 登记成 S3/W3，#2 判成"非危险"。改判：**#2 定级 S3、排 W3、并入 #23 的族**（REM3-RES-2：这一族的处理方向是**收紧契约**——`styleState()` 的覆写不得销毁 widget——而不是在每个 `sizeHint()` 里加守卫）。今天没有已知触发路径（库内 `styleState()` 的覆写都不跑应用代码），所以是 S3 而不是 S1。
+
 **#4 为什么仍然要查**：`viewport_` 是 `ScrollArea` 构造函数里 `add<Widget>()` 出来的**普通 `Widget`**，今天 `onGeometryChanged()` 是基类空实现、且没有 layout，所以 `:164` **今天**不是门。但应用能拿到它：`sa->content()->parent()->setLayout<BoxLayout>()` 一句就让它变成真门。**"今天不是门"不是不变量**——`ScrollArea.hpp:25` 的 `content()` 是 public。
 
 **#16 为什么定级最高**：三个 `setGeometry` 无条件执行、**每帧**跑（`AppWindow::onGeometryChanged():81` → `relayout()`），`header()`/`content()` 都是 public，showcase 五页正是这么用；门后一个游标都没有。
@@ -881,9 +911,44 @@ void frameDegraded();
 
 **为什么不改成"门前预读 margins"**：这是本缺陷族里**唯一**一处预读真能奏效的地方——门后全是读，§11.0 对预读的否决理由（"预读救不了写"）在这里不适用。否决它的是**另一条**理由：`layoutRect()` 是应用代码，它有权调 `setMargins()` / `setLayout()`，预读之后这一趟就会拿**门前**的 margins 去排布。那是一次**行为改变**，没有任何缺陷在推动它，而且它是**新增**一处 REM3-RES-5 那种跨门撕裂读，不是消除一处。守卫在一条马上要跑一整趟 arrange 的路径上花 9 条指令（§11.5）。
 
-**#28 记一次、#28b 不记，这是按站点定的，不是通则**：`frameDegraded()` 存在的理由是"放弃否则是一个**缺席**"（`Layout.hpp` 计数器旁边的原话）——返回 `void`、或者返回一个编造出来的 hint 的帧不留痕迹。`runLayoutIfAny` 的放弃**不是缺席**：它返回 `false`，而 `setGeometry` 消费这个 `false`。再记一次还会让这个检查与它下面那个同形检查（`arrangeFor` 之后那个，自 R2 起一直沉默）自相矛盾。
+**#28 记一次、#28b 不记，这是按站点定的，不是通则**：`frameDegraded()` 存在的理由是"放弃否则是一个**缺席**"（`Layout.hpp` 计数器旁边的原话）——返回 `void`、或者返回一个编造出来的 hint 的帧不留痕迹。`runLayoutIfAny` 的放弃**不是缺席**：它把放弃写进了**返回值**（`false`）。这就是 §11.3 REM3-G8 例外条款的**全库唯一实例**，规则本体现已写明。
+
+⚠️ **本段第 1/2 版把理由写成"`setGeometry` 消费这个 `false`"，那是三分之一的事实**（Leo 评审 E5/E6 指出）：`runLayoutIfAny` 有**三个**调用者——`setGeometry`（`:529` 消费）、`performLayout`（`:612` 丢弃）、`markLayoutDirty`（`:722` 丢弃）。两处丢弃安全的理由是"调用后函数即结束、门后无成员访问"，与"被消费"完全无关。**豁免依据是返回值可见，不是调用者消费。**
+
+再记一次还会让这个检查与它下面那个同形检查（`arrangeFor` 之后那个，自 R2 起一直沉默）自相矛盾。
 
 **#29 —— `GroupBox::layoutRect()` 为什么是"当前实现安全"**：`GroupBox::contentRect()` 里**一扇门都没有**——它读 `title_`、调 `localRect()`（非虚，读 `geometry_`）、做算术，P1 / P2 / P3 **一条都不匹配**，到不了应用代码。这是**这一个覆写**的性质，不是这个钩子的性质，所以调用侧照样上守卫：`Widget::contentRect` 是照着**钩子**写的，不是照着今天恰好只有一个的那份实现写的。
+
+#### 声明侧复扫的九扇新门 N1–N9（E9 登记；**本轮只登记，一处不修**）
+
+上面那张表是按 `src/widget/*.cpp` 的**调用点**扫出来的，主语还是"widget"。按更正后的 P1 主语（`Widget` / `Layout` / `SelectBase` / `StyleSubject`）**从声明侧**重扫全部 66 条非析构 `virtual`，多出下面九扇。**行号是本轮改动后的 HEAD**（`Widget.cpp` 因 E14 与几处注释整体下移约 100 行，与第 2 版的编号对不上是正常的；**语句是表要说的东西，行号不是**——这句话 GroupBox 那段已经写过一次了）。
+
+| # | 位置（HEAD） | 门 | 门后经 `this`/成员的读写 | 级 | 轮 |
+|---|---|---|---|---|---|
+| **N1** | `Layout.cpp:27` `Layout::invalidate()` | P1 `onInvalidated()` | `:31` `if (host_) host_->performLayout()` | **S1** | **W2** |
+| N2 | `Widget.cpp:821` `childAppended()` | P1 `layout_->onChildAppended()` | `:822` `markLayoutDirty()` | S2 | W2 |
+| N3 | `Widget.cpp:826` `childRemoved()` | P1 `layout_->onChildRemoved(index)` | `:827` `markLayoutDirty()` | S2 | W2 |
+| **N4** | `Window.cpp:165` `setFocusWidget()` | P1 `old->onFocusChanged(false)` | `:166` `focus_->onFocusChanged(true)` | **S1** | **W2** |
+| **N5** | `Widget.cpp:1195` `animationTickTree()` | P1 `onAnimationTick()` | `:1196` `for (children_)` | **S1** | **W2** |
+| N6 | `Widget.cpp:1131` `paintTree()` | P1 `onPaint()` | `:1136` `for (children_)` | S3 | W3 |
+| N7 | `SelectBase.cpp:106`（`refreshRows`）、`:121`/`:125`（`open`） | P1 `buildRows()` / `onOpened()` | `:110-112` 与 `:126-127` 共 4 处经 `this` 的读（`popupWidth_`、`geometry()`、`update()`、`openStateChanged`） | S2 | W2 |
+| N8 | `MenuButton.cpp:134` `onMouse()` | P1 `inArrowZone(e.pos)` | `:135` `isMenuOpen()` / `openMenu()` / `closeMenu()` | S3 | W3 |
+| N9 | `Widget.cpp:1104` `window()` | P1 `w->asWindow()`（`:1107`） | `:1108` `w = w->parent_` | S3 | W3 |
+
+**三条要点，必须跟着表一起读：**
+
+* **N1 是这九条里唯一一条会真正 `delete` 而不是 park 的，park list 在这条路径上救不了它。** `Layout::invalidate()` 由 `setMargins` / `setSpacing` / 任何子类 setter 调用。走这条路时 `layoutRunning_` 与 `buffersBusy_` **都是 false**（没有 pass、没有 measure），于是 `~Widget` 里 `if (layoutRunning_ || layout_->buffersBusy_) parkLayout(...)` 的条件不成立，`unique_ptr<Layout> layout_` 直接把 Layout **删掉**——而 `Layout::invalidate()` 的栈帧还在，`:31` 的 `if (host_)` 就是一次对已释放对象的读。§11.3 反复引用的"停车场兜底"在这里**不成立**，这是它第一次不成立。定级 S1。
+* **N3 是 E6 那个形状，早了一轮，而且在同一个文件里。** 本表 #13b 分析的是 `takeChild` **那一帧**：`childRemoved(index)` 之后只剩 `return owned;`，不碰 `this`，所以那一帧非危险——**这个结论是对的**，本轮不改。但它**停在了 `childRemoved()` 的门口**：`Widget::childRemoved()` **自己那一帧**里，门（`layout_->onChildRemoved()`）之后还有一句 `markLayoutDirty()`，那是一次经 `this` 的成员访问。**外帧看着干净不等于内帧干净**——这与 E6 抓 `contentRect` / `runLayoutIfAny` 是同一件事（#28 / #28b），只是这一次内外两帧都在 `Widget.cpp` 里。N2 是它的孪生。
+* **N4 今天就能走到应用代码，不需要任何假设。** 路径是现成的：`SelectBase::onFocusChanged(false)` → `close()` → `w->closePopup()` + `openStateChanged.emit(false)`。挂在 `openStateChanged` 上的槽只要销毁那个**即将获得焦点**的控件，`Window.cpp:166` 就在悬空的 `focus_` 上做虚调用。注意 `focus_` 在 `:162` 已经被写成新值了，所以这不是"读旧指针"，是**读一个刚写进去、又在门里被销毁的成员**——REM3-G2 的成员重读正是为这个形状写的。
+
+#### "看过了、不需要封"清单（E9 复核的免检项；与 #11、#13b 同一条规矩：可复核的理由 > 沉默）
+
+* **`platform/Platform.hpp` 的 21 条非析构 `virtual`（`Platform` / `PlatformWindow` 的接口方法）—— 免检，理由是结构性质而不是用法观察。** `Platform& platform()`（`Platform.hpp:151`）是全库取得实现的**唯一**入口，而**库里没有任何 setter / 注册点**能把应用自己的实现装进去：`grep -rn "setPlatform\|installPlatform" include src` **输出为空**。所以这 21 条虚函数的动态类型只可能是库自己的那一个实现，覆写它们**没有接口**。
+  ⚠️ **这不是"今天没人这么用"，是"没有安装接口"**——两句话的分量差着一个数量级，本族六次复发里"今天没人这么用"输了六次。
+  **⚠️ 触发条件，写进表里**：**哪天出现任何形式的实现安装点**（`setPlatform` / `installPlatform` / 构造函数注入 / 工厂注册 / 测试替身钩子），**这 21 条一起进表**，按 P1 逐条判危险性。这条 grep 应当进 §11.9 的 lint：它是一条**两行的机器判据**，比一段免检说明可靠。
+  ⚠️ 注意这条免检**只覆盖虚函数**。同一个头文件里 `PlatformWindow` 的 7 个公有 `std::function` 成员是**另一回事**，它们是应用可赋值的，见 §11.9 末尾登记的第四类原语。
+* **`core/Event.hpp` 的 1 条、`widget/Window.hpp` 的 1 条、`widget/GroupBox.hpp` 的 1 条、`widget/MenuButton.hpp` 的 2 条**：`GroupBox::layoutRect()` 已是 #29；`MenuButton` 的两条已是 N8；其余两条是 `asWindow()` 家族（N9）与事件类型标签，无门后成员访问。
+* **`render/StyleSheet.hpp` 的 5 条（`StyleSubject`）**：主语已按 P1 新定义纳入，但库内调用点（`style()` / `styleState()` / `styleType()`）已由 #2 / #23 覆盖，无第三处。
 
 **本轮 ✅ 的规模变化（必须让架构团队知道）**：第 1 版是 2 个检查点 / 2 个函数 / 2 个文件；本版是 **5 个检查点 / 3 个函数 / 2 个文件**（新增 `ScrollArea::setContentSize` 的 CP-C1/CP-C2，以及 CP-S2 的检查项从 3 变 2）。多出来的那个函数在**同一个文件**、**同一种形状**、上方 130 行处；不带上它，E5 复核时会立刻问"为什么隔壁那个一模一样的没改"。
 
@@ -1094,6 +1159,10 @@ grep -n "setGeometry(\|sizeHint()\|\.emit(\|setVisible(\|setLayout\|invalidateSi
 
 **因此 lint 的契约加一条（三条性质之外的第四条，E5 判定它同样不可议）**：候选集的 P1 部分必须**从声明侧生成**——扫 `include/geeyoou/**/*.hpp` 收集所有 `virtual` 成员函数名（含 `override`），再拿这张**生成出来的**名字表去扫 `src/`——而不能由人手写一张调用点名字表。手写的那一张，本节第一刀已经证明会漏，而且漏的方式是"看起来很全"。
 
+**⚠️ 扫描根就是 `include/geeyoou/**/*.hpp` 的全部，不是 `Widget.hpp`（E9 复核补正）。** 这一条现在是承重的，不是措辞：`Layout.hpp` 的 `onInvalidated` / `onChildAppended` / `onChildRemoved` 三个钩子只有把根开到整个 `include/` 才会出现在候选集里。写死这个根的理由，是 §11.4 P1 主语那条更正的直接推论——**声明侧生成只解决"grep 不出虚调用"，解决不了"扫描根写窄了"**，两个洞要两条修。今天全库非析构 `virtual` 共 **66** 条（`grep -rn "virtual" include/geeyoou --include=*.hpp | grep -v "virtual ~"`），分布：`platform/Platform.hpp` 21、`widget/Widget.hpp` 15、`widget/SelectBase.hpp` 13、`widget/Layout.hpp` 7、`render/StyleSheet.hpp` 5、其余 5。这 66 条就是 lint 第一刀的 P1 输入，`Platform.hpp` 那 21 条的归宿见 §11.4 的免检清单。
+
+**登记：第二个谓词缺口，P1/P2/P3 都不覆盖的第四类原语（E9 复核发现，本轮只登记不修）。** `platform/Platform.hpp` 的 `PlatformWindow` 有 7 个 **公有 `std::function` 成员**（`:88-102` 的 `onPaint` / `onMouse` / `onKey` / `onResize` / `onClose` / `onHitTest` / `onWindowStateChanged`），它们是应用可以直接赋值覆盖的回调。调用它们**能到达应用代码**，但既不是虚成员调用（P1）、不是登记过的库函数（P2）、也不是信号发射（P3）。**谓词漏了整整一类原语**，不是漏了一个站点。定级 S2、排 W2（与 #27 的 P3 家族扫描同一批），处理形态：要么给谓词加一条 **P4 = 调用一个公有可赋值的可调用成员**，要么把这 7 个成员逐一登记进 P2。**这是登记，不是判定**——判定归架构团队。
+
 **为什么这个能兑现 Leo 要的性质**：它检查的是**代码**而不是**被跑到的路径**（运行时计数器只能覆盖用例踩到的那些帧，而本族五次复发里至少三次是没有用例踩到的帧）；它的红/绿判据是机械的；它的 allowlist 天然逼着"看过了没有"与"没看"可区分——这正是 §11.4 #11（`removeChild`）那一行要证明的事。
 
 **成本与风险，写明**：脚本要做的是**近似**的 C++ 函数体切分（花括号配平 + 函数头正则），不是解析。首轮会多报若干条（估计 20~40 条，主要来自 P3 家族），**这些多报的分诊本身就是表 #27 那个 W2 扫描任务**——也就是说这个 lint 不是额外工作，它是把已经必须做的那次扫描变成一个**不会退化**的产物。E5 若判定脚本形状不合适（例如决定改用 clang 的 AST 工具），**三条性质不变**即可。
@@ -1123,7 +1192,10 @@ grep -n "setGeometry(\|sizeHint()\|\.emit(\|setVisible(\|setLayout\|invalidateSi
 **判定位置的两条论证**（代码里也写着，这里是摘要）：
 
 * **计数配平**：被拒的调用**根本没碰过** `g_measureDepth`，没有加就不需要配对的减；`MeasureFrame` 析构（`Layout.cpp` 停车场的**第二个排空点**）语义**一字不变**——这一帧既没停放任何东西、也没成为最外层度量，栈上仍在的那些帧照旧在退栈时排空。若把判定放进 `MeasureFrame` 的构造函数，"这一帧到底计没计数"就变成析构函数也必须回答的问题，于是要多一个只为让两半同步而存在的标志位——而"一个计数器记在两个地方"正是这个文件当初出现两个排空点的原因。
-* **不读已释放对象**：`lastMeasure_` 经 `this` 读，所以 `this` 必须活着——而在这个位置它一定活着，因为**本帧还没跨过任何一扇门**：调用者上一条语句刚解引用过 `layout_`（`Widget::sizeHint`），中间没有一行跑应用代码。把判定往下挪一行、挪到 `measure(host)` 之后，这条论证就没了，那时它需要一个自己的游标，跟 `GroupBox`/`ScrollArea` 的落点一样。
+* **位置必须在递归发生之前**（这是决定性的一条，Leo 评审后补正）：把判定往下挪到 `measure(host)` 之后，上限不是"更难论证"，而是**功能上直接作废**——`measure()` 正是下沉到链条下一环的那一步，等它返回时，要拦的那条失控链已经走完、栈已经花掉了。事后判定的上限记录的是一件它没有阻止过的事。
+
+* **不读已释放对象是另一个问题，答案不是"本帧还没跨门"**。第 1 版就是这么写的，**它对自己描述的那一帧判断错了**：下面那个作用域里门后**已经有两处经 `this` 的读写**——`lastMeasure_ = measure(host)` 是门后的写，`measured = lastMeasure_` 是紧接着的读，而 `measure()` 是应用代码。让它们安全的是**停车场**，不是"没跨门"：进 `MeasureFrame` 作用域后 `buffersBusy_` 为真 ⇒ `~Widget` / `adoptLayout` 走 `parkLayout()` 分支而不是 `delete`；`releaseParkedLayouts()` 在 `g_measureDepth != 0` 时直接返回。这条路径的用例是 `r2_remediation.a_box_survives_its_host_dying_inside_a_pure_measure`。
+  往下挪真正会悬空的是 **`host` 这个引用**——停车场救的是 `Layout`，没有任何东西救那个 `Widget`。而判定只对它**取地址**（`layoutDepthExceeded` 存指针、从不解引用），所以连这一条都不构成 UAF。**这恰恰是重点：留在这里的理由是上面那条递归顺序，不是存活性论证。**
 
 **顺序**：放在 `buffersBusy_` **之后**，于是既有行为逐位不变——两个分支都返回 `lastMeasure_`，差别只在记不记；而同一个 layout 的重入式度量是**有文档、预期之内、自终止**的，不是失控链条，不该被记成失控链条。
 
@@ -1148,6 +1220,27 @@ access-violation              #0 geeyoou::Layout::arrangeFor       Layout.cpp   
 ```
 
 free site 两条都是 `SuicidalRect::~SuicidalRect`。第三条是**进程当场死**，不是"只有 ASan 看得见"那一类——与 E8 复现器同级。
+
+**⚠️ 但上面那个实验只证明了"两处检查里至少有一处是必要的"**（Leo 评审 E5/E6 的判词，我接受）。两处一起拆，得到的是一个**合取**的反证，它无法区分"`contentRect` 自己那个游标必要"和"`runLayoutIfAny` 那个检查必要"。而 §11.4 #28/#28b 主张的偏偏是更强的一条：**调用侧的检查必要而不充分**。要证明它，必须做**判别性**实验——只拆一处，保留另一处，正好构造出"由调用者保证"那个方案的精确形状。
+
+**判别性实验（本轮实测，取代上面那条作为 #28 的承重证据）**：只拆掉 `Widget::contentRect()` 自己的 `DeathWatch`（连同它的降级分支），`runLayoutIfAny` 的 `if (!guard.alive()) return false;` **原样保留**。结果：
+
+```
+==37176==ERROR: AddressSanitizer: heap-use-after-free
+READ of size 8
+    #0 geeyoou::Widget::contentRect     src\widget\Widget.cpp:788   <- 读 layout_
+    #1 geeyoou::Widget::runLayoutIfAny  src\widget\Widget.cpp:869
+    #2 geeyoou::Widget::setGeometry     src\widget\Widget.cpp:624
+freed by:
+    #3 `anonymous namespace'::SuicidalRect::`scalar deleting destructor'
+    #4 geeyoou::Widget::removeChild     src\widget\Widget.cpp:565
+    #6 `anonymous namespace'::SuicidalRect::layoutRect  test_layout_engine.cpp:1270
+    #7 geeyoou::Widget::contentRect     src\widget\Widget.cpp:774   <- 门
+```
+
+**报告恰好一条**，用例 `a_layout_rect_override_that_destroys_its_host_is_survived` 单独 FAIL，进程退出码 **1**（门禁红）。
+
+这一条报告就是那句话的全部内容：门在 `:774`，读在 `:788`，中间**没有回到调用者**——调用者的守卫此刻还在栈上、还是好的，`runLayoutIfAny` 后面那次 `alive()` 也确实拦住了它自己那一帧（所以**没有第二条**报告）。**调用者的检查覆盖不了一次已经发生的读**，这是实测出来的，不是论证出来的。
 
 #### Leo 留给 E6 的两条常驻断言
 
@@ -1176,3 +1269,94 @@ free site 两条都是 `SuicidalRect::~SuicidalRect`。第三条是**进程当�
 ---
 
 **按团队纪律，本节到此为止：我不下"已验证"结论。** 本版是对 Leo 书面评审的答复稿，交复签；实现与测试交后续任务。
+
+---
+
+### 11.11 【E14】`Widget::onDescendantDetached` —— 摘除通知钩子
+
+> 状态：**已实现、已自检，未由测试团队验证。** 本小节记录机制、完备性证明、以及能变红的证据；结论由测试团队下。
+> ⚠️ **本轮只交核心机制。** `ScrollArea` / `AppWindow` / `Shell` 的 override、降级语义与它们各自的用例是 **E15/E16**，不在本轮。
+
+#### 为什么需要它（守卫解决不了的那一半）
+
+守卫是**帧作用域**的：它保证**这一帧**安全返回，**它不修复对象状态**。`ScrollArea` 的 `viewport_` / `content_` 在守卫触发之后仍然是悬垂成员，下一次 `onPaint` → `bars()` → `contentSize()` → `content_->geometry()` 就是 UAF——**摘除之后的下一次重绘就炸，不需要应用再调任何方法**。这是 REM3-RES-1。
+
+`AppWindow::relayout()` 里那三处 `if (!header_ || !content_) return;` **今天全是死代码**（库里没有任何一行会把它们置空）——**契约早就承认了这个状态，实现从没兑现过**。钩子就是兑现它的机制。
+
+#### 机制形状（照 Elena 的裁定实现，逐条对应）
+
+* **新增 `protected virtual void onDescendantDetached(Widget* node)`，默认空实现**（`Widget.hpp`）。**不复用 `childRemoved`**：后者被 `if (detail::g_layoutHosts != 0)` 门控调用，而这个钩子必须**无条件**触发（RES-1 的触发根本不需要 Layout）；复用还会把"通知我的 Layout"和"修复我自己的状态"揉进同一个虚函数，子类忘了调基类就让布局引擎静默停止更新——**凭空多一种失败模式**。默认空实现 ⇒ 没有"忘记调基类"这个陷阱。
+* **落点：`Widget.cpp` 的 `announceDetached()`**，复用已经存在的那一趟前序遍历，**不新增任何遍历**。
+* **位置：函数体第一条语句**，在 `if (win) win->widgetDetached(node);` 之前、任何解链之前。
+* **广播整条祖先链**：`for (Widget* a = node->parent(); a; a = a->parent()) a->onDescendantDetached(node);`。**不是只通知直接父节点**——`ScrollArea::content_` 是**孙子**（`viewport_->add<Widget>()`），只通知直接父节点会发给 `viewport_` 而**永远发不到 `ScrollArea`**。同样的漏在 `AppWindow::fill_` 和 `Shell::PageEntry::host` 上各再出现一次：**三个真实容器，三次都是孙子**。（这一条是**实测**过的，见下面的红态 B2。）
+* **无条件**，不受 `win != nullptr` 约束（没挂窗口的 `ScrollArea`——测试里到处都是——同样要修复状态）。
+* **在 `win->widgetDetached` 之前**：那一句会跑应用代码（`closePopup` → `popupClosed` 槽），祖先可能死在里面；先发通知就不必论证祖先存活。
+* **时机是解链之前**：整棵离场子树与整条祖先链此刻全部活着且完整，指针比较绝对安全。
+
+**一处实现细节，因为它是唯一一处需要动到访问控制的地方**：`announceDetached` 是 `Widget.cpp` 匿名 namespace 里的自由函数，够不到 protected 的钩子，而它自己是内部链接、无法在头文件里被 `friend`。所以广播被抽成 `detail::notifyDetachToAncestors(Widget*)`（`Widget.hpp` 声明、`Widget.cpp` 定义），由 `Widget` `friend` 它——**与 `Layout` friend `detail::parkLayout` 是同一个形状、同一个理由**，不是新发明。
+
+#### 尺寸预算：实测，不是论证
+
+`Widget.cpp:36` 的 R2 预算 `static_assert` **实编通过**（三条腿全绿）。但那条断言是 `<=`，它挡得住增长、说不出"没变"，所以额外用一次编译期探针取了确切数字（`template <int> struct GyShowSize; GyShowSize<int(sizeof(Widget))>;`，靠 C2079 的错误信息把数字打出来，跑完即从备份还原）：
+
+| 构型 | `sizeof(Widget)`（Release, MSVC x64） |
+|---|---|
+| **有**钩子 | **200** |
+| 把 `virtual void onDescendantDetached(...)` 整个删掉 | **200** |
+
+**一字节没动。** 虚函数只让 vtable 多一个槽，vtable 是**每类一份的静态数据**、不进对象——而 `Widget` 本来就有 `virtual ~Widget()`，vptr 早就在了。所以"0 新成员"是**量出来的**。
+
+#### 完备性证明（可独立复核，请自己 grep，不要照抄）
+
+```
+$ grep -rn "children_.erase" include src tests examples
+src/widget/Widget.cpp:444:  children_.erase(children_.begin() + std::ptrdiff_t(index));
+
+$ grep -rn "parent_ =" include src
+include/geeyoou/widget/Widget.hpp:71:    raw->parent_ = this;          <- add<T>
+src/widget/Widget.cpp:445:  owned->parent_ = nullptr;                   <- takeChild
+（其余两条是 setGeometry 里的比较与断言，不是赋值）
+```
+
+⇒ **一棵子树离开一棵仍然活着的树，唯一的门是 `takeChild → announceDetached`；除此之外持有者与被持有者必然同生共死**（`~Widget` 会先析构 `children_`，每个子节点自己到达析构）。所以 **`~Widget` 不需要加这个钩子**：在那里发通知，等于告诉一个正在被释放的对象"你的成员要被释放了"。
+（行号是本轮改动**前**的 HEAD。改动后重跑同两条 grep：`children_.erase` 的**语句**下移到 `Widget.cpp:539`，`grep` 另外命中的 `:409` / `:501` 两行**是注释里引用这条不变量的文字**，语句仍然只有一处；`parent_ =` 的**赋值**是 `Widget.hpp:84`（`add<T>`）与 `Widget.cpp:540`（`takeChild`），另两条命中是 `setGeometry` 里的比较与断言、以及成员声明本身。结论不变。）
+
+#### 与 E1/E2 守卫的关系（B7，方向 (a)）
+
+钩子把成员置空 ⇒ 出现"**对象活着但成员被置空**"的第三态。E3/E4 的检查点已经是 **`this` → 成员重读 → 游标**三段短路链。
+
+⚠️ **但"成员重读那两个子分支 E14 落地后第一次有覆盖"这句话本轮不成立，必须更正**：那两个子分支在 `ScrollArea.cpp` 的 CP-S1 / CP-C1 里，读的是 `ScrollArea` 的**私有**成员 `viewport_` / `content_`。能把它们改成 `nullptr` 的**只有 `ScrollArea` 自己的 override**，而 `ScrollArea.hpp` 也没有任何 `setContent`/`setViewport` 之类的外部写入点。**所以在 E15/E16 给 `ScrollArea` 写出 override 之前，这两个子分支仍然是死代码。** E14 让它们**可能**被覆盖，没有让它们**已经**被覆盖。这一条记在"未验证"栏。
+
+#### 能变红的证据（三个红态，全部实跑）
+
+三次实验都用**文件备份**还原，未跑任何 git 历史改写命令。用例是 `removal.a_cached_grandchild_is_cleared_before_the_next_paint` / `removal.every_node_of_a_departing_subtree_announces_itself`（`tests/widget/test_removal.cpp`）。
+
+| 实验 | 改动 | 结果 |
+|---|---|---|
+| **B** | 把 `announceDetached` 里那一行广播整个删掉 | 2 条用例 FAIL，**1 条 heap-use-after-free**（`CachingBox::onPaint` ← `Widget::paintTree`，free site 是 `Widget::removeChild`），退出码 **2** |
+| **B2（判别性）** | 广播**保留但收窄成只通知直接父节点** | 2 条用例 FAIL，**同一条 UAF 原样出现**，退出码 **2** |
+| — | 装回整条祖先链广播 | 三条腿全绿，200 用例 0 失败，ASan 0 条我方报告 |
+
+**B2 是这里的承重实验**（形状取自 Leo 对 M-1 的判别性实验）：B 只能证明"需要某种通知"，B2 才证明"**必须广播整条祖先链**"——因为被缓存的指针是孙子。
+
+**⚠️ 一条实测出来的方法学教训，值得单独记：** 用例里那次会 UAF 的读，最初写成 `(void)cached_->geometry();`。**RelWithDebInfo /O2 把这个没有消费者的载入整个删掉了**，于是红态里用例照样 FAIL（`touchedCache` 断言）、**ASan 却一条报告都没有**。把值存进一个可观测的成员（`lastCachedWidth`）之后，UAF 才浮出来。
+**推论，写给下一个写这类用例的人：一次被丢弃的读不是一次读。** 「用例 FAIL」和「ASan 报告」在这里是**两个独立的信号**，前者绿了不代表后者也会红；本族六次复发全都只有后者看得见。
+
+#### 本轮的用例增量与门禁
+
+**新增 2 条（198 → 200）**，无一条既有用例被改动或删除：
+
+| 用例 | 文件 | 覆盖 |
+|---|---|---|
+| `a_cached_grandchild_is_cleared_before_the_next_paint` | `test_removal.cpp` | 钩子存在、可覆写、在下一次重绘之前生效；含健康路径对照；**无 Window** |
+| `every_node_of_a_departing_subtree_announces_itself` | `test_removal.cpp` | 广播是**按离场子树的每个节点**发的，不只是被点名的那个 |
+
+门禁：Release / Debug / ASan 三条腿全绿，200 用例 0 失败；Release 独立跑 3 次退出码全 0 且 stdout **逐字节相同**。
+
+#### 未验证 / 留给下一轮
+
+* **B7 的成员重读子分支仍未被覆盖**，理由见上；覆盖它是 E15/E16 的事。
+* **`ScrollArea` / `AppWindow` / `Shell` 今天仍然带着 RES-1 的缺陷**：钩子存在了，但这三个容器还没有 override，所以"摘除 content 后重绘"在真实容器上仍然是 UAF。**本轮没有修它，也没有为它加用例**——加一条断言"现在还会炸"的用例不是门禁该有的东西。这是 E15/E16 的验收对象。
+* **REM3-G9 的 assert 只拦住了 `takeChild` 一条路**。`update()` / `emit()` / 虚调用仍然只是契约，没有运行时执行。
+* **REM3-G9 的编号**待架构团队复签（见 §11.3）。
+* **成本未取 `/FAsc` 复测**：广播是 O(深度) 的指针追逐 + 每层一次默认空体的虚调用，只在真实 detach 路径上付，绘制/布局/事件路径一条指令不加；**这是论证，不是实测**，按 §11.8 的教训标注在此。
