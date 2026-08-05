@@ -40,12 +40,35 @@ if exist "%ROOT%build\_deps\blend2d-src" if exist "%ROOT%build\_deps\asmjit-src"
   set "REUSE=-DFETCHCONTENT_SOURCE_DIR_ASMJIT=%ROOT%build/_deps/asmjit-src -DFETCHCONTENT_SOURCE_DIR_BLEND2D=%ROOT%build/_deps/blend2d-src"
 )
 
-rem Examples off: showcase.exe is not what this leg is for, and the three pages
-rem the tests actually assert against are compiled INTO the test binary by
-rem tests/CMakeLists.txt anyway.
+rem Examples off: showcase.exe -- a GUI that wants a message loop and a human --
+rem is not what this leg is for.
+rem
+rem THIS SWITCH IS WHY tests/CMakeLists.txt HAS TO LIST PAGE SOURCES EXPLICITLY.
+rem With examples off, examples/showcase/CMakeLists.txt is never even added, so
+rem a page that appears ONLY there is not compiled by this leg at all -- not
+rem built, not warned about, not instrumented.  That is exactly how PageIcons
+rem and PageLayout reached review having never met /W4 /permissive- or ASan,
+rem while a comment here claimed the pages were "compiled into the test binary
+rem anyway".  It was true of the three pages that existed when it was written
+rem and false the day a fourth landed.
+rem
+rem So: coverage of showcase code on this leg is whatever tests/CMakeLists.txt
+rem names, and nothing else.  Do not read this switch as "the examples are
+rem covered elsewhere".
+rem
+rem /DWIN32 /D_WINDOWS /EHsc are NOT decoration: setting CMAKE_CXX_FLAGS on the
+rem command line REPLACES the flags CMake would have computed, it does not add
+rem to them, and those three are exactly what the Release and Debug trees get
+rem for free (check CMAKE_CXX_FLAGS:STRING in either CMakeCache.txt).  Dropping
+rem them meant this leg compiled a configuration NOTHING ELSE compiles -- no C++
+rem unwind semantics -- so the one leg whose entire job is memory safety was not
+rem building the objects that ship.  It said so on every clean build, warning
+rem C4530 out of <chrono>; incremental builds never recompiled the affected
+rem translation units, so nobody had seen it in a long time.  Add sanitiser
+rem flags here, never remove these.
 "%CMAKE%" -G Ninja -S "%ROOT%." -B "%ROOT%build-asan" ^
   -DCMAKE_BUILD_TYPE=RelWithDebInfo ^
-  -DCMAKE_CXX_FLAGS="/fsanitize=address /Zi" ^
+  -DCMAKE_CXX_FLAGS="/DWIN32 /D_WINDOWS /EHsc /fsanitize=address /Zi" ^
   -DGEEYOOU_BUILD_EXAMPLES=OFF ^
   %REUSE%
 if errorlevel 1 exit /b 1
