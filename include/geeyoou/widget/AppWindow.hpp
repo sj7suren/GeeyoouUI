@@ -50,15 +50,33 @@ class AppWindow : public Window {
   static WindowOptions framelessDefaults();
 
   // The title bar.  Every visual property of the chrome is set through it.
+  //
+  // ⚠️ MAY RETURN nullptr since E15, for the same reason content() may: an
+  // application that removes the header from the tree is announced to this
+  // window, which drops the pointer.  relayout(), setHeaderVisible() and
+  // isHeaderVisible() have tested for it since the day they were written.
   WindowHeader* header() { return header_; }
   // Everything below the header.  Add the application's UI here.
+  //
+  // ⚠️ MAY RETURN nullptr since E15.  Removing the content area is legal and,
+  // before E15, left this window with a dangling member that relayout() walked
+  // into on the next resize.  PERMANENTLY nullptr: nothing rebuilds it, because
+  // an application that took its own content area out and then found content()
+  // answering with a different widget would have traded a crash for a silent
+  // wrong answer.  See ScrollArea::content() for the same rule stated in full.
   Widget* content() { return content_; }
 
   // Creates `T` inside the content area AND keeps it sized to it, so a root
   // container does not have to subscribe to resized() itself.  Only the last
   // widget passed through here is tracked.
+  //
+  // Answers nullptr when the content area is gone -- see content() above.  The
+  // one line E15 adds to this class: everything else it needed was already
+  // written, which is the argument for the whole approach and is checked by
+  // relayout() below being untouched.
   template <class T, class... Args>
   T* setContent(Args&&... args) {
+    if (!content_) return nullptr;
     T* w = content_->add<T>(std::forward<Args>(args)...);
     fill_ = w;
     relayout();
@@ -84,6 +102,10 @@ class AppWindow : public Window {
   void onPaint(Painter& p, const Rect& dirtyLocal) override;
   void onGeometryChanged() override;
   HitZone hitZoneAt(Point windowPos) override;
+  // E15/REM3-RES-1.  Nulls header_ / content_ / fill_ when they leave the tree,
+  // and nothing else -- REM3-G9.  See AppWindow.cpp for why relayout() needed
+  // no change at all.
+  void onDescendantDetached(Widget* node) override;
 
  private:
   float borderWidth() const;
