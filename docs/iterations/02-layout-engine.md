@@ -397,7 +397,9 @@ void ScrollArea::relayout() {
 ### 10.4 沿用自 T-01 ~ T-05 的边界
 
 1. **M2 断言未被用例覆盖**：命中即 `abort`，写不出「断言应触发」的进程内用例。要覆盖须用 `d7.*` 那种子进程模式，本轮未做。
-2. **M4 深度上限未被用例覆盖**：要触发需要 64 层嵌套 Layout 宿主，而 Debug 下 `add<T>` 的 `kMaxTreeDepth` 断言会先拦下建树本身。计数器与记录路径已实现（`detail::layoutDiagnostics().depthExceeded`），但**未跑通**。
+2. ~~**M4 深度上限未被用例覆盖**~~ —— **已解决（E5）**。原文的判断是"要触发需要 64 层嵌套 Layout 宿主，而 Debug 下 `add<T>` 的 `kMaxTreeDepth` 断言会先拦下建树本身"，这句话**只对某一种触发方式成立**：`g_layoutDepth` 数的是**帧**，不是**树**。八十棵互不相干的**单节点**树、每棵的 `arrange()` 去跑下一棵的 `performLayout()`，照样能把帧叠到 65 层，而每棵树的深度都是 0，`add<T>` 无话可说。用例 `layout_engine.m4_a_chain_of_unrelated_hosts_reaches_the_same_ceiling`，**三条腿全跑**。
+   原来那条 Release-only 的用例（`m4_a_pass_that_nests_past_the_ceiling_is_recorded_not_fatal`）**保留**：它走的是这个上限**被设计出来时**针对的那个形状（宿主的孩子本身又是宿主），与新用例互补。
+   **顺带的教训**：这条"未跑通"挂了两轮，原因是"要触发它需要 X"这句话从来没有被复核过——**它测的是树，要测的是递归**。同一条教训随即让 M-2 的用例成立（§11.10）。
 3. **`naturalSize_` 的深层子孙锁存**：`setGeometry` 里的锁存无条件生效，但如果一个 widget 在**进程里还没有任何 Layout** 时拿到几何、之后祖先才装上 Layout，那么只有 `adoptLayout` 的**直接**子节点会被补锁，更深的子孙要等它们下一次 `setGeometry`。迁移的三页里不可观测（页面是建在已有 layout 的宿主下的）。
 4. ~~**`Widget::relayout()` 与三个容器的 `relayout()` 同名**~~ —— **已解决**：基类那个方法改名为 `Widget::performLayout()`。理由写在 `Widget.hpp` 上：`AppWindow` / `ScrollArea` / `Shell` 各自已有 `relayout()`，其中 `ScrollArea::relayout()` 还是 `private`，因此同名的基类成员会被三个容器静态隐藏、被第四个挡在访问权限外；给唯一一个没有调用点的方法改名，比改一个已发布的 API 便宜。
 5. **多线程**：与全库一致，布局引擎只在 UI 线程使用。`g_layouts` / `g_layoutDepth` / `g_layoutHosts` / `g_arrangeHost` 都是普通 `static`，非 `thread_local`——与 `g_bubbles` 同一条理由（`docs/architecture.md` §3.11）。
@@ -745,6 +747,13 @@ void frameDegraded();
 
 > **REM3-G8**：`detail::frameDegraded()` **每帧最多记一次**。计数器数的是"帧"，不是"检查"；每个降级分支写一次、随即 `return`，天然满足。
 
+> **REM3-G8 的推论（E3/E4 落地后由实测补正；这是 E6 的验收依据，第 1 / 2 版哪里都没写过）**：
+> **"每帧最多一次"不等于"每次操作最多一次"，更不等于"每扇门一次"。**
+> 一次 `ScrollArea::setContentSize` 可以**合法地记两次**：`relayout()` 是**它自己的一帧**，它的 CP-S1 / CP-S2 记一次；返回之后 `setContentSize` 是**另一帧**，它从头到尾站在同样那三个指针上，它的 CP-C2 再记一次。按 G8 这是**正确的**——计数器数的是帧，两个帧就是两条记录。
+> ⚠️ **因此 E6（以及此后任何人）不得写 `framesDegraded == 门的数量`**，也不得写"== 死掉的对象数"或"== 失败的操作数"。
+> soak 的实测是 `framesDegraded = 403 × 5 = 2015`（`GY_SOAK_CYCLES=400` 加 3 轮热身）。**那个 5 是因为 soak 的五组各自都在自己那一帧的第一个检查点上就被打死**，不是因为库里有五扇门；把其中一组的钩子往后挪一扇门，这个数就会变——而且是**正确地**变。
+> 用例：`tests/widget/test_rem3_doors.cpp` 的 `one_operation_can_degrade_two_frames`（一次 `setContentSize`，两条记录），以及 `tests/widget/test_layout_soak.cpp` 末尾那条常驻断言（连同它为什么恰好是 5 的逐组推导）。
+
 #### 逐检查点降级表（**这是 E3/E4 的施工图；按检查点写死，不按门**）
 
 约定：`self` = `this` 的守卫；`vpw`/`ctw` = `viewport_`/`content_` 的守卫；`vp0`/`ct0` = 门前捕获的成员指针值。**记**一列写"是"表示该分支必须调用 `detail::frameDegraded()`。
@@ -787,7 +796,8 @@ void frameDegraded();
 第 1 版把门定义成 D-a/D-b 两类，是**围着两个已知缺陷点画的圈**，不是扫出来的（Leo 的判词，我核对后同意：它收录了更弱的 `viewport_->setGeometry`，却漏了 `AppWindow::relayout` 这个每帧都跑的无条件命中）。本版改成谓词 + 封闭原语清单：
 
 > **门（door）**：语句 `S` 是帧 `F` 的一扇门，当且仅当 `S` 能把控制权交给**应用代码**。判定用**封闭的原语清单**（可 grep，可维护）：
-> * **P1**：对任何 widget 的**虚成员**调用（`sizeHint()`、`onGeometryChanged()`、`onPaint()`、`styleState()`、`styleType()` …）。**限定名调用不算 P1**（`PushButton::sizeHint()` 是静态绑定），但见下面的传递性条款。
+> * **P1**：对任何 widget 的**虚成员**调用（`sizeHint()`、`onGeometryChanged()`、`onPaint()`、`styleState()`、`styleType()`、**`layoutRect()`** …）。**限定名调用不算 P1**（`PushButton::sizeHint()` 是静态绑定），但见下面的传递性条款。
+>   ⚠️ **`layoutRect()` 是 E5 复核时补进这个括号的。它一直在谓词的覆盖范围内，只是从来没有被扫到过**——原因见 §11.9 的更正：本节的第一刀是一张 grep **名字表**，而 P1 说的是"任何虚调用"，**虚调用是按名字 grep 不出来的**。
 > * **P2**：调用**已知能到达应用代码的库函数**：`setGeometry` / `setVisible` / `setLayout` / `invalidateSizeHint` / `add<T>` / `takeChild` / `removeChild` / `clearChildren` / `Window::openPopup` / `Window::closePopup` / `Widget::performLayout` / `Layout::arrange` / `Layout::measure(For)`，**以及任何被本清单登记过的库函数**（传递性在这里显式展开，见下）。
 > * **P3**：`signal.emit(...)`。
 >
@@ -836,6 +846,9 @@ void frameDegraded();
 | 25 | `examples/showcase/PageIcons.cpp:633` | P1 `content->sizeHint()`，门后动 `sa` | 库外 | （库外） | S2 | W3 | ❌ R3 不改 examples；**"契约主语是调用者"的活样本** |
 | 26 | showcase 四页 `return content->sizeHint().preferred;` | P1 | 门后无读 | — | — | — | ❌ 无动作 |
 | 27 | **P3 家族（全库 ~60 处 `.emit(`）** | P3 | **未逐点枚举** | — | S2 | **W2（扫描任务）** | ❌ 见下 |
+| **28** | **`Widget.cpp` 的 `contentRect()`，`layoutRect()` 之后** | **P1 `layoutRect()`（protected virtual）** | 门后 `if (!layout_)` 与 `layout_->margins()`——**两次经 `this` 读成员** | `this` | **S1** | **E6** | ✅ **已修**（`DeathWatch` + `frameDegraded`；见下） |
+| **28b** | **`Widget.cpp` 的 `runLayoutIfAny()`，`contentRect()` 之后** | P2 `contentRect()`（内含 #28） | `layout_.get()`，随后把 `*this` 交给 `arrangeFor` | `this` | **S1** | **E6** | ✅ **已修**（复用早已在栈上的 `LayoutGuard`，一行） |
+| **29** | **`GroupBox.hpp` 的 `layoutRect()` 覆写** | — | — | — | — | — | ❌ **当前实现安全**，理由见下；按新契约的字面它必须在表里 |
 
 **#11 为什么"看过了、不需要封"（回答我自己 E17 报告的 §8.3；理由按 Leo 复签时给的更强版本重写）**：`removeChild:420-423` 只有两条语句——`:421 takeChild(child)`（门，且它自己已经在 `:400` 上了守卫）、`:422 doomed.reset()`。
 
@@ -862,6 +875,16 @@ void frameDegraded();
 
 **#27 为什么按家族登记而不逐点列**：全库 `.emit(` 约 60 处，但 D7 豁免砍掉其中大半——凡是"发自有信号、门后只读 `this`"的（`PushButton::activate:107-109`、`ScrollArea::scrollTo:65`、`Cascader:78` …）都不危险。**剩下的是"发别人的信号 / 经别的对象绕一圈回来"那一类**，#22 是已确认的一个样本。逐点判定要读 60 个函数体，那是一次独立的扫描任务，不是 E1 能在设计文档里完成的事。**登记形态**：家族已识别、判定谓词已给出（P3 + D7 豁免）、定级 S2、排 W2，扫描产出物是 §11.9 那个 lint 的 allowlist。
 
+**#28 / #28b —— `layoutRect()` 这扇门，以及为什么两个帧都要封**：`layoutRect()` 是 `protected virtual`，它 protected 恰恰是为了让应用覆写——它自己的声明就是这么邀请的（"画自己装饰的容器覆写它，交回装饰的内侧"）。它按 P1 的字面就是一扇门，而第 1/2 版的表里没有它。
+
+**"由调用者保证"在这里不成立**，这一条值得写死：`contentRect()` 在门之后**自己还有两次经 `this` 的读**（`layout_`、`layout_->margins()`），这两次读发生在控制权回到 `runLayoutIfAny` **之前**。调用者的守卫覆盖调用者的帧，它**覆盖不了一次已经发生的读**。所以调用侧的检查**必要而不充分**，而一句"此处存活性由调用者保证"会是一句**假话**。两个帧因此各封各的：`contentRect()` 自己上游标，`runLayoutIfAny` 用它本来就有的 `LayoutGuard` 多问一次。
+
+**为什么不改成"门前预读 margins"**：这是本缺陷族里**唯一**一处预读真能奏效的地方——门后全是读，§11.0 对预读的否决理由（"预读救不了写"）在这里不适用。否决它的是**另一条**理由：`layoutRect()` 是应用代码，它有权调 `setMargins()` / `setLayout()`，预读之后这一趟就会拿**门前**的 margins 去排布。那是一次**行为改变**，没有任何缺陷在推动它，而且它是**新增**一处 REM3-RES-5 那种跨门撕裂读，不是消除一处。守卫在一条马上要跑一整趟 arrange 的路径上花 9 条指令（§11.5）。
+
+**#28 记一次、#28b 不记，这是按站点定的，不是通则**：`frameDegraded()` 存在的理由是"放弃否则是一个**缺席**"（`Layout.hpp` 计数器旁边的原话）——返回 `void`、或者返回一个编造出来的 hint 的帧不留痕迹。`runLayoutIfAny` 的放弃**不是缺席**：它返回 `false`，而 `setGeometry` 消费这个 `false`。再记一次还会让这个检查与它下面那个同形检查（`arrangeFor` 之后那个，自 R2 起一直沉默）自相矛盾。
+
+**#29 —— `GroupBox::layoutRect()` 为什么是"当前实现安全"**：`GroupBox::contentRect()` 里**一扇门都没有**——它读 `title_`、调 `localRect()`（非虚，读 `geometry_`）、做算术，P1 / P2 / P3 **一条都不匹配**，到不了应用代码。这是**这一个覆写**的性质，不是这个钩子的性质，所以调用侧照样上守卫：`Widget::contentRect` 是照着**钩子**写的，不是照着今天恰好只有一个的那份实现写的。
+
 **本轮 ✅ 的规模变化（必须让架构团队知道）**：第 1 版是 2 个检查点 / 2 个函数 / 2 个文件；本版是 **5 个检查点 / 3 个函数 / 2 个文件**（新增 `ScrollArea::setContentSize` 的 CP-C1/CP-C2，以及 CP-S2 的检查项从 3 变 2）。多出来的那个函数在**同一个文件**、**同一种形状**、上方 130 行处；不带上它，E5 复核时会立刻问"为什么隔壁那个一模一样的没改"。
 
 ---
@@ -873,22 +896,45 @@ void frameDegraded();
 | 段 | 实测 | 说明 |
 |---|---|---|
 | 单个守卫构造 | **5** | 1 次链表载入 + 2 次存字段 + 1 次存回全局（+ Debug 的 `assert` 一条 `test`/`jcc`） |
-| 三个守卫构造（合并后） | **9** | 编译器把 LIFO 的三个合并了：对全局的读改写**各只有一次** |
+| 三个守卫构造（**探针形状**：三个守卫站在同一个已在寄存器里的指针上） | **9** | 编译器把 LIFO 的三个合并了。⚠️ **这不是落点的形状**——见下方 E3/E4 落地后的实测更正 |
 | 守卫析构（无论几个） | **2** | `mov rax,[a.outer]` / `mov [g_deathWatch],rax` |
 | 一次 `alive()` | **2** | `cmp qword ptr [rsp+k], 0` + `je` |
 
-**关键实测事实**：三个守卫在全局变量上的争用与一个守卫**完全相同**，Q5 的加固没有为多守的两个指针付全局访问的代价。
+**⚠️ 上面那句"三个守卫的全局争用与一个守卫完全相同"只对探针成立**，落点上不成立；正确的说法见下。
 
-**⚠️ 本版新增的成员重读没有重测，以下是按上表单价的推算，标注为推算**：
+#### 落点实测（E3/E4 落地后，Leo 在真实 TU 上 `/FAsc` 取汇编——出门条件 §11.7 第 4 条，本轮兑现）
 
-| 现场 | 构造 | 析构 | 检查 | 合计（推算） |
-|---|---|---|---|---|
-| `GroupBox::sizeHint()` 受保护区 | 5 | 2 | CP-G1：1×`alive()` = 2 | **9**（与第 1 版实测一致，未变） |
-| `ScrollArea::relayout()` 受保护区 | 9 | 2 | CP-S1：3×`alive()` + 2×成员重读 ≈ 12；CP-S2：2×`alive()` + 1×成员重读 ≈ 7 | **≈30** |
-| `ScrollArea::setContentSize()` | 9 | 2 | CP-C1 ≈ 12；CP-C2 ≈ 12 | **≈35** |
+真实 include 链、真实 CMake flags（`/W4 /permissive- /utf-8 /Zc:__cplusplus /O2` 加 CMake 注入的默认项），不是手写 `cl` 命令行：
 
-（成员重读按 `mov reg,[this+off]` + `cmp reg,[rsp+k]` + `jne` = 3 条计。）
-**第 1 版那句"全函数除两次门调用外共 23 条指令"作废**：它按 6 次 `alive()` 计价，而正确的检查项是 5 项且其中 2 项不是 `alive()`（§11.3 CP-S2 的理由）。**重测写进 E2 的出门条件**（§11.7）。
+| 现场 | 构造 | 检查 | 析构 | **实测合计** | 曾经的推算 |
+|---|---|---|---|---|---|
+| `GroupBox::sizeHint()` 受保护区 | 5 | CP-G1 = 2 | 2 | **9** | 9 ✅ |
+| `ScrollArea::relayout()` 有 layout 的那条分支 | **17** | CP-S1 = 11、CP-S2 = 7 | 2 | **≈38** | ≈30 ⚠️ |
+| `ScrollArea::setContentSize()` | **18** | CP-C1 = 10、CP-C2 = 11 | 2 | **≈43** | ≈35 ⚠️ |
+
+**为什么推算低估了三守卫的构造（9 → 17/18）——这条方法学教训比数字本身值钱。**
+
+第 1 版的"三个守卫构造合并为 9 条"**是实测的**，但测的是**另一个形状**：探针里三个守卫站在同一个**已经在寄存器里**的指针上，中间没有任何别的代码，编译器于是把对 `g_deathWatch` 的三次读改写合并成一次。真实落点不是这个形状——`DeathWatch vpw(viewport_)` / `DeathWatch ctw(content_)` 各自要先 `mov reg,[this+off]` 把成员载进来，这些**成员载入插在三次构造之间**、把它们隔开，编译器无法再合并。对 `g_deathWatch` 是 **3 次**独立的读改写，不是 1 次。
+
+改正后的成本模型：**全局争用与守卫个数成正比，一个守卫一次读改写**；三守卫的现场付三次。这仍然可以忽略（分母见下），但理由不能再是"编译器帮我们合并了"。
+
+**教训（这是本条更正真正的产出）**：探针能证明"这样写能编译、类型形状对、语义对"——§11.8 那六条仍然全部成立。探针**不能**证明落点的指令数，因为**落点的形状由周围的代码决定，而探针里没有周围的代码**。指令数这一类断言只有一种有效测法：**在真实 TU、真实 flags、真实 include 链上取 `/FAsc`**。写进出门条件的那一条就是为此存在的，本轮是它第一次真正被兑现。
+
+**成员重读比推算便宜**：实测 **2~3 条**——编译器把 `content_ != ct0` 折成 `cmp [rbx+256],rdi` + `jne`，不必先把成员载进寄存器。推算按 3 条，方向对、量级对。
+
+**第 1 版那句"全函数除两次门调用外共 23 条指令"作废**：它按 6 次 `alive()` 计价，而正确的检查项是 5 项且其中 2 项不是 `alive()`（§11.3 CP-S2 的理由）。
+
+#### ADR-R2-01 的指令层面实证（正面结论，本轮新增）
+
+`ScrollArea::relayout()` 开头的 `if (content_->layout())` 编译成一条 `je $LN2`，**直接跳过全部三个守卫的构造**——不是"守卫很便宜"，是**一个游标都不取**。库里今天的每一个 `ScrollArea`、以及五个绝对坐标 showcase 页走的正是这条路径。ADR-R2-01 在这里不是被引用的，是被汇编证明的。
+
+#### E5/E6 两处新护栏的成本（§11.10）
+
+| 现场 | 成本 | 说明 |
+|---|---|---|
+| M-2（`Layout::measureFor` 的度量深度上限） | **2**：`cmp` 一个热全局 + `jb` | 与它上面那条 `if (buffersBusy_)` 同量级；每次 `sizeHint()` 到达 layout 时付一次 |
+| M-1（`Widget::contentRect` 的 `layoutRect()` 门） | **5 + 2 + 2 = 9** | 一个 `DeathWatch` 加一次 `alive()`，每趟 arrange 一次。它在 `runLayoutIfAny` 内部，**不装 layout 的 widget 一条都不执行**——与 ADR-R2-01 同一条理由 |
+| M-1 的调用侧（`runLayoutIfAny`） | **2** | 复用已在栈上的 `LayoutGuard`，只多一次 `alive()`；那个守卫本来就要构造 |
 
 **没有分支预测灾难**：所有条件跳转都是「本帧栈槽/寄存器 vs 0 或 vs 另一个栈槽」，生产中**恒不跳转**，稳态误预测 ≈ 0；无间接跳转、无数据相关循环、无 `switch`。对照被否决的替代方案（"用完再扫一遍 `children()` 确认指针还在"）：那是 O(N) 次指针追逐载入且分支结果数据相关——**那才是分支预测灾难。**
 
@@ -898,7 +944,7 @@ void frameDegraded();
 
 **ADR-R2-01「不装 Layout 的 widget 不为引擎付代价」继续成立**，逐条：
 
-* `ScrollArea::relayout()` 的守卫落在 `if (content_->layout())` **内部**——今天库里每一个 `ScrollArea`、以及 5 个绝对坐标 showcase 页，**一条都不执行**。
+* `ScrollArea::relayout()` 的守卫落在 `if (content_->layout())` **内部**——今天库里每一个 `ScrollArea`、以及 5 个绝对坐标 showcase 页，**一条都不执行**。**指令层面已实证**：那个 `if` 是一条 `je $LN2`，直接跳过三次构造（见上）。
 * `ScrollArea::setContentSize()` 的守卫是新增的无条件开销，但该函数只在应用改内容尺寸时调用（showcase 里是 `PageIcons.cpp:633` 的 layoutChanged 回调），不在每帧路径上。
 * `GroupBox::sizeHint()` 的守卫只在有人问 hint 时才执行，而问的人只有 Layout 或应用。
 * `sizeof(Widget)` **不变**（0 新成员）；`g_deathWatch` 是 8 字节 BSS，**且不是新增的**（E17 已有）。
@@ -973,7 +1019,7 @@ E2 交测前必须逐条给出证据，**"探针通过"不算数**：
    （唯一复用的是 blend2d/asmjit 的**已下载源码目录**，靠 `FETCHCONTENT_SOURCE_DIR_*` 指过去，省的是一次 clone；它们的 183 个 TU 仍然是从零编的，我们的一个 .obj 都没复用。）
 2. **全库 `/W4 /permissive-` 零警告**。这是 **E2 的出门条件，不是 E1 的已验事实**（§11.8 已相应降级）。理由：§11.5/§11.8 的探针是**手写 `cl` 命令行**，缺 `/utf-8` 与 `/Zc:__cplusplus`（项目实际是 `CMakeLists.txt:96` 的 `/W4 /permissive- /utf-8 /Zc:__cplusplus` 外加 CMake 注入的默认 flags），也没走真实 include 链。`Widget.hpp` 是全库最热的头文件，模板搬进去会在**每一个** TU 里实例化。
 3. **`Widget.cpp:36` 的尺寸 `static_assert` 在上述全量构建里被真正求值过**（0 新成员，论证上必然成立，但要编过才算）。
-4. **§11.5 的指令数按新形状重测**（成员重读是推算，不是实测）。**注**：E2 不落任何检查点，所以 CP-S1/CP-S2/CP-C1/CP-C2 的成员重读在 E2 阶段**没有代码可测**——这一条随 E3/E4 一起交，E2 只负责不让它被忘掉。
+4. ~~**§11.5 的指令数按新形状重测**~~ —— **已交（E5/E6 轮）**，见 §11.5 的"落点实测"小节。结论不是"推算基本对"：三守卫构造的**实测是 17/18，推算是 9**，因为探针里那三个守卫站在同一个已在寄存器里的指针上，而落点上成员载入把它们隔开了、编译器合并不了。**方法学教训写在那一节里**，它比数字本身值钱。（成员重读的推算方向和量级是对的：推算 3 条，实测 2~3 条。）
 5. **设施可被 `GroupBox`（const 成员函数内）与 `ScrollArea`（非 const 私有方法内）直接使用，零 `friend`**（§11.2 的两条可见性论证要在真实 include 链上兑现，不是探针上）。
 6. **零分配**：soak 的 `liveAllocs` 序列证明（`test_layout_soak.cpp` 的四条采样序列，末值不得高于热身后的值）。
 7. **一条正向用例**（施工清单第 5 条）：没有人死时，几何、度量次数、诊断计数**逐个不变**。
@@ -1044,9 +1090,88 @@ E1 只出设计不写实现，但设计里有几条"编译器说了算"的断言
 grep -n "setGeometry(\|sizeHint()\|\.emit(\|setVisible(\|setLayout\|invalidateSizeHint\|add<\|takeChild(\|removeChild(\|clearChildren(\|openPopup(\|closePopup(" src/widget/*.cpp
 ```
 
+**⚠️ E5 复核的更正：上面那一刀漏掉的是 P1，而且是结构性地漏掉的。** 那条 grep 是一张**名字表**，表里每一项都是 P2（具名库函数）或 P3（`.emit(`）。P1 说的却是"对任何 widget 的**虚**成员调用"，而**虚调用按名字是 grep 不出来的**——`c->foo()` 是不是虚调用，取决于 `foo` 在**头文件**里有没有 `virtual`，不取决于调用点长什么样。`layoutRect()`（表 #28）正是这么漏掉的：它一直在谓词的覆盖范围之内，扫描却结构性地看不见它。
+
+**因此 lint 的契约加一条（三条性质之外的第四条，E5 判定它同样不可议）**：候选集的 P1 部分必须**从声明侧生成**——扫 `include/geeyoou/**/*.hpp` 收集所有 `virtual` 成员函数名（含 `override`），再拿这张**生成出来的**名字表去扫 `src/`——而不能由人手写一张调用点名字表。手写的那一张，本节第一刀已经证明会漏，而且漏的方式是"看起来很全"。
+
 **为什么这个能兑现 Leo 要的性质**：它检查的是**代码**而不是**被跑到的路径**（运行时计数器只能覆盖用例踩到的那些帧，而本族五次复发里至少三次是没有用例踩到的帧）；它的红/绿判据是机械的；它的 allowlist 天然逼着"看过了没有"与"没看"可区分——这正是 §11.4 #11（`removeChild`）那一行要证明的事。
 
 **成本与风险，写明**：脚本要做的是**近似**的 C++ 函数体切分（花括号配平 + 函数头正则），不是解析。首轮会多报若干条（估计 20~40 条，主要来自 P3 家族），**这些多报的分诊本身就是表 #27 那个 W2 扫描任务**——也就是说这个 lint 不是额外工作，它是把已经必须做的那次扫描变成一个**不会退化**的产物。E5 若判定脚本形状不合适（例如决定改用 clang 的 AST 工具），**三条性质不变**即可。
+
+---
+
+### 11.10 【E5 · E6】两条护栏的落地记录
+
+> 状态：**已实现、已自检，未由测试团队验证。** 本小节记录做了什么、判定位置的论证、以及每条能变红的证据；结论由测试团队下。
+
+#### M-2（E5）：度量深度上限 —— `src/widget/Layout.cpp`
+
+`g_measureDepth` 被正确加减、被停车场第二个排空点正确读，**却从来没有与任何上限比较过**。M4 只管住排布半边（`Widget.cpp` 的 `g_layoutDepth >= kMaxTreeDepth` 是全库唯一的上限判定，且只统计 `LayoutGuard` 帧）。
+
+**漏的是哪一类**，精确到形状：
+
+| 形状 | 谁挡住 |
+|---|---|
+| 自递归（A 量 A） | `buffersBusy_` ✓ |
+| 二元环 A → B → A | `buffersBusy_`（回到 A 时 A 自己的闩已合上）✓ |
+| **链 A → B → C → … → N** | **没有任何东西挡** ⚠️ |
+
+链上每一级是**不同的** `Layout` 对象、`buffersBusy_` 各自为 false；一级都不是布局 pass，所以 `g_layoutDepth` 全程为 0，M4 看不见。触发它只需要一个 `sizeHint()` 覆写去问**另一棵树**的 `sizeHint()`——而"问别的 widget 要 hint"正是 `sizeHint()` 存在的理由。终点是栈耗尽：**是 DoS，不是内存破坏**，但与 R1/R2 同形——护栏只按排布半边设计。
+
+**做法**：`Layout::measureFor` 里，`if (buffersBusy_)` 之后、`MeasureFrame` 构造**之前**，`g_measureDepth >= kMaxTreeDepth` 即 `detail::layoutDepthExceeded(&host)` 并返回 `lastMeasure_`。**绝不 abort、绝不抛**（ADR-R2-04）；沿用 M4 的 `depthExceeded` 计数器而不是新开第六个，因为是同一个事实、同一个读者。
+
+**判定位置的两条论证**（代码里也写着，这里是摘要）：
+
+* **计数配平**：被拒的调用**根本没碰过** `g_measureDepth`，没有加就不需要配对的减；`MeasureFrame` 析构（`Layout.cpp` 停车场的**第二个排空点**）语义**一字不变**——这一帧既没停放任何东西、也没成为最外层度量，栈上仍在的那些帧照旧在退栈时排空。若把判定放进 `MeasureFrame` 的构造函数，"这一帧到底计没计数"就变成析构函数也必须回答的问题，于是要多一个只为让两半同步而存在的标志位——而"一个计数器记在两个地方"正是这个文件当初出现两个排空点的原因。
+* **不读已释放对象**：`lastMeasure_` 经 `this` 读，所以 `this` 必须活着——而在这个位置它一定活着，因为**本帧还没跨过任何一扇门**：调用者上一条语句刚解引用过 `layout_`（`Widget::sizeHint`），中间没有一行跑应用代码。把判定往下挪一行、挪到 `measure(host)` 之后，这条论证就没了，那时它需要一个自己的游标，跟 `GroupBox`/`ScrollArea` 的落点一样。
+
+**顺序**：放在 `buffersBusy_` **之后**，于是既有行为逐位不变——两个分支都返回 `lastMeasure_`，差别只在记不记；而同一个 layout 的重入式度量是**有文档、预期之内、自终止**的，不是失控链条，不该被记成失控链条。
+
+**能变红的用例**：`layout_engine.a_chain_of_measurements_stops_at_the_same_ceiling_a_pass_does`。**八十棵互不相干的单层树**，不是一棵八十层的树——所以 §10.4.2 里那条"Debug 建不出这么深的树"的限制根本不适用，本用例**三条腿全跑**。红态两种形态都实跑过：
+
+* 去掉上限判定 ⇒ 本用例在第一条断言就 FAIL（`depthExceeded` 读到 **0**，且 `layouts[64]->measures` 是 1——链条真的一路跑穿了）；
+* 去掉上限判定并把链长提到 20 000 ⇒ 进程**栈耗尽**（SIGSEGV，没有报告、没有可读的退出码）；
+* **装回上限判定后，同样 20 000 链长本用例照过**——上限落在第 64 层，与链长无关，所以门禁里留 80 就够。
+
+**顺带解决 §10.4.2 的 M4**：同一手法（互不相干的浅宿主，每个的 `arrange()` 跑下一个的 `performLayout()`）让排布半边的上限也能在 **Debug** 里跑通，用例 `layout_engine.m4_a_chain_of_unrelated_hosts_reaches_the_same_ceiling`。原来那条 Release-only 的用例保留，两者形状互补。
+
+#### M-1（E6）：`layoutRect()` 这扇未枚举的虚函数门 —— `src/widget/Widget.cpp`
+
+见 §11.4 的 #28 / #28b / #29 与那三段说明。两处落点：`Widget::contentRect()` 自己上一个 `DeathWatch` 并在降级分支记一次 `frameDegraded()`；`Widget::runLayoutIfAny()` 用早已在栈上的 `LayoutGuard` 多问一次 `alive()`（一行，不记）。`LayoutGuard` 的 `DrainOnUnwind` 顺序语义**未被触碰**——新增的只有一条 `if (!guard.alive()) return false;`，和它下面那条同形检查一样从 `guard` 的作用域里返回。
+
+**能变红的用例**：`layout_engine.a_layout_rect_override_that_destroys_its_host_is_survived`（应用覆写 `layoutRect()` 并在其中销毁宿主）。**封门之前**它在 ASan 腿上产出 **3 条报告**，分类器判 **OURS**、退出码 1（= 门禁红）：
+
+```
+heap-use-after-free  READ 8   #0 geeyoou::Widget::contentRect      Widget.cpp
+heap-use-after-free  READ 8   #0 geeyoou::Widget::runLayoutIfAny   Widget.cpp
+access-violation              #0 geeyoou::Layout::arrangeFor       Layout.cpp   <- 进程在此死掉
+```
+
+free site 两条都是 `SuicidalRect::~SuicidalRect`。第三条是**进程当场死**，不是"只有 ASan 看得见"那一类——与 E8 复现器同级。
+
+#### Leo 留给 E6 的两条常驻断言
+
+* **CP-G1 的降级返回值逐位断言**：`tests/widget/test_rem3_doors.cpp` 的 `a_dead_group_box_answers_with_its_frame_and_nothing_else`。**有标题 / 无标题各一份**——两份的差值就是标题栏那 22px，而这正好钉死了"`frameH` 用的是门**前**的 `top`"（门后重算要读一个已释放的 `std::string`）。断言 `min == preferred == {24, 46}` / `{24, 24}`、`max` 保持 `{kUnbounded, kUnbounded}`。四个常量在用例里**重写一遍而不是从实现导出**：它们是 §11.3 的契约，从实现导出的用例只会同意实现自己。
+* **`framesDegraded` 的常驻断言**：`tests/widget/test_layout_soak.cpp` 末尾，`== (cycles + 3) × 5`，**并附上五组各自命中哪个检查点的推导**，以及一句"这个 5 不是门的数量"。见 §11.3 REM3-G8 的推论。
+
+#### 本轮的用例增量与门禁
+
+**新增 5 条**（186 → 191），无一条既有用例被改动或删除：
+
+| 用例 | 文件 | 覆盖 |
+|---|---|---|
+| `a_chain_of_measurements_stops_at_the_same_ceiling_a_pass_does` | `test_layout_engine.cpp` | M-2 |
+| `m4_a_chain_of_unrelated_hosts_reaches_the_same_ceiling` | `test_layout_engine.cpp` | §10.4.2 的 M4，三条腿 |
+| `a_layout_rect_override_that_destroys_its_host_is_survived` | `test_layout_engine.cpp` | M-1（含健康路径对照） |
+| `a_dead_group_box_answers_with_its_frame_and_nothing_else` | `test_rem3_doors.cpp`（新文件） | CP-G1 逐位 |
+| `one_operation_can_degrade_two_frames` | `test_rem3_doors.cpp`（新文件） | REM3-G8 的推论 |
+
+#### 未验证 / 留给下一轮
+
+* **源码改动的行为中性**是用"整份 Release stdout 与改动前逐字节相同"自检的：只在源码改完、用例尚未加入时比对，diff **完全为空**；加入用例后 diff 只有 5 行新增的 PASS 加一行总数。这不能替代测试团队的判断。
+* **§11.5 的 M-2 / M-1 成本是按 §11.5 的实测单价推算的**，两处**都没有单独取 `/FAsc` 复测**。按本节自己刚写下的教训，这一条**就是推算**，标注在此。
+* `Widget::contentRect()` 的降级分支返回门前那个 `r`，今天**没有任何消费者**（唯一调用者下一行就问自己的守卫）。这是一条**隐式不变量**：将来若出现第二个调用者，它要么自己检查，要么这个返回值的语义要重新定义。
+* REM3-RES-1 / RES-2 / RES-3 / RES-5 / RES-6 / RES-7 **一条都没动**。
 
 ---
 
