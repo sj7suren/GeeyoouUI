@@ -32,9 +32,21 @@ AppWindow::AppWindow(const std::string& title, int logicalWidth,
   header_->metricsChanged.connect([this] { relayout(); });
 
   maximizedChanged.connect([this](bool on) {
-    header_->setMaximized(on);
+    // header_ MAY BE NULL here since E15, and this slot runs on every single
+    // maximise/restore, so an unguarded store would be a crash an application
+    // reaches by pressing one button.  It is the one place E15 made reachable
+    // and did not follow: before it, header_ was set in this constructor and
+    // never written again.
+    //
+    // NO SELF-HEAL, same rule as onDescendantDetached and setContent<T>: an
+    // application that took the title bar out of the tree does not get a new
+    // one grown under it.  The state simply stops being maintained.
+    if (header_) header_->setMaximized(on);
     // The outline is dropped while maximised, so the content area grows by the
-    // border width -- that has to be re-laid out, not just repainted.
+    // border width -- that has to be re-laid out, not just repainted.  Both of
+    // these stay UNCONDITIONAL: the border width changes whether or not a
+    // header is present, relayout() has tested for the null members since the
+    // day it was written, and update() touches none of them.
     relayout();
     update();
   });
