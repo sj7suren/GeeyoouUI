@@ -30,6 +30,8 @@
 #include "geeyoou/render/Painter.hpp"
 #include "geeyoou/render/StyleSheet.hpp"
 #include "geeyoou/render/Theme.hpp"
+#include "geeyoou/widget/BoxLayout.hpp"
+#include "geeyoou/widget/GridLayout.hpp"
 #include "geeyoou/widget/Label.hpp"
 #include "geeyoou/widget/ProgressBar.hpp"
 #include "geeyoou/widget/PushButton.hpp"
@@ -83,6 +85,12 @@ void resetStyling() {
 // the same Canvas -> Painter -> paintTree path a real window uses.  No Window,
 // no message loop, no display.
 OffscreenImage renderTree(Widget& root, int width, int height, Color background) {
+  // A tree that owns a Layout is laid out before it is painted, so a baseline
+  // can be a picture of the LAYOUT rather than of a hand-positioned mock-up.
+  // A no-op -- not one instruction, not one pixel -- for the five baselines
+  // that came before it, none of which has a layout at all.
+  root.performLayout();
+
   OffscreenImage img(width, height, 1.0f);
   // dpr is 1, so the physical dirty rect and the logical window rect are the
   // same numbers.  Anything else would need the two spelled separately.
@@ -236,6 +244,26 @@ class ClipBox : public Widget {
   Color color_;
 };
 
+// A ClipBox that will not be squeezed.  The base Widget hint has a minimum of
+// zero on both axes, which means a box layout can always shrink it to fit and
+// an overflow is unreachable -- so the one baseline that is ABOUT overflowing
+// needs a probe that says no.  Nothing else about it differs: it is still a
+// flat rectangle of one colour.
+class FirmBox : public ClipBox {
+ public:
+  FirmBox(Color c, geeyoou::Size floorSize) : ClipBox(c), floor_(floorSize) {}
+
+  geeyoou::SizeHint sizeHint() const override {
+    geeyoou::SizeHint h;
+    h.min = floor_;
+    h.preferred = floor_;
+    return h;
+  }
+
+ private:
+  geeyoou::Size floor_;
+};
+
 class IconStrip : public Widget {
  protected:
   void onPaint(Painter& p, const Rect&) override {
@@ -355,6 +383,132 @@ GEEYOOU_TEST(golden, shape_progress_bars) {
   const OffscreenImage img =
       renderTree(root, 260, 96, Color::rgb(0x12, 0x16, 0x1D));
   GOLDEN("shape", "progress_bars", img, Gate::Hard);
+}
+
+// ------------------------------------------------- shape group: the layouts ---
+//
+// Three baselines that are pictures of the ARITHMETIC in BoxLayout and
+// GridLayout.  Flat rectangles and no text, so they are zero-tolerance gates
+// like the rest of this group: a pixel of difference here is a pixel of
+// difference in where a layout put something, which is exactly the class of
+// regression a unit test full of CHECK_NEARs can be edited to accommodate and a
+// baseline cannot.
+GEEYOOU_TEST(golden, shape_box_layout_stretch) {
+  resetStyling();
+  Widget root;
+  root.setGeometry({0.0f, 0.0f, 299.0f, 100.0f});
+
+  // Natural sizes first, layout second: adoption latches what a widget was
+  // hand-positioned at, and that is where these three get their preferred
+  // widths from.
+  const Color kColors[] = {Color::rgb(0x2F, 0xA8, 0xFF), Color::rgb(0x3E, 0xD1, 0x7A),
+                           Color::rgb(0xFF, 0xB0, 0x20)};
+  ClipBox* boxes[3] = {};
+  for (int i = 0; i < 3; ++i) {
+    boxes[i] = root.add<ClipBox>(kColors[i]);
+    boxes[i]->setGeometry({0.0f, 0.0f, 40.0f, 30.0f});
+  }
+
+  geeyoou::BoxLayout* box =
+      root.setLayout<geeyoou::BoxLayout>(geeyoou::BoxLayout::Orientation::Horizontal);
+  box->setMargins({10.0f, 10.0f, 10.0f, 10.0f});
+  box->setSpacing(8.0f);
+  // 279 of content, 16 of it spacing; 120 goes to the preferred widths and the
+  // remaining 143 is split 1:2:3.  That division does not come out even -- 23,
+  // 47, 71 leaves two pixels over -- and the rule is that they go to the
+  // largest weight.  Which is why the third bar ends EXACTLY on the right
+  // margin in this picture, and why a rewrite of this baseline would mean the
+  // remainder rule changed.
+  box->addWidget(boxes[0], 1);
+  box->addWidget(boxes[1], 2);
+  box->addWidget(boxes[2], 3);
+
+  const OffscreenImage img =
+      renderTree(root, 299, 100, Color::rgb(0x12, 0x16, 0x1D));
+  GOLDEN("shape", "box_layout_stretch", img, Gate::Hard);
+}
+
+GEEYOOU_TEST(golden, shape_grid_layout_spans) {
+  resetStyling();
+  Widget root;
+  root.setGeometry({0.0f, 0.0f, 300.0f, 160.0f});
+
+  struct Spec {
+    Color color;
+    float w;
+    float h;
+  };
+  // Row 0 is three cells of DIFFERENT heights: 24, 40, 24.  The row is 40 tall
+  // and all three are drawn at 40, which is the "a row takes the tallest cell"
+  // rule -- take the first one instead and this picture changes everywhere
+  // below the top row as well as in it.
+  const Spec kSpecs[] = {
+      {Color::rgb(0x2F, 0xA8, 0xFF), 60.0f, 24.0f},  // (0,0)
+      {Color::rgb(0x3E, 0xD1, 0x7A), 40.0f, 40.0f},  // (0,1)
+      {Color::rgb(0xFF, 0xB0, 0x20), 30.0f, 24.0f},  // (0,2)
+      {Color::rgb(0xFF, 0x4D, 0x5E), 250.0f, 30.0f}, // (1,0) spanning all three
+      {Color::rgb(0x86, 0x94, 0xAD), 30.0f, 20.0f},  // (2,0)
+      {Color::rgb(0x5C, 0xC0, 0xFF), 30.0f, 20.0f},  // (2,2)
+  };
+  ClipBox* cells[6] = {};
+  for (int i = 0; i < 6; ++i) {
+    cells[i] = root.add<ClipBox>(kSpecs[i].color);
+    cells[i]->setGeometry({0.0f, 0.0f, kSpecs[i].w, kSpecs[i].h});
+  }
+
+  geeyoou::GridLayout* grid = root.setLayout<geeyoou::GridLayout>();
+  grid->setMargins({12.0f, 12.0f, 12.0f, 12.0f});
+  grid->setSpacing(6.0f);
+  grid->addWidget(cells[0], 0, 0);
+  grid->addWidget(cells[1], 0, 1);
+  grid->addWidget(cells[2], 0, 2);
+  // 250 wide across three columns that together supply 60 + 40 + 30 and two
+  // 6px gaps: 108 short.  Column 1 is the stretchable one, so all 108 lands
+  // there -- ADR-R2-09's share-out, in one picture.
+  grid->addWidget(cells[3], 1, 0, 1, 3);
+  grid->addWidget(cells[4], 2, 0);
+  grid->addWidget(cells[5], 2, 2);
+  grid->setColumnStretch(1, 1);
+
+  const OffscreenImage img =
+      renderTree(root, 300, 160, Color::rgb(0x12, 0x16, 0x1D));
+  GOLDEN("shape", "grid_layout_spans", img, Gate::Hard);
+}
+
+GEEYOOU_TEST(golden, shape_layout_overflow) {
+  resetStyling();
+  Widget root;
+  root.setGeometry({0.0f, 0.0f, 200.0f, 100.0f});
+
+  // Four 30px rows and three 6px gaps need 138; there are 84.  The degraded
+  // shape this baseline holds in place is the deliberate one: every row keeps
+  // the height it said it needs and the tail runs off the bottom, so the third
+  // row is cut in half by the window's own clip and the fourth never appears.
+  // The alternative -- squeezing four rows into 84 -- would render four
+  // unreadable stripes and look like a working layout.
+  const Color kColors[] = {Color::rgb(0x2F, 0xA8, 0xFF), Color::rgb(0x3E, 0xD1, 0x7A),
+                           Color::rgb(0xFF, 0xB0, 0x20), Color::rgb(0xFF, 0x4D, 0x5E)};
+  FirmBox* rows[4] = {};
+  for (int i = 0; i < 4; ++i) {
+    rows[i] = root.add<FirmBox>(kColors[i], geeyoou::Size{0.0f, 30.0f});
+  }
+
+  geeyoou::BoxLayout* box =
+      root.setLayout<geeyoou::BoxLayout>(geeyoou::BoxLayout::Orientation::Vertical);
+  box->setMargins({8.0f, 8.0f, 8.0f, 8.0f});
+  box->setSpacing(6.0f);
+  for (FirmBox* row : rows) box->addWidget(row);
+
+  const OffscreenImage img =
+      renderTree(root, 200, 100, Color::rgb(0x12, 0x16, 0x1D));
+  GOLDEN("shape", "layout_overflow", img, Gate::Hard);
+
+  // The picture is only half the gate: it shows WHAT happened, and this says
+  // the engine knew.  A layout that silently drew the same thing without
+  // reporting would pass the image comparison.
+  CHECK(root.lastLayoutOverflow().any());
+  CHECK_NEAR(root.lastLayoutOverflow().heightShort, 54.0f, 0.0005f);
+  CHECK_EQ(root.lastLayoutOverflow().clippedCount, 2);
 }
 
 // -------------------------------------------------------------- text group ---
