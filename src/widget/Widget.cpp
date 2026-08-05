@@ -639,8 +639,58 @@ void Widget::latchNaturalSize(bool fromArrange) {
   naturalSize_ = s;
 }
 
+// M-1: layoutRect() is a DOOR, and it is the one the enumeration in section
+// 11.4 did not have.
+//
+// It qualifies under P1 for the plainest possible reason -- it is a virtual
+// call on a widget -- and it is protected rather than private precisely so that
+// applications override it: its own declaration invites them to (a container
+// that draws decoration of its own hands back the inside of that decoration).
+// An override is application code, application code may destroy widgets, and
+// the widget it is most likely to reach is the one it is a method of.
+//
+// GroupBox is the library's only override and it reads geometry and a string
+// and nothing else, so nothing in the library can trigger this today.  "Today's
+// only override" has never been an invariant in this family; it is the sentence
+// that was written in front of every one of the five recurrences.
+//
+// WHY THE CHECK IS HERE and not left to the caller.  Everything after the door
+// in THIS frame is a read through `this` -- layout_ twice -- and both of them
+// run before control gets back to runLayoutIfAny.  The caller's guard covers
+// the caller's frame; it cannot cover a read that already happened.  So the
+// caller's check (which it needs anyway, for its own reads) is NECESSARY and
+// NOT SUFFICIENT, and a comment here declaring liveness to be the caller's
+// business would have been a comment that is false.
+//
+// WHY NOT PRE-READ THE MARGINS INSTEAD.  This is the one site in the family
+// where pre-reading would actually work -- everything after the door is a read,
+// and section 11.0's objection to pre-reading is that it cannot cover a WRITE.
+// It is rejected because it changes the healthy path: layoutRect() is
+// application code and is entitled to call setMargins() or setLayout(), and a
+// hoisted read would then arrange with the margins from before the call.  That
+// is a behaviour change with no defect pushing it, and it would ADD a cross-door
+// tear of exactly the kind registered as REM3-RES-5 rather than remove one.  A
+// cursor costs seven instructions on a path that is about to run a whole
+// arrange.
+//
+// frameDegraded() once, here, per REM3-G8 -- and deliberately NOT a second time
+// at the caller's check; see the note there.
 Rect Widget::contentRect() const {
+  const detail::DeathWatch self(this);
   const Rect r = layoutRect();
+  if (!self.alive()) {
+    // REM3-G1: `r` is legal because it is a local of THIS frame, copied out of
+    // the call at the door -- the same standing ScrollArea::relayout's `h` has.
+    // Nothing else here is: layout_ is a read of a freed Widget.
+    //
+    // The value is dead on arrival anyway.  runLayoutIfAny is the only caller
+    // and it asks its own guard on the very next line, so no rectangle this
+    // branch returns is ever consumed.  It is returned rather than fabricated
+    // because fabricating one would be inventing an answer for an object that
+    // no longer has one.
+    detail::frameDegraded();
+    return r;
+  }
   if (!layout_) return r;
   const Margins& m = layout_->margins();
   return {r.x() + m.left, r.y() + m.top,
@@ -723,6 +773,25 @@ bool Widget::runLayoutIfAny() {
     if (!layout_) break;
     layoutDirty_ = false;
     const Rect content = contentRect();
+    // M-1's other half.  contentRect() calls layoutRect(), which is a protected
+    // virtual an application may override -- a door, see the note on
+    // contentRect -- and everything below this line reads a member: layout_ on
+    // the next statement, then `*this` handed to arrangeFor.  `content` is
+    // already a local copy, so it survives; nothing else here does.
+    //
+    // The guard for it was constructed four lines up and covers the whole
+    // function, so closing this is one line.  That is not luck: LayoutGuard is
+    // on the stack because arrange() is a door too, and a frame that already
+    // holds a cursor pays nothing extra for a second question.
+    //
+    // NO frameDegraded() here, and it is a decision rather than an omission.
+    // The counter exists because giving up is otherwise an ABSENCE -- a frame
+    // returning void or a fabricated hint leaves no trace (Layout.hpp, next to
+    // the counter).  This frame's give-up is not an absence: it returns FALSE,
+    // and setGeometry consumes it.  Recording it as well would also make this
+    // check disagree with the identical one after arrangeFor below, which has
+    // been silent since R2.
+    if (!guard.alive()) return false;
     // Captured, not re-read: application code run from inside arrange() may
     // replace this widget's layout, and the result below belongs to the object
     // that PRODUCED it, not to whatever is installed by the time it returns.
