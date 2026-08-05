@@ -33,27 +33,26 @@ Rect GroupBox::contentRect() const {
 }
 
 // The only one of the six that is a CONTAINER, so it is the only one whose hint
-// can be more than its own decoration: if it owns a Layout, what it needs is
-// what that layout needs, plus the frame.
+// can be more than its own decoration: what it needs is what its CONTENT needs,
+// plus the frame.
 //
-// This is measure()'s first real consumer.  Note that it asks its OWN layout,
-// not its children's -- a nested GroupBox answers for its own subtree when it
-// is asked, and the recursion stops wherever the tree stops.
+// Both halves of the base class's answer are usable as they stand, which is why
+// there is no `if (layout())` here any more:
+//   * with a layout, Widget::sizeHint() is that layout's measure(), and the
+//     layout is arranged into contentRect() (see layoutRect()), so its answer
+//     is a CONTENT size and the frame goes on top of it;
+//   * without one, the base answer is the natural size -- a size for the WHOLE
+//     widget, frame included -- so the frame is taken off before it is added
+//     back.  Written that way round rather than as "return it unchanged" so
+//     the title floor below applies to both branches identically.
 SizeHint GroupBox::sizeHint() const {
   const float top = title_.empty() ? kTopPlain : kTopTitled;
   const float frameW = 2.0f * kInsetX;
   const float frameH = top + kInsetBottom;
 
-  SizeHint inner;
-  if (const Layout* l = layout()) {
-    inner = l->measure(*this);
-  } else {
-    // No layout: absolute positioning, and the natural size the base class
-    // latched is the best statement anyone has made about how big this is.
-    inner = Widget::sizeHint();
+  SizeHint inner = Widget::sizeHint();
+  if (!layout()) {
     inner.min = Size{0.0f, 0.0f};
-    // The frame is added below, so what is folded in here is the CONTENT the
-    // natural size was chosen to hold.
     inner.preferred = Size{(std::max)(0.0f, inner.preferred.width - frameW),
                            (std::max)(0.0f, inner.preferred.height - frameH)};
   }
