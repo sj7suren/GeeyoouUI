@@ -19,11 +19,69 @@ ScrollArea::ScrollArea() {
 }
 
 void ScrollArea::setContentSize(Size size) {
+  // CP-C1 and CP-C2 (docs/iterations/02-layout-engine.md section 11.3).  TWO
+  // doors in five lines, and everything after either of them is reached through
+  // one of three pointers:
+  //
+  //   * relayout() goes through `this` and, inside, through both members;
+  //   * scrollTo(scrollOffset()) dereferences viewport_ (scrollOffset) and
+  //     content_ (maxScroll -> contentSize, ScrollArea.hpp);
+  //   * update() goes through `this` alone.
+  //
+  // (Section 11.3 calls these three doors and statements :22, :24, :26 and :27,
+  // from the HEAD it was written against.  They have moved down by the size of
+  // these comments; the STATEMENTS are what the table means.)
+  //
+  // So three cursors, not one (REM3-G2): the application may destroy the
+  // content or the viewport WITHOUT touching this ScrollArea -- content() is
+  // public and the viewport is reachable through children() -- and a cursor
+  // standing on `this` would report all is well while the very next line writes
+  // into a freed block.
+  //
+  // The captured values are the other half of the same rule.  A cursor answers
+  // "is the object I remembered still alive"; it cannot answer "is the member
+  // still POINTING at it", and E14's onDescendantDetached hook is expected to
+  // null these members out from inside a door (section 11.6, REM3-RES-7).  So
+  // each check re-reads the member THROUGH `this` and compares, and a member
+  // that changed degrades rather than being followed -- the new value has no
+  // cursor on it, and this frame has no way to earn one now.
+  Widget* const vp0 = viewport_;
+  Widget* const ct0 = content_;
+  const detail::DeathWatch self(this);
+  const detail::DeathWatch vpw(viewport_);
+  const detail::DeathWatch ctw(content_);
+
   content_->setGeometry({0.0f, 0.0f, std::max(0.0f, size.width),
                          std::max(0.0f, size.height)});
+  // CP-C1, REM3-G3: immediately after the door, before any other statement.
+  // The order is load-bearing, not stylistic: `this` first, because the two
+  // member re-reads below dereference it; then the members, because a member
+  // that was replaced makes its cursor answer a question about the wrong
+  // object; then the cursors, which catch the case the re-reads cannot -- the
+  // member still points where it did and the object it points at is gone.
+  if (!self.alive() || viewport_ != vp0 || content_ != ct0 || !vpw.alive() ||
+      !ctw.alive()) {
+    detail::frameDegraded();  // REM3-G8: once per frame, and the frame ends here
+    return;
+  }
   relayout();
+  // CP-C2.  relayout() is a door in its own right -- it holds three of them,
+  // section 11.4 #3/#4/#5 -- and its own guards protect ITS frame, not this one.
+  // Same five checks: `this` may have died in there, and so may either member.
+  if (!self.alive() || viewport_ != vp0 || content_ != ct0 || !vpw.alive() ||
+      !ctw.alive()) {
+    detail::frameDegraded();
+    return;
+  }
   // Shrinking the content can leave the view scrolled past the new end.
   scrollTo(scrollOffset());
+  // No CP-C3 after :26, and the reason is a contract rather than an accident:
+  // scrollTo's only door is `scrolled.emit(...)` and the signal's host is
+  // `this`, which D7 forbids a slot from destroying (Widget.hpp, core/
+  // Signal.hpp).  Section 11.4 #9.  All that follows is update(), which reads
+  // `this` and walks parent_ -- no member pointer.  Add a statement here that
+  // touches viewport_ or content_ and the exemption stops covering it, because
+  // D7 says nothing about the OTHER two pointers.
   update();
 }
 
@@ -155,16 +213,62 @@ void ScrollArea::relayout() {
   // and then set the content to exactly the width that answer implied, which is
   // how a page that fits perfectly ended up permanently scrollable sideways.
   if (content_->layout()) {
+    // CP-S1 and CP-S2 (section 11.3).  The guards live INSIDE this branch on
+    // purpose: content with no layout takes the tail of the function, runs no
+    // application code on the way, and pays nothing -- which is ADR-R2-01 held
+    // to, not merely quoted.  Every ScrollArea in the library and the five
+    // absolute-coordinate showcase pages take that other path.
+    //
+    // Three cursors and two captured values, for the same reason as
+    // setContentSize above: the two setGeometry calls below WRITE through the
+    // two members, and a write is what pre-reading can never cover.  (Section
+    // 11.3 calls this door :158 and those two writes :164 and :165, from the
+    // HEAD it was written against; the statements are what the table means.)
+    Widget* const vp0 = viewport_;
+    Widget* const ct0 = content_;
+    const detail::DeathWatch self(this);
+    const detail::DeathWatch vpw(viewport_);
+    const detail::DeathWatch ctw(content_);
+
     const SizeHint h = content_->sizeHint();
+    // CP-S1.  The door above runs the content's layout, which asks every child,
+    // and one of those overrides is entitled to drop this whole scroll area --
+    // which is exactly what a page does when a control on it rebuilds the page.
+    // `h` is already a local copy, so it stays legal; nothing else does.
+    if (!self.alive() || viewport_ != vp0 || content_ != ct0 || !vpw.alive() ||
+        !ctw.alive()) {
+      detail::frameDegraded();
+      return;
+    }
     const Rect r = localRect();
     const bool vbar = h.preferred.height > r.height();
     const bool hbar = h.preferred.width > r.width() - (vbar ? kBar : 0.0f);
     const Size vp{std::max(0.0f, r.width() - (vbar ? kBar : 0.0f)),
                   std::max(0.0f, r.height() - (hbar ? kBar : 0.0f))};
     viewport_->setGeometry({0.0f, 0.0f, vp.width, vp.height});
+    // CP-S2 -- the door in SERIES with the one above, and the one a fix that
+    // only guarded :158 would leave open.  The viewport is a plain Widget with
+    // no layout today, so this call runs no application code TODAY; that is not
+    // an invariant, because content()->parent() is reachable through the public
+    // API and one setLayout<> on it makes this a door for real (section 11.4
+    // #4).  It is also the one the reproducer's stack names: the free site is
+    // this line and the use site is the next one.
+    //
+    // THREE checks, not five: `viewport_` is never touched again after this
+    // line, so guarding it here would be asking a question with no consumer.
+    // `content_` is touched -- read out of `this` and then written through --
+    // so it keeps both of its checks.
+    if (!self.alive() || content_ != ct0 || !ctw.alive()) {
+      detail::frameDegraded();
+      return;
+    }
     content_->setGeometry({0.0f, 0.0f,
                            std::max(vp.width, h.preferred.width),
                            std::max(vp.height, h.preferred.height)});
+    // A door with no check after it, deliberately: the next statement is the
+    // return, so a check here would be dead code (section 11.3).  ADD ANYTHING
+    // BELOW THIS LINE AND IT NEEDS A CHECK FIRST -- REM3-G3, and the checks
+    // above are the shape to copy.
     return;
   }
 
@@ -172,6 +276,10 @@ void ScrollArea::relayout() {
   // bars can be read straight off it.
   const Size vp = viewportSize();
   viewport_->setGeometry({0.0f, 0.0f, vp.width, vp.height});
+  // The other unchecked door, and the same reason: it is the last statement of
+  // the function.  No cursor is taken on this path at all, which is what keeps
+  // the hand-placed-content case free of charge.  APPEND A STATEMENT HERE AND
+  // YOU NEED BOTH -- a cursor in front of this call and a check behind it.
 }
 
 Rect ScrollArea::vBarRect() const {
