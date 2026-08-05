@@ -80,6 +80,40 @@ void AppWindow::relayout() {
 
 void AppWindow::onGeometryChanged() { relayout(); }
 
+// E15/REM3-RES-1.  Three assignments, and NOT ONE LINE ANYWHERE ELSE IN THIS
+// FILE -- which is the strongest evidence this round produced that the approach
+// is right rather than merely working.
+//
+// relayout() above opens with `if (!header_ || !content_) return;` and places
+// the fill under `if (fill_)`.  Those three tests have been in the source since
+// the class was written and NO LINE OF CODE COULD SATISFY THEM: nothing in the
+// library could null a container's cached member, so they were dead code that
+// looked like defensive programming.  The contract admitted this state years
+// before the implementation could produce it.  All E15 does is produce it.
+// setHeaderVisible, isHeaderVisible and hitZoneAt were already written the same
+// way and are likewise untouched.
+//
+// The one thing that was NOT already written is setContent<T>(), which
+// dereferenced content_ straight away; its null test is in AppWindow.hpp.
+//
+// REM3-G9 in full: three pointer comparisons and three stores.  No update(), no
+// signal, no relayout() -- this runs inside announceDetached's walk over a
+// half-detached tree, and relayout() alone would emit contentResized into
+// application code from in there.  The repaint is not lost: whoever removed the
+// widget went through Widget::takeChild, which repaints the vacated area before
+// it announces anything.
+//
+// fill_ FIRST, because it is the innermost of the three and the walk announces
+// outermost-first: removing content_ announces content_ and then fill_ (its
+// child), so both arms fire on that one removal and the order they are written
+// in makes no difference to the outcome.  Written inside-out anyway, so it
+// reads in the same direction as the tree.
+void AppWindow::onDescendantDetached(Widget* node) {
+  if (node == fill_) fill_ = nullptr;
+  if (node == content_) content_ = nullptr;
+  if (node == header_) header_ = nullptr;
+}
+
 void AppWindow::setHeaderVisible(bool on) {
   if (!header_ || header_->isVisible() == on) return;
   header_->setVisible(on);
