@@ -17,6 +17,22 @@ void IconButton::setCircular(bool on) {
   update();
 }
 
+// Square, and sized off the BUTTON's height rather than its width.
+//
+// PushButton's width is "a label plus padding"; for a control that draws no
+// label -- onPaint() above never touches text_ -- that comes out as a wide pill
+// with a glyph adrift in the middle of it.  Taking the height for both axes
+// keeps an icon button the same height as the push buttons beside it in a
+// toolbar, which is the one dimension that has to agree, and gets the square
+// for free.
+SizeHint IconButton::sizeHint() const {
+  const SizeHint base = PushButton::sizeHint();
+  SizeHint h;
+  h.preferred = Size{base.preferred.height, base.preferred.height};
+  h.min = Size{base.min.height, base.min.height};
+  return h;
+}
+
 void IconButton::onPaint(Painter& p, const Rect&) {
   const Theme& t = Theme::current();
   const Rect r = localRect();

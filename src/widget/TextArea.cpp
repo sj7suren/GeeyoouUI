@@ -44,6 +44,24 @@ void TextArea::onGeometryChanged() {
   rebuildLayout();
 }
 
+// Rows, not content.
+//
+// The obvious hint -- "as tall as my text" -- is a trap on two counts.  It is
+// circular (the number of wrapped rows is a function of the width the layout is
+// still deciding), and it is unstable (an operator typing a shift note would
+// push every control below the field down a line at a time).  A TextArea has a
+// scrollbar precisely so that its height is the AUTHOR's choice; so the hint is
+// a row count, and a form that wants a taller one gives it stretch.
+SizeHint TextArea::sizeHint() const {
+  const float chrome = kPad * 2.0f + kScrollbarWidth + 4.0f;  // as rebuildLayout()
+  const float lh = lineHeight();
+
+  SizeHint h;
+  h.preferred = Size{chrome + 240.0f, kPad * 2.0f + lh * 4.0f};
+  h.min = Size{chrome + 80.0f, kPad * 2.0f + lh * 2.0f};
+  return h;
+}
+
 // ----------------------------------------------------------------- layout ---
 float TextArea::lineHeight() const {
   return std::round(fontLineHeight(Theme::current().fontBody) * kLineSpacing);

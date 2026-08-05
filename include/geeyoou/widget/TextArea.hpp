@@ -33,6 +33,8 @@ class TextArea : public Widget {
 
   int lineCount() const { return int(lines_.size()); }
 
+  SizeHint sizeHint() const override;
+
   Signal<const std::string&> textChanged;
   Signal<const std::string&> editingFinished;
 

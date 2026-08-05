@@ -24,6 +24,8 @@ class IconButton : public PushButton {
   // Round instead of rounded-rect -- reads better for a floating action.
   void setCircular(bool on);
 
+  SizeHint sizeHint() const override;
+
  protected:
   void onPaint(Painter& p, const Rect& dirtyLocal) override;
 
