@@ -133,14 +133,32 @@ SizeHint Layout::measureFor(const Widget& host) const {
   //     only job is to keep the two halves in step -- and a counter kept in two
   //     places is how this file got a park list with two drain points in the
   //     first place.
-  //   * NOT READING A FREED OBJECT.  lastMeasure_ is read through `this`, so
-  //     `this` has to be alive, and here it certainly is: NO DOOR HAS BEEN
-  //     CROSSED IN THIS FRAME YET.  The caller dereferenced layout_ one
-  //     statement ago (Widget::sizeHint), and nothing between there and here
-  //     runs application code.  Move this test one line down, past
-  //     measure(host), and that argument is gone -- the give-up would then need
-  //     a cursor of its own, exactly as the call sites in GroupBox and
-  //     ScrollArea do.
+  //   * IT MUST RUN BEFORE THE RECURSION IT EXISTS TO STOP.  This is the
+  //     decisive one, and the only one that makes the position load-bearing:
+  //     move the test one line down, past measure(host), and the ceiling is not
+  //     merely harder to argue about, it is FUNCTIONALLY DEAD.  measure() is
+  //     what descends into the next link of the chain; by the time it returns,
+  //     the whole runaway chain has already been walked and the stack has
+  //     already been spent.  A ceiling tested afterwards records a fact about a
+  //     recursion it did nothing to prevent.
+  //
+  // NOT READING A FREED OBJECT is a separate question, and the answer is NOT
+  // "no door has been crossed in this frame yet".  That was the argument this
+  // comment used to make, and it is wrong about the frame it describes: the
+  // scope below already has TWO accesses through `this` AFTER a door --
+  // `lastMeasure_ = measure(host)` writes one, `measured = lastMeasure_` reads
+  // it back on the next line, and measure() is application code.  What keeps
+  // those safe is the PARK LIST, not the absence of a door: inside the
+  // MeasureFrame scope buffersBusy_ is true, so ~Widget and adoptLayout take
+  // the parkLayout() branch instead of deleting this object, and
+  // releaseParkedLayouts() refuses to drain while g_measureDepth != 0.  The
+  // case is r2_remediation.a_box_survives_its_host_dying_inside_a_pure_measure.
+  //
+  // What a move past the door WOULD dangle is `host`, the reference -- parking
+  // saves the Layout, nothing saves the Widget.  The test only takes its
+  // ADDRESS (layoutDepthExceeded stores the pointer and never dereferences it),
+  // so even that would not be a use-after-free.  Which is the point: the reason
+  // to keep this test here is the recursion above, not a liveness argument.
   //
   // AFTER the latch, not before, so the existing behaviour is bit for bit what
   // it was: both branches return lastMeasure_ and only the record differs, and
