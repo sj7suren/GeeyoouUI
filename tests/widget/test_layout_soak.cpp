@@ -586,11 +586,31 @@ GEEYOOU_TEST(layout_soak, nothing_the_engine_holds_grows_with_the_number_of_cycl
   //   scrollContent   -> CP-C1     scrollViewport  -> CP-S2
   //   shellResize     -> CP-S1
   //
-  // Add a sixth group, or move an existing one's hook one door later, and this
-  // number changes -- correctly.  Recompute it from the table above; do not
-  // relax it to a >=.
+  // Written as a sum with one term per group rather than as `* 5`, so that the
+  // expression carries the derivation instead of the comment carrying it alone.
+  // Each `1` below is "this group degrades exactly one frame per cycle", named
+  // in the order of the table above.
+  //
+  // WHEN TO STOP WRITING IT THIS WAY, registered here so the change is a
+  // decision rather than a discovery: add a SIXTH group, or move any existing
+  // group's hook one door later so that it degrades two frames instead of one,
+  // and a flat sum of ones stops being honest.  At that point replace it with a
+  // per-group delta -- read each group's counter before and after its own
+  // operation -- rather than editing the total.  Do not relax it to a >=.
+  //
+  // ⚠️ WHAT THIS ASSERTION DOES NOT COVER: CP-C2.  The scrollContent group is
+  // killed at CP-C1, which returns from setContentSize immediately, so its
+  // cycle NEVER REACHES CP-C2 -- and no other group goes near it.  Removing
+  // CP-C2's frameDegraded() outright leaves this line, and this whole file,
+  // green.  The only case that covers CP-C2 is
+  // rem3_doors.one_operation_can_degrade_two_frames; if that case ever goes
+  // away, CP-C2's record has no test at all.
   CHECK_EQ(std::size_t(geeyoou::detail::layoutDiagnostics().framesDegraded),
-           opened * 5);
+           opened * (1 +   // groupBoxMeasure, at CP-G1
+                     1 +   // scrollHint,      at CP-S1
+                     1 +   // scrollContent,   at CP-C1  (never reaches CP-C2)
+                     1 +   // scrollViewport,  at CP-S2
+                     1));  // shellResize,     at CP-S1
 
   // The other four diagnostics are NOT asserted at zero here on purpose: the
   // refused-pass group raises `reentered` by design, and pinning a number this
