@@ -19,6 +19,8 @@ class ProgressBar : public Widget {
   // Optional text override; empty means "show the percentage".
   void setText(std::string utf8);
 
+  SizeHint sizeHint() const override;
+
  protected:
   void onPaint(Painter& p, const Rect& dirtyLocal) override;
 

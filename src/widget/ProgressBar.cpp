@@ -7,6 +7,15 @@
 #include "geeyoou/render/Theme.hpp"
 
 namespace geeyoou {
+namespace {
+// A bar with a label in it has to be at least a line of text tall; without one
+// it is just a rule with a fill and 8px still reads.  The preferred height is
+// the one every showcase form uses.
+constexpr float kBarHeight = 8.0f;
+constexpr float kPreferredHeight = 20.0f;
+constexpr float kMinWidth = 48.0f;
+constexpr float kPreferredWidth = 160.0f;
+}  // namespace
 
 void ProgressBar::setRange(double minValue, double maxValue) {
   min_ = minValue;
@@ -29,11 +38,26 @@ void ProgressBar::setBarColor(Color c) {
 void ProgressBar::setTextVisible(bool on) {
   textVisible_ = on;
   update();
+  invalidateSizeHint();  // the label decides the floor on the height
 }
 
 void ProgressBar::setText(std::string utf8) {
   text_ = std::move(utf8);
   update();
+}
+
+// The width is NOT measured from the label, and the height is not measured from
+// the value.  This widget's text is "72%" one second and "8%" the next; a hint
+// derived from it would re-flow the row roughly as often as the plant changes
+// state, and the operator is reading exactly that row.  So: a fixed, honest
+// minimum, and whatever the layout can spare above it.
+SizeHint ProgressBar::sizeHint() const {
+  const float line = textVisible_ ? fontLineHeight(Theme::current().fontSmall)
+                                  : kBarHeight;
+  SizeHint h;
+  h.preferred = Size{kPreferredWidth, (std::max)(kPreferredHeight, line)};
+  h.min = Size{kMinWidth, line};
+  return h;
 }
 
 void ProgressBar::onPaint(Painter& p, const Rect&) {

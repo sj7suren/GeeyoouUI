@@ -27,6 +27,8 @@ class Slider : public Widget {
   void setAccent(Color c);
   void setTickCount(int n);  // 0 = no ticks
 
+  SizeHint sizeHint() const override;
+
   Signal<double> valueChanged;
 
  protected:

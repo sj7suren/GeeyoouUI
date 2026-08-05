@@ -9,6 +9,18 @@
 namespace geeyoou {
 namespace {
 constexpr float kHandleRadius = 8.0f;
+// What onPaint() actually reaches: the handle grows by one pixel while dragged,
+// and the tick marks run to 7px below the track's lower edge (which sits 2.5px
+// below the centre line).  Half-height is therefore 9.5, and a slider shorter
+// than 19 clips one of the two the instant an operator touches it.
+constexpr float kMinHeight = 20.0f;
+// Touch target.  A setpoint an operator drags with a finger on a panel PC is
+// not the place to save six pixels.
+constexpr float kPreferredHeight = 26.0f;
+// Usable track between the two handle radii.  40px is about as short as a
+// slider can be and still be aimable; 180 is what a setpoint row wants.
+constexpr float kMinTrack = 40.0f;
+constexpr float kPreferredTrack = 180.0f;
 }
 
 void Slider::setRange(double minValue, double maxValue) {
@@ -42,6 +54,16 @@ void Slider::setAccent(Color c) {
 void Slider::setTickCount(int n) {
   tickCount_ = std::max(0, n);
   update();
+}
+
+// Independent of the value, the range and the step -- a slider that re-measured
+// itself as it was dragged would re-flow the row under the operator's finger.
+// Same rule as SpinBox: the hint is a property of the CONFIGURATION.
+SizeHint Slider::sizeHint() const {
+  SizeHint h;
+  h.preferred = Size{kHandleRadius * 2.0f + kPreferredTrack, kPreferredHeight};
+  h.min = Size{kHandleRadius * 2.0f + kMinTrack, kMinHeight};
+  return h;
 }
 
 double Slider::normalised() const {
