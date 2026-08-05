@@ -15,11 +15,20 @@
 //       instead of the room turning into margin.  This is the half of the
 //       showcase's "resizable without a layout engine" trick that R2 replaces.
 //
-// The three page builders are compiled into the test binary the same way and
-// for the same reason Shell.cpp already is: they are not library code, but a
-// geometry regression in them is otherwise only visible by looking at a running
-// application.  The other five pages are deliberately NOT here -- they are
-// still absolute, and that they still work is the point.
+// The page builders are compiled into the test binary the same way and for the
+// same reason Shell.cpp already is: they are not library code, but a geometry
+// regression in them is otherwise only visible by looking at a running
+// application.  tests/CMakeLists.txt states the rule -- every page that hands
+// its content to the layout engine is compiled in -- and that is now FIVE
+// pages, not the three this file asserts against.
+//
+// So read the gap deliberately: PageIcons and PageLayout are COMPILED (they
+// meet /W4 /permissive- and the sanitiser instruments them) but not yet CALLED
+// by any case here, which means ASan never runs a single instruction of them.
+// Cases for both are E12; until they land, the two pages have compile-time
+// coverage and zero runtime coverage.  The remaining five pages (Overview, Hmi,
+// Selects, Window, Theme) are absolute-positioned and deliberately outside all
+// of this -- that they still work without a layout is the point.
 //
 #include <cstddef>
 #include <vector>
