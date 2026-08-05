@@ -35,16 +35,29 @@ class Widget;
 namespace detail {
 
 // A layout whose host was destroyed, or which was replaced on its host, while
-// its own arrange() was still on the stack.  Freeing it there would pull items_
-// and the scratch buffers out from under that arrange; instead it is PARKED and
-// released once no layout pass remains anywhere on the stack.  See the note
-// above the park list in src/widget/Widget.cpp -- these two are its plumbing,
-// and Widget is their only caller.
+// its own arrange() OR its own measure() was still on the stack.  Freeing it
+// there would pull items_ and the scratch buffers out from under that call;
+// instead it is PARKED and released once nothing is reading it any more.  See
+// the note above the park list in src/widget/Widget.cpp -- these are its
+// plumbing, and Widget is parkLayout's only caller.
+//
+// "Nothing is reading it" is TWO counters, not one: the arrange depth Widget's
+// LayoutGuard keeps, and the measure depth Layout::measureFor keeps.  A pure
+// measurement -- ScrollArea::relayout asking its content for a size hint -- is
+// not a layout pass, and a park list drained on the arrange count alone would
+// free the layout the measurement is standing in.  releaseParkedLayouts()
+// therefore refuses while a measurement is on the stack, and measureFor calls
+// it again on its own way out.
 //
 // parkLayout() takes ownership; the caller must have released it from whatever
 // unique_ptr held it.
 void parkLayout(Layout* l);
 void releaseParkedLayouts();
+
+// How many layouts are parked right now.  Diagnostic: the park list is a
+// deferred-free queue, and a queue that only ever grows is a leak -- which is
+// what the soak harness (tests/widget/test_layout_soak.cpp) samples it for.
+std::size_t parkedLayoutCount();
 
 }  // namespace detail
 
@@ -102,23 +115,6 @@ class Layout {
   Layout(const Layout&) = delete;
   Layout& operator=(const Layout&) = delete;
 
-  // What the host would need to satisfy this layout.  Pure: no setGeometry, no
-  // reads of the host's own geometry (that would be circular -- the geometry is
-  // the result of the previous arrange).
-  virtual SizeHint measure(const Widget& host) const = 0;
-
-  // Places host's direct children inside `content`, which is in HOST-LOCAL
-  // coordinates and already has the margins taken out -- and, for a host that
-  // draws decoration of its own, its frame too (Widget::layoutRect; GroupBox
-  // hands back the area inside its border and under its title rule).  It is
-  // therefore NOT always at the origin.  Returns whatever did not fit.
-  //
-  // EVERY setGeometry in here runs application code, which may destroy the host
-  // or replace this layout on it.  An implementation MUST therefore check
-  // hostAlive() after every one of them and return immediately when it goes
-  // false -- `host` is a dangling reference from that moment on.
-  virtual LayoutOverflow arrange(Widget& host, const Rect& content) = 0;
-
   // Whether this layout still has a host to place children into.
   //
   // Goes false in exactly two places, both of them from inside this layout's
@@ -145,6 +141,50 @@ class Layout {
  protected:
   Layout() = default;
 
+  // --- what a subclass implements ---------------------------------------------
+  //
+  // PROTECTED, not public, and that is a safety property rather than tidiness.
+  // The two of them share one set of scratch buffers in every subclass here --
+  // that is what keeps a stable layout at zero allocations per pass -- and the
+  // latch that stops one from refilling the buffers the other is walking lives
+  // in measureFor/arrangeFor below.  Public, they were reachable as
+  // `w->layout()->measure(*w)` straight past that latch, which is a
+  // heap-use-after-free from ordinary application code and no amount of
+  // checking inside the subclass can reach it.  Ask the WIDGET instead:
+  // Widget::sizeHint() and Widget::performLayout() are the doors, and they go
+  // through the latch.
+  //
+  // RE-ENTRANCY IS THE WHOLE CONTRACT OF BOTH OF THEM.  Every call an
+  // implementation makes back into the tree runs application code, and
+  // application code may do anything the public API allows -- destroy the host,
+  // replace this layout on it, add or remove children.  There are TWO such
+  // calls, not one:
+  //
+  //   * setGeometry(), from arrange();
+  //   * sizeHint(), from arrange() AND from measure() -- an application-supplied
+  //     override that is as entitled to remove a widget as any handler is, and
+  //     removing the host is one of the widgets it may remove.
+  //
+  // So the rule is not "check hostAlive() after every setGeometry".  It is:
+  // AFTER EVERY CALL THAT RE-ENTERS APPLICATION CODE, sizeHint() INCLUDED,
+  // check hostAlive() and return immediately when it goes false -- `host` is a
+  // dangling reference from that moment on, and so is anything reached through
+  // it.  This object itself survives (Widget parks it), which buys the chance
+  // to notice and nothing else.  The narrower wording this replaces is what let
+  // BoxLayout::gather and GridLayout::measureAxis ship with no check at all.
+
+  // What the host would need to satisfy this layout.  Pure: no setGeometry, no
+  // reads of the host's own geometry (that would be circular -- the geometry is
+  // the result of the previous arrange).
+  virtual SizeHint measure(const Widget& host) const = 0;
+
+  // Places host's direct children inside `content`, which is in HOST-LOCAL
+  // coordinates and already has the margins taken out -- and, for a host that
+  // draws decoration of its own, its frame too (Widget::layoutRect; GroupBox
+  // hands back the area inside its border and under its title rule).  It is
+  // therefore NOT always at the origin.  Returns whatever did not fit.
+  virtual LayoutOverflow arrange(Widget& host, const Rect& content) = 0;
+
   // "Something I depend on changed; re-run me."  Subclasses call this from
   // their own setters, exactly as setMargins/setSpacing do.
   void invalidate();
@@ -161,6 +201,7 @@ class Layout {
   friend class Widget;
   friend void detail::parkLayout(Layout*);
   friend void detail::releaseParkedLayouts();
+  friend std::size_t detail::parkedLayoutCount();
 
   // The two entry points Widget uses, and the ONLY ones that are re-entrancy
   // safe.  measure() and arrange() share one set of mutable scratch buffers in
@@ -177,7 +218,16 @@ class Layout {
   // recursion; the alternative, measured on a 3x3 grid, was every cell but the
   // first landing on the same point.
   SizeHint measureFor(const Widget& host) const;
-  LayoutOverflow arrangeFor(Widget& host, const Rect& content);
+
+  // `refused` reports the re-entrant case ABOVE back to the caller, because the
+  // geometry handed back when it happens is the LAST pass's, not this one's --
+  // indistinguishable from a pass that ran and changed nothing.  Widget::
+  // runLayoutIfAny clears the dirty flag before it gets here, so without this
+  // out-parameter the request that raised the flag was simply swallowed: the
+  // pass never ran, nothing remembered that it was owed, and the widget kept
+  // the size of the previous one for good.  A bool rather than an optional so
+  // the ordinary path stays a plain return of a 12-byte struct.
+  LayoutOverflow arrangeFor(Widget& host, const Rect& content, bool& refused);
 
   Widget* host_ = nullptr;
   // Set only while this layout is destroyed-but-still-on-the-stack; see the
@@ -192,9 +242,16 @@ class Layout {
   // forwards lastLayoutOverflow() to it.
   LayoutOverflow lastOverflow_;
   // The answer a re-entrant measureFor() hands back, and the latch that decides
-  // when it does.
+  // when it does.  buffersBusy_ is read by Widget too: a host destroyed while
+  // one of its own measurements is on the stack has to park this object exactly
+  // as a host destroyed mid-arrange does, and layoutRunning_ -- which is about
+  // arranging -- is false in that case.
   mutable SizeHint lastMeasure_;
   mutable bool buffersBusy_ = false;
+  // An arrangeFor() that was refused while the buffers were busy.  The refusal
+  // is not a cancellation: whoever asked still wants the pass, so the
+  // measurement that was in the way re-runs it on its way out.
+  mutable bool arrangeDeferred_ = false;
 };
 
 namespace detail {

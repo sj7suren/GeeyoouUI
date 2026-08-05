@@ -57,10 +57,13 @@ class BoxLayout final : public Layout {
   // How many items (widgets AND spacers) this box holds.
   std::size_t itemCount() const { return items_.size(); }
 
+ protected:
+  // Protected, like the base declarations: ask the HOST (Widget::sizeHint,
+  // Widget::performLayout) rather than calling these, so the re-entrancy latch
+  // in Layout::measureFor/arrangeFor is in the path.  See Layout.hpp.
   SizeHint measure(const Widget& host) const override;
   LayoutOverflow arrange(Widget& host, const Rect& content) override;
 
- protected:
   void onChildRemoved(std::size_t index) override;
 
  private:

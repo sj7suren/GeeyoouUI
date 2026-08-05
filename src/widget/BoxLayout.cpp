@@ -117,6 +117,13 @@ BoxLayout::Totals BoxLayout::gather(const Widget& host) const {
   // and may do anything the public API allows -- including removing a child,
   // which shortens items_ through onChildRemoved.  `n` is what scratch_ was
   // sized for; items_.size() is what the list holds right now.
+  //
+  // And a child is not the only thing it may remove: the same override can take
+  // the HOST away, which is why the hostAlive() check below is here at all.
+  // The measuring half of a pass runs application code exactly as the arranging
+  // half does -- see the contract on Layout::measure -- and this loop used to
+  // have no check in it, which made every gather() reachable from a hostile
+  // sizeHint() a use-after-free on host.children().
   for (std::size_t i = 0; i < n && i < items_.size(); ++i) {
     // BY VALUE.  A reference into items_ does not survive the same handler
     // appending to it, and eight bytes is not worth a dangling one.
@@ -146,6 +153,11 @@ BoxLayout::Totals BoxLayout::gather(const Widget& host) const {
     }
 
     const SizeHint h = c->sizeHint();
+    // sizeHint() is an application override and has just run.  If it took the
+    // host with it, `host` is dangling and so is everything this loop reaches
+    // through it -- items_ and scratch_ survive only because Widget parked this
+    // object, and the totals half-built here mean nothing anyway.
+    if (!hostAlive()) return {};
     // Re-taken AFTER the call: `track` above is only still valid because
     // Layout::measureFor refuses to re-enter this function and refill scratch_,
     // and a pointer whose validity depends on a latch two files away is not one
@@ -256,6 +268,10 @@ void BoxLayout::distribute(const Totals& t, float avail) const {
 
 SizeHint BoxLayout::measure(const Widget& host) const {
   const Totals t = gather(host);
+  // gather() ran every child's sizeHint(); one of them may have destroyed the
+  // host.  Nothing below reads it, but a measurement of a tree that no longer
+  // exists is not a number anybody should act on either.
+  if (!hostAlive()) return {};
   const Margins& m = margins();
   const float mw = m.left + m.right;
   const float mh = m.top + m.bottom;
@@ -282,6 +298,11 @@ SizeHint BoxLayout::measure(const Widget& host) const {
 LayoutOverflow BoxLayout::arrange(Widget& host, const Rect& content) {
   LayoutOverflow of;
   const Totals t = gather(host);
+  // The FIRST thing an arrange does is measure, and measuring runs application
+  // code (every child's sizeHint()).  Without this the placement loop below
+  // walks straight into host.children() on a freed widget -- the check at the
+  // bottom of that loop is one setGeometry too late to help.
+  if (!hostAlive()) return {};
 
   const float avail = mainOf(content.size());
   const float crossAvail = crossOf(content.size());

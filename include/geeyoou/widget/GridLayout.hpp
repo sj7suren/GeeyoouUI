@@ -58,10 +58,12 @@ class GridLayout final : public Layout {
   std::size_t columnCount() const { return trackCount(Axis::Columns); }
   std::size_t rowCount() const { return trackCount(Axis::Rows); }
 
+ protected:
+  // Protected, like the base declarations: see Layout.hpp for why neither of
+  // these is part of the public surface.
   SizeHint measure(const Widget& host) const override;
   LayoutOverflow arrange(Widget& host, const Rect& content) override;
 
- protected:
   void onChildRemoved(std::size_t index) override;
 
  private:
@@ -81,6 +83,9 @@ class GridLayout final : public Layout {
   // address.  Static because they answer for the type, not for a grid.
   static std::uint16_t toIndex(int v);
   static std::uint16_t toSpan(int v);
+  // ...and clamps the two TOGETHER, which is the bound that actually holds:
+  // see the note above the definition.
+  static std::uint16_t clampSpan(std::uint16_t first, std::uint16_t span);
 
   Widget* cellWidget(const Widget& host, const Cell& c) const;
 
@@ -109,12 +114,14 @@ class GridLayout final : public Layout {
     return axis == Axis::Columns ? colStretch_ : rowStretch_;
   }
 
-  // The largest row or column index this class accepts.  A grid here is a
-  // parameter form or a mimic panel, not a spreadsheet, and every track costs a
-  // float in six vectors on every pass -- so a typo'd setColumnStretch(100000)
-  // used to make each pass resize them all to 131068 entries.  Anything past
-  // this is clamped, asserted in Debug and counted in
-  // detail::layoutDiagnostics().indexClamped.
+  // The largest row or column INDEX this class accepts, so the most tracks an
+  // axis can have is kMaxTrack + 1.  A grid here is a parameter form or a mimic
+  // panel, not a spreadsheet, and every track costs a float in six vectors on
+  // every pass -- so a typo'd setColumnStretch(100000) used to make each pass
+  // resize them all to 131068 entries.  Anything past this is clamped and
+  // counted in detail::layoutDiagnostics().indexClamped.
+  //
+  // A SPAN is clamped against where it starts, not on its own: see clampSpan.
   static constexpr int kMaxTrack = 4096;
 
   std::vector<Cell> cells_;

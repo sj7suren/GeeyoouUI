@@ -35,6 +35,28 @@ std::uint16_t GridLayout::toSpan(int v) {
   return v < 1 ? std::uint16_t(1) : toIndex(v);
 }
 
+// The clamp that actually bounds the grid.
+//
+// toIndex() and toSpan() bound a start and a length INDEPENDENTLY, which is not
+// the same thing as bounding what the cell REACHES: row 4096 with rowSpan 4096
+// passed both of them and then declared track 8191, so the worst case was twice
+// the constant that documents it and every pass resized six vectors to 8192
+// entries.  The bound that matters is the last track a cell touches, so that is
+// the one clamped here -- kMaxTrack stays the largest index this class accepts,
+// and trackCount() therefore never exceeds kMaxTrack + 1.
+//
+// The span gives way rather than the start: a cell asked for at row 4096 is at
+// row 4096 in the caller's mental model, and moving it would put it somewhere
+// nobody asked for, whereas shortening its span leaves it where it was asked
+// for and merely smaller.
+std::uint16_t GridLayout::clampSpan(std::uint16_t first, std::uint16_t span) {
+  const std::size_t last = std::size_t(first) + span;
+  if (last <= std::size_t(kMaxTrack) + 1) return span;
+  detail::layoutIndexClamped();
+  // At least 1: `first` is already <= kMaxTrack, so this cannot reach zero.
+  return std::uint16_t(std::size_t(kMaxTrack) + 1 - first);
+}
+
 // ------------------------------------------------------------------ cells ---
 void GridLayout::addWidget(Widget* child, int row, int col, int rowSpan,
                            int colSpan) {
@@ -59,8 +81,8 @@ void GridLayout::addWidget(Widget* child, int row, int col, int rowSpan,
   c.childIndex = std::uint16_t(index);
   c.row = toIndex(row);
   c.col = toIndex(col);
-  c.rowSpan = toSpan(rowSpan);
-  c.colSpan = toSpan(colSpan);
+  c.rowSpan = clampSpan(c.row, toSpan(rowSpan));
+  c.colSpan = clampSpan(c.col, toSpan(colSpan));
   cells_.push_back(c);
   invalidate();
 }
@@ -161,6 +183,12 @@ void GridLayout::measureAxis(const Widget& host, Axis axis) const {
     if (!w) continue;
 
     const SizeHint h = w->sizeHint();
+    // An application override just ran, and it is entitled to remove the host
+    // as well as a cell.  cellWidget() on the next turn of this loop would read
+    // host.children() on freed memory; the track vectors below belong to this
+    // object, which Widget parked, but the numbers in them are now about a tree
+    // that no longer exists.  Same rule as BoxLayout::gather, same reason.
+    if (!hostAlive()) return;
     const float needMin = cols ? h.min.width : h.min.height;
     const float needPref =
         (std::max)(needMin, cols ? h.preferred.width : h.preferred.height);
@@ -318,7 +346,9 @@ float GridLayout::solveAxis(Axis axis, float avail) const {
 
 SizeHint GridLayout::measure(const Widget& host) const {
   measureAxis(host, Axis::Columns);
+  if (!hostAlive()) return {};  // a cell's sizeHint() took the host away
   measureAxis(host, Axis::Rows);
+  if (!hostAlive()) return {};
 
   const Margins& m = margins();
   float minW = m.left + m.right;
@@ -350,7 +380,13 @@ SizeHint GridLayout::measure(const Widget& host) const {
 LayoutOverflow GridLayout::arrange(Widget& host, const Rect& content) {
   LayoutOverflow of;
   measureAxis(host, Axis::Columns);
+  // Measuring is the first thing an arrange does and it runs every cell's
+  // sizeHint(), so the host can already be gone before a single rectangle has
+  // been written.  The check after setGeometry, at the bottom of this function,
+  // is a whole measure pass too late to catch it.
+  if (!hostAlive()) return {};
   measureAxis(host, Axis::Rows);
+  if (!hostAlive()) return {};
 
   of.widthShort = solveAxis(Axis::Columns, content.width());
   of.heightShort = solveAxis(Axis::Rows, content.height());
