@@ -26,6 +26,8 @@ set(GEEYOOU_SOURCES
   src/render/Skin.cpp
   src/widget/Widget.cpp
   src/widget/Layout.cpp
+  src/widget/BoxLayout.cpp
+  src/widget/GridLayout.cpp
   src/widget/Window.cpp
   src/widget/WindowHeader.cpp
   src/widget/AppWindow.cpp
