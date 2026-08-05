@@ -35,13 +35,38 @@ add_executable(geeyoou_tests
   # otherwise only be visible by looking at the running application.
   ${CMAKE_SOURCE_DIR}/examples/showcase/Shell.cpp
 
-  # Same argument, for the three pages R2 migrated to the layout engine: they
-  # are the acceptance evidence for the round, and "it looked right when I ran
-  # it" is not evidence.  The other five pages stay out -- they are absolutely
-  # positioned, which is a supported way to write a page, not a backlog item.
+  # Same argument, and now stated as a RULE rather than as a list: EVERY page
+  # that hands its content to the layout engine is compiled in here.  The rule
+  # replaces an enumeration ("the three pages R2 migrated") that silently went
+  # stale the moment a fourth and fifth one landed -- PageIcons.cpp and
+  # PageLayout.cpp shipped outside every gate, so ~900 lines standing on
+  # BoxLayout/GridLayout/GroupBox/ScrollArea were never compiled at /W4
+  # /permissive-, never asserted against, and never seen by ASan, which is the
+  # only leg that can see the use-after-free family this codebase keeps
+  # producing.
+  #
+  # The rule, so the next page does not repeat it: a page that calls setLayout()
+  # belongs in this list.  The remaining five (Overview, Hmi, Selects, Window,
+  # Theme) place their children with setGeometry() only -- absolute positioning
+  # is a supported way to write a page, not a backlog item, and it exercises no
+  # library geometry code that the widget tests do not already cover directly.
   ${CMAKE_SOURCE_DIR}/examples/showcase/PageWidgets.cpp
   ${CMAKE_SOURCE_DIR}/examples/showcase/PageInputs.cpp
   ${CMAKE_SOURCE_DIR}/examples/showcase/PageOps.cpp
+  ${CMAKE_SOURCE_DIR}/examples/showcase/PageIcons.cpp
+  ${CMAKE_SOURCE_DIR}/examples/showcase/PageLayout.cpp
+
+  # PageIcons renders the registry, and half of what it renders -- the accent
+  # tint, the corner dot, the `icons().find("name")` usage line -- is the
+  # IconEntry::builtin == false branch, which no built-in can produce.  Only a
+  # plant registration makes that branch reachable, so the plant icons come in
+  # with the page or the page is only half testable.
+  #
+  # Note that linking this TU registers NOTHING on its own: registerPlantIcons()
+  # has no static initialiser and must be called.  Tests that call it are
+  # mutating the process-wide registry, so they own restoring/accounting for the
+  # icon count other cases observe.
+  ${CMAKE_SOURCE_DIR}/examples/showcase/PlantIcons.cpp
 )
 
 target_link_libraries(geeyoou_tests PRIVATE geeyoou::geeyoou)
