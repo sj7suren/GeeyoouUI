@@ -286,6 +286,122 @@ GEEYOOU_TEST(signal, destroying_a_receiver_inside_a_slot_unsubscribes_it_now) {
   CHECK_EQ(*hits, 0);
 }
 
+// D7 VIOLATION, on purpose -- the only case in this file that breaks the
+// contract instead of exercising it.
+//
+// Release is the build that runs unattended in a plant, and there the assert in
+// ~Signal does not exist.  "The contract is documented" therefore used to mean
+// that a violation ran on into a slot list ~Signal had already destroyed: a
+// use-after-free, whose symptom surfaced somewhere else entirely, hours later.
+// It no longer does.  ~Signal clears the control block's `alive` flag in EVERY
+// build and the dispatch loop re-reads it once per slot, which downgrades the
+// violation to something bounded and reportable: the emission stops.
+//
+// This is not a licence to violate D7 -- the slots behind the offender silently
+// not running is still a defect -- it is the difference between a defect a
+// service engineer can describe over the phone and one that needs a memory
+// dump.
+//
+// Debug cannot host this case: the assert fires first and takes the process
+// with it, which is the stronger behaviour and the reason it stays.  That half
+// is covered out-of-process by tests/core/test_d7_assert.cpp.
+//
+// READ THIS BEFORE TRUSTING IT AS A REGRESSION GUARD.  Measured, not assumed:
+// with the `alive` check deleted from emit(), this case still reports PASS in a
+// plain Release build.  It has to.  Past the violation the program is in
+// undefined behaviour, and what the freed vector header happens to contain
+// decided the outcome -- here it read back as "no such slot", which is
+// indistinguishable from having stopped.  Only ASan turns the difference into a
+// verdict, and there it is unambiguous:
+//
+//   heap-use-after-free ... in std::vector<Signal<>::Entry>::size
+//     #1 Signal<>::findSlot   include/geeyoou/core/Signal.hpp
+//     #2 Signal<>::emit       include/geeyoou/core/Signal.hpp
+//     freed by ... the slot two frames up
+//
+// So this case earns its keep under the sanitiser, not in the nightly gate.
+// The DETERMINISTIC guard on the same mechanism -- the one that fails on an
+// ordinary build the moment somebody deletes the check -- is the case below it,
+// which reaches the same code path without ever entering UB.
+GEEYOOU_TEST(signal, destroying_the_owner_from_a_slot_stops_the_emission) {
+#ifdef NDEBUG
+  struct Owner {
+    Signal<> sig;
+  };
+
+  Owner* owner = new Owner();
+  int killerRuns = 0;
+  int behind = 0;
+  // Killer first, and TWO slots behind it: with one, "stopped" and "ran on"
+  // differ only in a counter; with two, a partial stop would show up as well.
+  owner->sig.connect([&] {
+    ++killerRuns;
+    delete owner;
+  });
+  owner->sig.connect([&] { ++behind; });
+  owner->sig.connect([&] { ++behind; });
+
+  // Under ASan this line is the whole point of the case: it used to read the
+  // freed Entry vector, and now it must return having touched nothing but the
+  // pinned control block.
+  owner->sig.emit();
+
+  CHECK_EQ(killerRuns, 1);
+  CHECK_EQ(behind, 0);
+#else
+  geeyoou::test::note(
+      "[skip] signal.destroying_the_owner_from_a_slot_stops_the_emission："
+      "Debug 下 ~Signal 的 assert 先于降级保护触发并终止进程，"
+      "该分支由 d7.* 的子进程用例覆盖");
+#endif
+}
+
+// The deterministic half of the case above, and the one a build without a
+// sanitiser can actually fail on.
+//
+// It exercises the same mechanism -- detach() clearing the control block's
+// `alive` flag, emit() noticing -- through the OTHER caller of detach():
+// move-assignment, which likewise replaces the slot list an emission is walking
+// but, unlike a D7 violation, is entirely defined behaviour.  Nothing is freed
+// while anybody still names it: the Signal object survives, the callable that
+// did the deed is pinned by emit(), and the block outlives both.
+//
+// The ids are what make the assertion sharp.  Both signals number their slots
+// from 1, so the id list emit() captured (1, 2, 3) also names three live slots
+// in the INCOMING list.  Without the `alive` check, dispatch would resolve those
+// ids against the new list and call the wrong signal's subscribers -- which is
+// the same defect a D7 violation produces, minus the undefined behaviour that
+// makes it unobservable.  With the check, the emission stops, and `fromIncoming`
+// stays 0 on every allocator, every optimiser and every build type.
+GEEYOOU_TEST(signal, an_emission_stops_when_its_slot_list_is_replaced_under_it) {
+  Signal<> sig;
+  Signal<> incoming;
+
+  int fromIncoming = 0;
+  for (int i = 0; i < 3; ++i) incoming.connect([&] { ++fromIncoming; });
+
+  int mover = 0;
+  int behind = 0;
+  sig.connect([&] {
+    ++mover;
+    sig = std::move(incoming);
+  });
+  sig.connect([&] { ++behind; });
+  sig.connect([&] { ++behind; });
+
+  sig.emit();
+  CHECK_EQ(mover, 1);
+  CHECK_EQ(behind, 0);        // our own remaining slots are gone, not called
+  CHECK_EQ(fromIncoming, 0);  // and the new ones do not inherit this emission
+
+  // Stopping the in-flight emission must not leave the signal broken: the very
+  // next one dispatches the list it now owns, in full.
+  CHECK_EQ(sig.size(), std::size_t(3));
+  sig.emit();
+  CHECK_EQ(fromIncoming, 3);
+  CHECK_EQ(behind, 0);
+}
+
 GEEYOOU_TEST(signal, emitting_the_same_signal_from_a_slot_terminates) {
   Signal<int> sig;
   int depth = 0;
