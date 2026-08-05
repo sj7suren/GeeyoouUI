@@ -141,6 +141,17 @@ class Widget : public StyleSubject {
   Rect windowRect() const;
   Point mapToWindow(Point local) const;
 
+  // THIS RE-ENTERS APPLICATION CODE TOO, and it is the least obvious of the
+  // four: the call looks like a flag being flipped.  A hidden item is an item a
+  // layout no longer holds space for, so this marks the chain dirty and the
+  // topmost dirty host runs a pass -- arrange, setGeometry, onGeometryChanged,
+  // application code, which may destroy widgets including the one whose method
+  // is doing the calling.  AppWindow::setHeaderVisible is exactly that frame:
+  // it calls this and then calls relayout() through `this`.
+  //
+  // So the CALLER'S obligation stated in Layout.hpp -- above measure()/
+  // arrange(), fourth kind of caller -- applies to any frame that reads
+  // anything of its own after this call returns.
   void setVisible(bool on);
   bool isVisible() const { return visible_; }
 
@@ -300,6 +311,18 @@ class Widget : public StyleSubject {
   virtual void onKey(const KeyEvent& e) { (void)e; }
   virtual void onFocusChanged(bool focused) { (void)focused; update(); }
   virtual void onEnabledChanged() { update(); }
+  // An override here IS the application code the rest of the library keeps
+  // warning about -- AppWindow::onGeometryChanged calls relayout(), which emits
+  // contentResized, and a slot may destroy widgets.  Two obligations, pointing
+  // in opposite directions, and both of them are the CALLER'S contract in
+  // Layout.hpp (above measure()/arrange(), fourth kind of caller):
+  //
+  //   * whoever CALLS this -- Widget::setGeometry does, from inside a frame
+  //     that goes on to read visible_ -- must be able to tell afterwards that
+  //     it still has something to come back to;
+  //   * an override that itself calls setGeometry / setVisible / sizeHint and
+  //     then reads its own members is a caller in exactly the same sense, and
+  //     carries the same obligation.
   virtual void onGeometryChanged() {}
 
   // The rectangle this widget's Layout is arranged into, BEFORE the layout's
