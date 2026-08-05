@@ -1,10 +1,21 @@
 // 基础控件 —— the generic widget layer, and the manual test bed for focus
 // traversal and the disabled-subtree cascade.
+//
+// LAID OUT BY THE ENGINE (R2/T-11).  There is not one coordinate in this file:
+// the page is a column of two bands, each band a line of panels, and each panel
+// a stack of controls.  Sizes come from the controls' own sizeHint(), so a
+// button whose caption is translated, or a theme with a larger body font, moves
+// everything around it instead of overlapping it.
+//
+// PageSelects.cpp next door is still absolute, on purpose.  Both work, and both
+// go on working -- see docs/architecture.md section 4.
 #include <cstdio>
 
 #include "Pages.hpp"
 #include "geeyoou/render/Theme.hpp"
+#include "geeyoou/widget/BoxLayout.hpp"
 #include "geeyoou/widget/CheckBox.hpp"
+#include "geeyoou/widget/GridLayout.hpp"
 #include "geeyoou/widget/GroupBox.hpp"
 #include "geeyoou/widget/Label.hpp"
 #include "geeyoou/widget/ProgressBar.hpp"
@@ -20,9 +31,43 @@ namespace showcase {
 using namespace geeyoou;
 
 namespace {
-Label* caption(Widget* parent, float x, float y, float w, const char* s) {
+constexpr float kBandGap = 16.0f;   // between the page's bands
+constexpr float kPanelGap = 20.0f;  // between panels on one band
+constexpr float kItemGap = 10.0f;   // between controls inside a panel
+
+BoxLayout* stack(Widget* host, float spacing) {
+  auto* b = host->setLayout<BoxLayout>(BoxLayout::Orientation::Vertical);
+  b->setSpacing(spacing);
+  return b;
+}
+
+BoxLayout* line(Widget* host, float spacing) {
+  auto* b = host->setLayout<BoxLayout>(BoxLayout::Orientation::Horizontal);
+  b->setSpacing(spacing);
+  return b;
+}
+
+// A bare Widget that exists only to be the host of a nested box: a BoxLayout
+// places its host's DIRECT children, so a line inside a column needs a node of
+// its own to hang off.  Costs one widget and no geometry.
+Widget* band(Widget* parent, BoxLayout* into, std::uint16_t stretch = 0) {
+  Widget* w = parent->add<Widget>();
+  into->addWidget(w, stretch);
+  return w;
+}
+
+Label* caption(Widget* parent, BoxLayout* into, const char* s) {
   auto* l = parent->add<Label>();
-  l->setGeometry({x, y, w, 20});
+  l->setText(s);
+  l->addStyleClass("caption");
+  l->setPixelSize(11.0f);
+  l->setAlign(HAlign::Left, VAlign::Middle);
+  into->addWidget(l);
+  return l;
+}
+
+Label* rowCaption(Widget* parent, const char* s) {
+  auto* l = parent->add<Label>();
   l->setText(s);
   l->addStyleClass("caption");
   l->setPixelSize(11.0f);
@@ -33,92 +78,105 @@ Label* caption(Widget* parent, float x, float y, float w, const char* s) {
 
 Size buildWidgetsPage(Widget* content) {
   const Theme& th = Theme::current();
+  BoxLayout* page = stack(content, kBandGap);
 
-  auto* status = content->add<Label>();
-  status->setGeometry({0, 470, 932, 26});
-  status->addStyleClass("caption");
-  status->setPixelSize(12.0f);
-  status->setText("状态：就绪 · Tab / Shift+Tab 切换焦点，空格激活，方向键调值");
-  auto say = [status](const std::string& s) { status->setText("状态：" + s); };
+  Widget* upper = band(content, page);
+  BoxLayout* upperRow = line(upper, kPanelGap);
+  Widget* lower = band(content, page);
+  BoxLayout* lowerRow = line(lower, kPanelGap);
 
   // ---------------- 按钮与开关 ----------------
-  auto* gButtons = content->add<GroupBox>();
-  gButtons->setGeometry({0, 0, 300, 250});
+  auto* gButtons = upper->add<GroupBox>();
   gButtons->setTitle("按钮与开关");
+  upperRow->addWidget(gButtons, 1);
+  BoxLayout* buttons = stack(gButtons, kItemGap);
 
-  auto* btnNormal = gButtons->add<PushButton>();
-  btnNormal->setGeometry({14, 44, 128, 34});
+  Widget* btnRow1 = band(gButtons, buttons);
+  BoxLayout* btnRow1L = line(btnRow1, kItemGap);
+  auto* btnNormal = btnRow1->add<PushButton>();
   btnNormal->setText("普通按钮");
+  btnRow1L->addWidget(btnNormal, 1);
 
-  auto* btnLatch = gButtons->add<PushButton>();
-  btnLatch->setGeometry({154, 44, 128, 34});
+  auto* btnLatch = btnRow1->add<PushButton>();
   btnLatch->setText("手动/自动");
   btnLatch->setCheckable(true);
   btnLatch->setVariant(ButtonVariant::Warning);
+  btnRow1L->addWidget(btnLatch, 1);
 
-  auto* btnDisabled = gButtons->add<PushButton>();
-  btnDisabled->setGeometry({14, 88, 128, 34});
+  Widget* btnRow2 = band(gButtons, buttons);
+  BoxLayout* btnRow2L = line(btnRow2, kItemGap);
+  auto* btnDisabled = btnRow2->add<PushButton>();
   btnDisabled->setText("已禁用");
   btnDisabled->setEnabled(false);
+  btnRow2L->addWidget(btnDisabled, 1);
 
-  auto* swPump = gButtons->add<ToggleSwitch>();
-  swPump->setGeometry({154, 90, 132, 30});
+  auto* swPump = btnRow2->add<ToggleSwitch>();
   swPump->setText("进料泵");
   swPump->setChecked(true);
+  btnRow2L->addWidget(swPump, 1);
 
   auto* sep1 = gButtons->add<Separator>();
-  sep1->setGeometry({14, 132, 272, 1});
+  buttons->addWidget(sep1);
 
   auto* cbInterlock = gButtons->add<CheckBox>();
-  cbInterlock->setGeometry({14, 142, 272, 26});
   cbInterlock->setText("启用安全联锁");
   cbInterlock->setChecked(true);
+  buttons->addWidget(cbInterlock);
 
   auto* cbLog = gButtons->add<CheckBox>();
-  cbLog->setGeometry({14, 172, 272, 26});
   cbLog->setText("记录历史曲线");
+  buttons->addWidget(cbLog);
 
   auto* cbOff = gButtons->add<CheckBox>();
-  cbOff->setGeometry({14, 202, 272, 26});
   cbOff->setText("远程写入（无权限）");
   cbOff->setEnabled(false);
+  buttons->addWidget(cbOff);
+  // Everything above keeps its preferred height and the slack collects at the
+  // bottom, which is what "top-aligned" means to a box.
+  buttons->addStretch();
 
   // ---------------- 单选与进度 ----------------
-  auto* gMode = content->add<GroupBox>();
-  gMode->setGeometry({320, 0, 300, 250});
+  auto* gMode = upper->add<GroupBox>();
   gMode->setTitle("运行模式（单选组）");
+  upperRow->addWidget(gMode, 1);
+  BoxLayout* mode = stack(gMode, kItemGap);
 
   auto* rbStop = gMode->add<RadioButton>();
-  rbStop->setGeometry({14, 44, 272, 26});
   rbStop->setText("停机");
+  mode->addWidget(rbStop);
 
   auto* rbManual = gMode->add<RadioButton>();
-  rbManual->setGeometry({14, 74, 272, 26});
   rbManual->setText("手动");
   rbManual->setChecked(true);
+  mode->addWidget(rbManual);
 
   auto* rbAuto = gMode->add<RadioButton>();
-  rbAuto->setGeometry({14, 104, 272, 26});
   rbAuto->setText("自动");
+  mode->addWidget(rbAuto);
 
   auto* sep2 = gMode->add<Separator>();
-  sep2->setGeometry({14, 140, 272, 1});
+  mode->addWidget(sep2);
 
-  caption(gMode, 14, 150, 272, "批次进度");
+  caption(gMode, mode, "批次进度");
   auto* pbBatch = gMode->add<ProgressBar>();
-  pbBatch->setGeometry({14, 176, 272, 20});
   pbBatch->setValue(40);
+  mode->addWidget(pbBatch);
 
   auto* pbLevel = gMode->add<ProgressBar>();
-  pbLevel->setGeometry({14, 204, 272, 20});
   pbLevel->setValue(72);
   pbLevel->setBarColor(th.ok);
   pbLevel->setText("料位 72%");
+  mode->addWidget(pbLevel);
+  mode->addStretch();
 
   // ---------------- 参数设定 ----------------
-  auto* gParam = content->add<GroupBox>();
-  gParam->setGeometry({640, 0, 292, 250});
+  // A grid rather than a box: label/field pairs are exactly what addRow is for,
+  // and column 1 is the one that grows, so every SpinBox lines up.
+  auto* gParam = upper->add<GroupBox>();
   gParam->setTitle("参数设定");
+  upperRow->addWidget(gParam, 1);
+  auto* param = gParam->setLayout<GridLayout>();
+  param->setSpacing(kItemGap);
 
   struct SpinSpec { const char* label; double lo, hi, val, step; int dec; const char* suffix; };
   const SpinSpec kSpins[] = {
@@ -126,15 +184,22 @@ Size buildWidgetsPage(Widget* content) {
       {"压力上限", 0, 25, 8.5, 0.1, 2, " MPa"},
       {"重复次数", 1, 999, 12, 1, 0, ""},
   };
+
+  auto* status = content->add<Label>();  // declared early: the spin boxes report to it
+  status->addStyleClass("caption");
+  status->setPixelSize(12.0f);
+  status->setText("状态：就绪 · Tab / Shift+Tab 切换焦点，空格激活，方向键调值");
+  auto say = [status](const std::string& s) { status->setText("状态：" + s); };
+
   for (int i = 0; i < 3; ++i) {
-    caption(gParam, 14, 46.0f + float(i) * 40.0f, 120, kSpins[i].label);
     auto* sp = gParam->add<SpinBox>();
-    sp->setGeometry({140, 46.0f + float(i) * 40.0f, 138, 30});
     sp->setRange(kSpins[i].lo, kSpins[i].hi);
     sp->setValue(kSpins[i].val);
     sp->setStep(kSpins[i].step);
     sp->setDecimals(kSpins[i].dec);
     sp->setSuffix(kSpins[i].suffix);
+    param->addRow(rowCaption(gParam, kSpins[i].label), sp);
+
     const std::string label = kSpins[i].label;
     const int dec = kSpins[i].dec;
     sp->valueChanged.connect([say, label, dec](double v) {
@@ -145,74 +210,85 @@ Size buildWidgetsPage(Widget* content) {
   }
 
   auto* sep3 = gParam->add<Separator>();
-  sep3->setGeometry({14, 170, 264, 1});
+  param->addWidget(sep3, 3, 0, 1, 2);
+
   auto* hint = gParam->add<Label>();
-  hint->setGeometry({14, 178, 264, 50});
   hint->setText("SpinBox：↑↓ 步进，PgUp/PgDn ×10，可直接键入数字");
   hint->addStyleClass("caption");
   hint->setPixelSize(11.0f);
   hint->setAlign(HAlign::Left, VAlign::Top);
+  hint->setWordWrap(true);  // min width 0: it yields the column instead of forcing it
+  param->addWidget(hint, 4, 0, 1, 2);
 
   // ---------------- 滑块 ----------------
-  auto* gSlider = content->add<GroupBox>();
-  gSlider->setGeometry({0, 266, 620, 190});
+  auto* gSlider = lower->add<GroupBox>();
   gSlider->setTitle("设定值滑块");
+  lowerRow->addWidget(gSlider, 2);
+  auto* sliders = gSlider->setLayout<GridLayout>();
+  sliders->setSpacing(kItemGap);
+  sliders->setColumnStretch(1, 1);  // the tracks take the width, the labels do not
 
-  caption(gSlider, 14, 46, 120, "搅拌转速");
   auto* sldSpeed = gSlider->add<Slider>();
-  sldSpeed->setGeometry({140, 46, 340, 28});
   sldSpeed->setRange(0, 1500);
   sldSpeed->setStep(50);
   sldSpeed->setValue(600);
   sldSpeed->setTickCount(7);
-
   auto* lblSpeed = gSlider->add<Label>();
-  lblSpeed->setGeometry({492, 46, 100, 28});
   lblSpeed->setText("600 rpm");
   lblSpeed->setAlign(HAlign::Right, VAlign::Middle);
+  sliders->addWidget(rowCaption(gSlider, "搅拌转速"), 0, 0);
+  sliders->addWidget(sldSpeed, 0, 1);
+  sliders->addWidget(lblSpeed, 0, 2);
 
-  caption(gSlider, 14, 92, 120, "阀门开度");
   auto* sldFlow = gSlider->add<Slider>();
-  sldFlow->setGeometry({140, 92, 340, 28});
   sldFlow->setRange(0, 100);
   sldFlow->setStep(1);
   sldFlow->setValue(35);
   sldFlow->setAccent(th.ok);
-
   auto* lblFlow = gSlider->add<Label>();
-  lblFlow->setGeometry({492, 92, 100, 28});
   lblFlow->setText("35 %");
   lblFlow->setAlign(HAlign::Right, VAlign::Middle);
+  sliders->addWidget(rowCaption(gSlider, "阀门开度"), 1, 0);
+  sliders->addWidget(sldFlow, 1, 1);
+  sliders->addWidget(lblFlow, 1, 2);
 
-  caption(gSlider, 14, 136, 120, "（禁用示例）");
   auto* sldOff = gSlider->add<Slider>();
-  sldOff->setGeometry({140, 136, 340, 28});
   sldOff->setValue(50);
   sldOff->setEnabled(false);
+  sliders->addWidget(rowCaption(gSlider, "（禁用示例）"), 2, 0);
+  sliders->addWidget(sldOff, 2, 1);
 
   // ---------------- 联锁 ----------------
-  auto* gLock = content->add<GroupBox>();
-  gLock->setGeometry({640, 266, 292, 190});
+  auto* gLock = lower->add<GroupBox>();
   gLock->setTitle("联锁：整组禁用");
+  lowerRow->addWidget(gLock, 1);
+  BoxLayout* lock = stack(gLock, kItemGap);
 
   auto* cbEnableBlock = gLock->add<CheckBox>();
-  cbEnableBlock->setGeometry({14, 44, 264, 26});
   cbEnableBlock->setText("允许修改下列参数");
   cbEnableBlock->setChecked(true);
+  lock->addWidget(cbEnableBlock);
 
+  // An untitled GroupBox with a layout of its own: two levels of nesting, which
+  // only works because a container's sizeHint() is its layout's measure().
   auto* gInner = gLock->add<GroupBox>();
-  gInner->setGeometry({14, 78, 264, 96});
+  lock->addWidget(gInner);
+  BoxLayout* inner = stack(gInner, kItemGap);
 
   auto* swA = gInner->add<ToggleSwitch>();
-  swA->setGeometry({14, 12, 236, 28});
   swA->setText("旁路阀");
+  inner->addWidget(swA);
 
   auto* sldInner = gInner->add<Slider>();
-  sldInner->setGeometry({14, 50, 236, 28});
   sldInner->setValue(40);
+  inner->addWidget(sldInner);
+  lock->addStretch();
 
   // Disabling the container greys out and locks EVERY descendant.
   cbEnableBlock->toggled.connect([gInner](bool on) { gInner->setEnabled(on); });
+
+  // ---------------- 状态行 ----------------
+  page->addWidget(status);
 
   // ---------------- signals ----------------
   btnNormal->clicked.connect([say] { say("普通按钮被点击"); });
@@ -236,7 +312,9 @@ Size buildWidgetsPage(Widget* content) {
     lblFlow->setText(buf);
   });
 
-  return {940.0f, 510.0f};
+  // The page's own size, computed from what is in it rather than typed in.  The
+  // shell hands this to the ScrollArea as the scrollable extent.
+  return content->sizeHint().preferred;
 }
 
 }  // namespace showcase

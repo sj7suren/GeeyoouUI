@@ -1,5 +1,10 @@
 // 运维控制台 —— alarm list over ListView's pull model, a scrollable parameter
 // form, and the live values coming off the shared acquisition thread.
+//
+// LAID OUT BY THE ENGINE (R2/T-11).  The alarm list is the interesting case:
+// it used to be 700x340 because that is what fitted next to the other panels at
+// the default window size.  It now asks for six rows and takes everything the
+// row can spare, so a bigger window shows more alarms instead of more felt.
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -7,7 +12,9 @@
 #include "Pages.hpp"
 #include "geeyoou/hmi/AlarmList.hpp"
 #include "geeyoou/render/Theme.hpp"
+#include "geeyoou/widget/BoxLayout.hpp"
 #include "geeyoou/widget/CheckBox.hpp"
+#include "geeyoou/widget/GridLayout.hpp"
 #include "geeyoou/widget/GroupBox.hpp"
 #include "geeyoou/widget/Label.hpp"
 #include "geeyoou/widget/PushButton.hpp"
@@ -19,9 +26,29 @@ namespace showcase {
 using namespace geeyoou;
 
 namespace {
-Label* caption(Widget* parent, float x, float y, float w, const char* s) {
+constexpr float kPanelGap = 16.0f;
+constexpr float kItemGap = 10.0f;
+
+BoxLayout* stack(Widget* host, float spacing) {
+  auto* b = host->setLayout<BoxLayout>(BoxLayout::Orientation::Vertical);
+  b->setSpacing(spacing);
+  return b;
+}
+
+BoxLayout* line(Widget* host, float spacing) {
+  auto* b = host->setLayout<BoxLayout>(BoxLayout::Orientation::Horizontal);
+  b->setSpacing(spacing);
+  return b;
+}
+
+Widget* band(Widget* parent, BoxLayout* into, std::uint16_t stretch = 0) {
+  Widget* w = parent->add<Widget>();
+  into->addWidget(w, stretch);
+  return w;
+}
+
+Label* rowCaption(Widget* parent, const char* s) {
   auto* l = parent->add<Label>();
-  l->setGeometry({x, y, w, 20});
   l->setText(s);
   l->addStyleClass("caption");
   l->setPixelSize(11.0f);
@@ -31,59 +58,102 @@ Label* caption(Widget* parent, float x, float y, float w, const char* s) {
 }  // namespace
 
 Size buildOpsPage(Widget* content, AppState& app) {
+  BoxLayout* page = line(content, kPanelGap);
+
+  Widget* leftCol = band(content, page, 1);
+  BoxLayout* left = stack(leftCol, kPanelGap);
 
   // ---------------- 实时值 ----------------
-  auto* gLive = content->add<GroupBox>();
-  gLive->setGeometry({0, 0, 340, 168});
+  auto* gLive = leftCol->add<GroupBox>();
   gLive->setTitle("实时值（来自采集线程）");
+  left->addWidget(gLive);
+  auto* live = gLive->setLayout<GridLayout>();
+  live->setSpacing(kItemGap);
+  live->setColumnStretch(1, 1);  // the readouts take the width, the names do not
 
   Label* liveLabels[3];
   const char* names[3] = {"进料流量", "釜内温度", "系统压力"};
   for (int i = 0; i < 3; ++i) {
-    caption(gLive, 14, 44.0f + float(i) * 34.0f, 110, names[i]);
     liveLabels[i] = gLive->add<Label>();
-    liveLabels[i]->setGeometry({130, 40.0f + float(i) * 34.0f, 190, 28});
     liveLabels[i]->setAlign(HAlign::Right, VAlign::Middle);
     liveLabels[i]->setPixelSize(16.0f);
     liveLabels[i]->setText("--");
+    live->addRow(rowCaption(gLive, names[i]), liveLabels[i]);
   }
 
   auto* queueStat = gLive->add<Label>();
-  queueStat->setGeometry({14, 142, 306, 20});
   queueStat->addStyleClass("caption");
   queueStat->setPixelSize(11.0f);
   queueStat->setText("队列：0 待处理 / 0 丢弃");
+  live->addWidget(queueStat, 3, 0, 1, 2);
+
+  // ---------------- 参数表单（ScrollArea） ----------------
+  // A ScrollArea nested inside the page's own ScrollArea: the inner one scrolls
+  // the parameter rows, the outer one scrolls the page.  They do not fight,
+  // because the wheel is consumed by the deepest widget that handles it.
+  auto* gForm = leftCol->add<GroupBox>();
+  gForm->setTitle("参数表单（ScrollArea）");
+  left->addWidget(gForm, 1);
+  BoxLayout* form = stack(gForm, kItemGap);
+
+  auto* scroll = gForm->add<ScrollArea>();
+  form->addWidget(scroll, 1);
+
+  // The rows inside the scroll area are laid out too -- a grid, one row per
+  // parameter.  Its extent is the one place on this page that still has to be
+  // handed to somebody, because ScrollArea sizes its content by hand and R2
+  // does not touch the four containers.  It is COMPUTED, not typed in.
+  auto* rows = scroll->content()->setLayout<GridLayout>();
+  rows->setSpacing(kItemGap);
+  rows->setMargins({8.0f, 8.0f, 8.0f, 8.0f});
+  const int kParams = 20;
+  for (int i = 0; i < kParams; ++i) {
+    char name[64];
+    std::snprintf(name, sizeof(name), "参数 P-%02d", i + 1);
+    auto* lbl = scroll->content()->add<Label>();
+    lbl->setText(name);
+    lbl->addStyleClass("caption");
+    lbl->setPixelSize(12.0f);
+
+    auto* sp = scroll->content()->add<SpinBox>();
+    sp->setRange(0, 500);
+    sp->setValue(double(i) * 7.5);
+    sp->setDecimals(1);
+    rows->addRow(lbl, sp);
+  }
+  scroll->setContentSize(scroll->content()->sizeHint().preferred);
 
   // ---------------- 报警列表 ----------------
-  // Width chosen so the page's design size fits the content viewport at the
-  // default window size; anything wider and the shell shows a horizontal
-  // scrollbar, which is correct behaviour but ugly as a first impression.
   auto* gAlarm = content->add<GroupBox>();
-  gAlarm->setGeometry({356, 0, 700, 340});
   gAlarm->setTitle("报警列表（ListView 拉取式模型）");
+  page->addWidget(gAlarm, 2);
+  BoxLayout* alarmBox = stack(gAlarm, kItemGap);
 
   auto* alarms = gAlarm->add<AlarmList>(/*capacity=*/2000);
-  alarms->setGeometry({14, 44, 672, 246});
+  alarmBox->addWidget(alarms, 1);
 
-  auto* alarmStat = gAlarm->add<Label>();
-  alarmStat->setGeometry({14, 300, 340, 24});
+  Widget* alarmTools = band(gAlarm, alarmBox);
+  BoxLayout* tools = line(alarmTools, kItemGap);
+
+  auto* alarmStat = alarmTools->add<Label>();
   alarmStat->addStyleClass("caption");
   alarmStat->setPixelSize(11.0f);
   alarmStat->setText("未确认 0 / 活动 0");
+  tools->addWidget(alarmStat, 1);
 
-  auto* showAck = gAlarm->add<CheckBox>();
-  showAck->setGeometry({368, 300, 120, 24});
+  auto* showAck = alarmTools->add<CheckBox>();
   showAck->setText("显示已确认");
   showAck->setChecked(true);
+  tools->addWidget(showAck);
 
-  auto* ackBtn = gAlarm->add<PushButton>();
-  ackBtn->setGeometry({498, 298, 88, 28});
+  auto* ackBtn = alarmTools->add<PushButton>();
   ackBtn->setText("确认");
   ackBtn->setVariant(ButtonVariant::Primary);
+  tools->addWidget(ackBtn);
 
-  auto* ackAllBtn = gAlarm->add<PushButton>();
-  ackAllBtn->setGeometry({596, 298, 90, 28});
+  auto* ackAllBtn = alarmTools->add<PushButton>();
   ackAllBtn->setText("全部确认");
+  tools->addWidget(ackAllBtn);
 
   ackBtn->clicked.connect([alarms] {
     if (const AlarmRecord* r = alarms->currentRecord()) alarms->acknowledge(r->id);
@@ -97,38 +167,11 @@ Size buildOpsPage(Widget* content, AppState& app) {
   app.alarmBacklog.clear();
   app.alarmSink = [alarms](const AlarmRecord& r) { alarms->add(r); };
 
-  // ---------------- 参数表单（ScrollArea） ----------------
-  // A ScrollArea nested inside the page's own ScrollArea: the inner one scrolls
-  // the parameter rows, the outer one scrolls the page.  They do not fight,
-  // because the wheel is consumed by the deepest widget that handles it.
-  auto* gForm = content->add<GroupBox>();
-  gForm->setGeometry({0, 184, 340, 400});
-  gForm->setTitle("参数表单（ScrollArea）");
-
-  auto* scroll = gForm->add<ScrollArea>();
-  scroll->setGeometry({14, 44, 312, 340});
-
-  const int kParams = 20;
-  scroll->setContentSize({280.0f, float(kParams) * 42.0f + 8.0f});
-  for (int i = 0; i < kParams; ++i) {
-    char name[64];
-    std::snprintf(name, sizeof(name), "参数 P-%02d", i + 1);
-    auto* lbl = scroll->content()->add<Label>();
-    lbl->setGeometry({8.0f, 8.0f + float(i) * 42.0f, 120, 30});
-    lbl->setText(name);
-    lbl->addStyleClass("caption");
-    lbl->setPixelSize(12.0f);
-
-    auto* sp = scroll->content()->add<SpinBox>();
-    sp->setGeometry({134.0f, 8.0f + float(i) * 42.0f, 140, 30});
-    sp->setRange(0, 500);
-    sp->setValue(double(i) * 7.5);
-    sp->setDecimals(1);
-  }
-
   // ---------------- refresh ----------------
+  // Not an item in any box: a Ticker draws nothing, and animationTickTree walks
+  // the TREE rather than the layout, so a zero-sized child that no layout knows
+  // about still ticks.
   auto* ticker = content->add<Ticker>();
-  ticker->setGeometry({0, 0, 0, 0});
   ticker->divisor = 3;  // ~10 Hz is plenty for numeric readouts
   ticker->onTick = [&app, liveLabels, queueStat, alarms, alarmStat] {
     char buf[96];
@@ -145,7 +188,7 @@ Size buildOpsPage(Widget* content, AppState& app) {
     alarmStat->setText(buf);
   };
 
-  return {1056.0f, 596.0f};
+  return content->sizeHint().preferred;
 }
 
 }  // namespace showcase
