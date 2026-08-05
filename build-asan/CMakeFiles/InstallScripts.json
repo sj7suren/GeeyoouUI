@@ -1,0 +1,10 @@
+{
+	"InstallScripts" : 
+	[
+		"E:/Develop/tools/GeeyoouUI/build-asan/cmake_install.cmake",
+		"E:/Develop/tools/GeeyoouUI/build-asan/_deps/blend2d-build/cmake_install.cmake",
+		"E:/Develop/tools/GeeyoouUI/build-asan/_deps/blend2d-build/asmjit/cmake_install.cmake",
+		"E:/Develop/tools/GeeyoouUI/build-asan/tests/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
