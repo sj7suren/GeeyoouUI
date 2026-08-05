@@ -39,6 +39,7 @@
 ├─────────────────────────────────────────────────┤
 │  widget/  AppWindow  WindowHeader（窗口层 / 自绘chrome）│ 窗口外壳
 │           Widget  Window（树 / 焦点 / 键盘 / 动画）│  通用控件与树
+│           Layout  BoxLayout  GridLayout           │  布局引擎（可选，见 §3.12）
 │           Label PushButton IconButton CheckBox   │
 │           RadioButton ToggleSwitch Slider        │
 │           ProgressBar GroupBox Separator SpinBox │
@@ -52,6 +53,7 @@
 │           Icon  IconRegistry                      │  内置图标 + 注册扩展
 ├─────────────────────────────────────────────────┤
 │  core/    Types Signal Event（Key） Utf8          │  无依赖基础设施
+│           TagId  TagRegistry                      │  位号标识（R2 交付，尚无调用方）
 ├─────────────────────────────────────────────────┤
 │  platform/  Platform / PlatformWindow (纯虚)      │  ← 移植边界
 │             └─ win32/  x11/(TODO)  cocoa/(TODO)  │
@@ -415,6 +417,39 @@ paintTree(p, dirty, clipInWindow)
 
 **Widget 不是线程安全的，且永不会变成线程安全的。** 跨线程只能通过队列。这条规则写在这里就是为了以后不被"加个 mutex 就好了"说服——细粒度锁会毁掉帧率稳定性（第 1 节第 3 条）。
 
+布局引擎与全库一致：只在 UI 线程使用。`g_layouts` / `g_layoutDepth` / `g_layoutHosts` / `g_arrangeHost` 都是普通 `static`，非 `thread_local`——与 `g_bubbles` 同一条理由。`TagRegistry` 同理：位号在配置期解析，那本来就是名字已知的时刻。
+
+### 3.12 布局引擎（R2）
+
+**可选，默认关闭，与绝对坐标永久共存。** 一个不装 `Layout` 的 widget 走的还是 R2 之前那条路，且**不为引擎的存在付任何代价**。
+
+```
+Widget::setLayout<BoxLayout>(H)      ← 装一次，终身绑定，宿主不可更换
+   ↓
+setGeometry / add / takeChild / setVisible / invalidateSizeHint
+   ↓  第一步一律先测 detail::g_layoutHosts（进程内拥有 Layout 的 widget 数）
+   ↓  为 0 → 一次热全局 load + 一次必然预测正确的分支，然后什么都不做
+   ↓
+Widget::runLayoutIfAny()   M1 重入闩 / M2 下行单向红线 / M3 幂等短路 / M4 深度上限
+   ↓
+Layout::arrange(host, contentRect)   contentRect = layoutRect() − 布局 margins
+```
+
+**四条结构性规则**，每一条都承重：
+
+1. **`Layout` 不得持有 `Widget*`**（`host_` 除外，一次绑定终身不变）。子项一律用**子节点索引**标识。索引错 = 摆错位置（可见、可测）；指针错 = UAF（不可见、月级后爆）。
+2. **`sizeHint()` 不读 `geometry()`**（ADR-R2-09）。几何是上一趟 arrange 的**输出**，从它测量就是循环定义：窗口被一格一格拖小时，控件会一路缩下去且拖回来再也回不来。无 layout 的 widget 报**自然尺寸**——它这辈子拿到的第一个非空尺寸，锁存一次，终身不改。
+3. **有 layout 的 widget，`sizeHint()` 就是 `layout()->measure()`**。容器的尺寸是关于它内容的陈述；否则嵌套根本无法工作——GroupBox 里套 GridLayout 再放进页面的 BoxLayout，会按"某次手写几何"报尺寸，整棵树由构造顺序而不是内容定尺寸。
+4. **溢出只报告，从不强制**（`Widget::lastLayoutOverflow()`）。发信号 = 在布局 pass 中间跑应用代码 = M1/M2 刚禁掉的那种重入。
+
+**装饰型容器**：`GroupBox` override `layoutRect()`，交给布局的是**边框内、标题线下**那块。于是"边框有多厚"永远只有 GroupBox 自己知道，调用方不必在每个 GroupBox 上写 `setMargins({12, 34, 12, 12})`；margins 仍然是作者自己的留白，两者叠加而不是二选一。
+
+**执行时机**：几何驱动（`setGeometry`）→ 同步，在 `onGeometryChanged` **之前**（显式代码最后跑、代码赢）；内容驱动（`add` / `takeChild` / `setVisible` / `invalidateSizeHint`）→ 向上标脏，从最顶层脏宿主跑一次。**不引入帧边界调度器**。
+
+**已知开销**：布局引擎自身零分配（`BoxLayout` / `GridLayout` 的 scratch 只增不减，见 `tests/widget/test_layout_alloc.cpp`），但每趟 arrange 会向每个子项要一次 `sizeHint()`，而文本控件的 `sizeHint()` 要走一次 `measureText`。拖动窗口边缘时这是每帧一次的文本整形。修法是按 `(text, fontSize, styleGeneration)` 做宽度缓存，属于**文本引擎的事**，归 R3；用例 `layout_alloc.text_is_re_measured_on_every_pass_r3` 把这个数量钉住，R3 落地时它会变红。
+
+**已迁移**：showcase 的 `PageWidgets` / `PageInputs` / `PageOps` 三页（75 处 `setGeometry` → 0）。另外 5 页与 `AppWindow` / `ScrollArea` / `WindowHeader` / `Shell` 四个容器**保持绝对坐标**——见 §4。
+
 ---
 
 ## 4. v1 范围
@@ -430,11 +465,15 @@ paintTree(p, dirty, clipInWindow)
 - 文本渲染（系统字体加载，含中文）
 
 **明确不做（v1）：**
-- 布局引擎 —— v1 用绝对坐标。HMI 界面通常是固定分辨率的组态画面，绝对定位反而更符合领域习惯
+- ~~布局引擎 —— v1 用绝对坐标~~ —— **已实现，见 §3.12**（R2）。但原来的理由**只被推翻了一半**，另一半现在是永久约定：
+  - **绝对坐标不是过渡期，是一等公民。** `Layout` 是**可选**的，一个不装它的 widget 走的还是原来那条路，`sizeHint()` 报自然尺寸，且不为引擎的存在付任何代价（所有挂钩第一步先测 `g_layoutHosts`）。库内 32 个控件本身一个都不用布局。
+  - **组态区就该用绝对坐标。** HMI 监控画面上的仪表、趋势图、管线是按工艺流程图定位的：泵画在阀门左边 40px 是**工艺语义**，不是排版。用布局表达它只会把一张确定的图变成一组容易漂移的约束。showcase 的 HMI 页、总览页等 5 页保持绝对坐标，作为"共存真的能用"的活证据，不是待办事项。
+  - **参数表单、设置页、工具栏则该用布局**：它们的内容随语言、字体、翻译长度变化，坐标一写死就必然在某个客户现场重叠。
+  - 四个特殊容器（`AppWindow` / `ScrollArea` / `WindowHeader` / `Shell`）也保持手写几何：它们带的是**规则**而不是排版——`commandZoneWidth()`、`needVBar/needHBar` 刻意的非对称打破、最大化时 `borderWidth()` 归零——这些用通用布局表达都是削足适履。
 - **IME 内联预编辑** —— 中文输入本身可用（见 §3.8），但组合中的拼音由系统 IME 窗口绘制，不在字段内带下划线显示
 - **撤销 / 重做** —— 文本控件没有 undo 栈。`Esc` 可把 `LineEdit` 回滚到获得焦点时的值，仅此而已
 - **双击选词 / Ctrl+方向键按词移动** —— 需要分词规则（中文尤其麻烦），暂用逐字符移动
-- **滚动与虚拟化** —— `ScrollArea` / `ListView` 需要在 `Widget` 里引入滚动偏移，会改动 `paintTree` 与 `hitTest`，留到报警列表那一轮一起做。`TextArea` 自己实现了垂直滚动，是控件内部的，不是通用容器
+- ~~**滚动与虚拟化** —— 留到报警列表那一轮一起做~~ —— **已实现，见 §3.10**：`Widget::contentOffset_` + `paintTree` 的累积裁剪矩形，`ScrollArea`（三层）与 `ListView`（拉取式模型）都在库里了。`TextArea` 的垂直滚动仍是控件内部的，不是通用容器
 - **下拉家族的其余成员** —— overlay 地基已就位（§3.9），以下复用同一套机制，尚未实现：可编辑下拉 / 自动补全、级联选择 Cascader、动作菜单 DropdownMenu 与子菜单、拆分按钮 SplitButton、日期选择 DatePicker、颜色选择 ColorPicker
 - **弹层溢出窗口** —— 弹层被限制在窗口内（向上翻转而非溢出屏幕）。要溢出需要独立 HWND，工控全屏场景不划算
 - **垂直 `Slider`** —— 宁可没有，也不要半成品

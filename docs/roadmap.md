@@ -42,14 +42,26 @@
 
 **风险**：触及全部 32 个控件。验收标准必须包含"现有 showcase 全页面不回归"。
 
-### R2 —— 布局引擎
-推翻 §4「v1 用绝对坐标」。
+### R2 —— 布局引擎 ✅ 已交付
+推翻 §4「v1 用绝对坐标」的**前半句**（见下）。
 
-- 盒模型、`SizePolicy`、min/preferred/max
-- `BoxLayout` / `GridLayout` / `FormLayout`
-- 与绝对坐标**共存**，允许逐页迁移
+- 盒模型、min/preferred/max（`SizeHint`）、`Stretch`、`Margins`、`LayoutOverflow`
+- `Layout` 抽象基类 + 防重入四机制（M1 重入闩 / M2 下行单向红线 / M3 幂等短路 / M4 深度上限）
+- `BoxLayout`（H/V、`addWidget` / `addSpacing` / `addStretch`）、`GridLayout`（`addWidget` / `addRow` / 行列 stretch / 跨行列）
+- 15 个控件的 `sizeHint()`；容器的 `sizeHint()` 转发到自己的 `layout()->measure()`
+- 与绝对坐标**共存**，逐页迁移：showcase 三页（`PageWidgets` / `PageInputs` / `PageOps`）已迁移，75 处 `setGeometry` → 0
+- `TagId` / `TagRegistry`（纯新增类型，尚无调用方 —— 见 R2.5）
 
-**验收**：showcase 页面改用布局后，窗口缩放不再依赖 `ScrollArea` 兜底。
+**范围外（本轮明令不做，原因写在 `docs/iterations/02-layout-engine.md`）**：
+
+- ~~`FormLayout`~~ —— **否决**。它就是「两列 + 第二列可拉伸」的 `GridLayout`，`GridLayout::addRow` 已经是它，多一个类只是多一份要维护的对齐规则
+- `AppWindow` / `ScrollArea` / `WindowHeader` / `Shell` 四个容器不迁移：它们带的是规则不是排版（见 `architecture.md` §4）
+- 另外 5 个 showcase 页面保持绝对坐标 —— 这是**永久决定**，不是待办
+
+**验收**：三页迁移后，页面内容随窗口放大而增大而不是只增加空白（`showcase_pages.*` 三个用例的 O3 断言）。⚠️ **一个缺口**：页面根（`ScrollArea::content`）本身仍由 `Shell` 按固定 design size 设定，因为 R2 明令不动那四个容器 —— 详见迭代文档「未完成」一节。
+
+### R2.5 —— 位号迁移（拆出来的小轮）
+`DataHub::channel` / `AlarmRecord::tag` 从 `std::string` 迁到 `TagId`。R2 只交付类型与 registry：一轮里同时做布局迁移和位号迁移，是两次大迁移的爆炸半径叠加。
 
 ### R3 —— 文本引擎（Blend2D 之上）
 - BiDi 双向文本、字体回退链、精确命中测试、行内预编辑（补上 §3.8 的缺口）
