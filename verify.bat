@@ -106,14 +106,23 @@ rem happens to run first, and the day somebody renames a case the gate silently
 rem changes meaning.
 rem
 rem So: continue_on_error=1 turns every report into a printed report instead of
-rem an abort, the whole run finishes, and the log is CLASSIFIED afterwards --
-rem a report with one of OUR source paths in it is red, one without is a
-rem warning.  Coarse on purpose, and coarse in the safe direction: for a real
-rem defect of ours to be misfiled as third-party its entire stack would have to
-rem contain no GeeyoouUI frame, and a layout bug with no layout frame is not a
-rem thing.  The inverse -- a failing test printing its own file path and
-rem tripping the filter -- cannot make the gate wrong either, because a failing
-rem test is already red.
+rem an abort, the whole run finishes, and the log is CLASSIFIED afterwards, by
+rem tools\classify-asan.ps1.
+rem
+rem That classification used to be one findstr: does one of OUR source paths
+rem appear ANYWHERE in the log?  It had to go, because the IME case above is
+rem exactly the case it gets wrong.  Our Window::~Window IS on SogouPY's stack
+rem -- it is the frame that called DestroyWindow -- so their report contains our
+rem path, the findstr matched, and the gate went red over somebody else's bug.
+rem A gate that reddens at random is worse than no gate: the team learns to
+rem click past it, and then it is not watching the real defects either.
+rem
+rem The replacement asks WHO IS RESPONSIBLE instead of WHO APPEARS.  For the
+rem use-after-free family it looks at the innermost non-runtime frame of the use
+rem site and of the free site; ours at either end is red, third-party at both is
+rem [known].  For every other report kind it keeps the old broad rule verbatim.
+rem The full argument, including what it deliberately does not catch, is in the
+rem header of tools\classify-asan.ps1 -- read that before loosening anything.
 rem
 rem detect_leaks is off because LSan does not run on Windows at all.  Leaks are
 rem the soak harness's job instead: four sampled series, none of which may be
@@ -144,32 +153,58 @@ if defined GY_RED (
 )
 
 echo [ok] gate is GREEN: Release, Debug and ASan all built, all three suites
-echo      exited 0, and no AddressSanitizer report named a GeeyoouUI frame.
+echo      exited 0, and no AddressSanitizer report was attributable to GeeyoouUI.
 exit /b 0
 
 rem --------------------------------------------------------------------------
-rem Did the ASan run report anything, and was any of it ours?  Turns
+rem Did the ASan run report anything, and was any of it OURS?  Turns
 rem RC_ASAN_TEST into a failure when it was.  A subroutine rather than an inline
 rem block so the nested tests need no delayed expansion, which is where batch
 rem scripts go wrong.
+rem
+rem The verdict is the classifier's EXIT CODE, and the mapping below is
+rem exhaustive on purpose:
+rem
+rem     0  nothing to classify                    -> leg unchanged
+rem     2  reports, all third-party               -> [known], leg unchanged
+rem     1  at least one report is ours            -> RED
+rem     anything else                             -> RED
+rem
+rem That last line is the whole safety property.  Exit 3 is the script's own
+rem "I could not parse this", 9009 is "powershell is not on PATH", and a syntax
+rem error in the .ps1 gives something else again -- and every one of them lands
+rem in the red branch.  A classifier that fails open is worse than no
+rem classifier, because it looks like one, and the five use-after-frees the R2
+rem reviews found were all green in the other two legs.  This leg is the only
+rem thing between that class of defect and a release.
+rem
+rem Absolute path to powershell.exe rather than bare `powershell` so a PATH
+rem somebody else edited cannot silently pick up a different interpreter; if it
+rem is missing, cmd returns 9009 and, per the table above, the gate goes red.
+rem
+rem Note also what is NOT passed here: %ROOT% ends in a backslash, and "%ROOT%"
+rem as an argument would have its closing quote eaten by the CRT's argument
+rem parser -- the same trailing-backslash trap that once left this very
+rem subroutine's findstr matching nothing at all and the whole leg decorative.
+rem The script derives the repository root from its own location instead.
 :classify_asan
-findstr /c:"ERROR: AddressSanitizer" "%ASAN_LOG%" >nul
-if errorlevel 1 goto :eof
-echo.
-echo   --- AddressSanitizer reported at least one error; classifying ---
-rem NO TRAILING BACKSLASH in any of these four.  A `\` immediately before the
-rem closing quote is eaten by the CRT's argument parser as an escape for that
-rem quote, findstr then receives one malformed pattern instead of four, and the
-rem search silently matches nothing -- which classifies OUR OWN defects as
-rem third-party noise and turns the whole leg into decoration.  Verified against
-rem three hand-written logs (clean / third-party only / one GeeyoouUI frame).
-findstr /i /c:"GeeyoouUI\src" /c:"GeeyoouUI\include" /c:"GeeyoouUI\tests" /c:"GeeyoouUI\examples" "%ASAN_LOG%" >nul
-if errorlevel 1 (
-  echo   [warn] every report is third-party ^(no GeeyoouUI frame in any stack^).
-  echo          Not counted against the gate. See "%ASAN_LOG%".
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive ^
+  -ExecutionPolicy Bypass -File "%ROOT%tools\classify-asan.ps1" -LogPath "%ASAN_LOG%"
+set "RC_CLASSIFY=%ERRORLEVEL%"
+if "%RC_CLASSIFY%"=="0" goto :eof
+if "%RC_CLASSIFY%"=="2" (
+  echo   [known] every report above is third-party: neither the use site nor the
+  echo           free site is GeeyoouUI code. Not counted against the gate.
+  echo           Full log: "%ASAN_LOG%"
   goto :eof
 )
-echo   [FAIL] at least one report names a GeeyoouUI source file.
+if "%RC_CLASSIFY%"=="1" (
+  echo   [FAIL] at least one AddressSanitizer report is attributable to GeeyoouUI.
+  set "RC_ASAN_TEST=asan"
+  goto :eof
+)
+echo   [FAIL] the ASan classifier reached no verdict ^(exit %RC_CLASSIFY%^).
+echo          Counted as OURS on purpose -- see the table above this label.
 set "RC_ASAN_TEST=asan"
 goto :eof
 
