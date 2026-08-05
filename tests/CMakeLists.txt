@@ -16,6 +16,7 @@ add_executable(geeyoou_tests
   widget/test_tree.cpp
   widget/test_hittest.cpp
   widget/test_removal.cpp
+  widget/test_detach_notify.cpp
   widget/test_popup_lifetime.cpp
   widget/test_geometry_baseline.cpp
   widget/test_layout_engine.cpp
