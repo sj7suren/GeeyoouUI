@@ -67,7 +67,13 @@ struct Margins {
 struct LayoutOverflow {
   float widthShort = 0.0f;   // > 0 = this many logical pixels still needed
   float heightShort = 0.0f;
-  int clippedCount = 0;      // items that got less than their minimum
+  // Items that did not end up entirely inside the content rectangle.  Phrased
+  // as "did not fit" rather than "got less than its minimum" because the
+  // shortage strategy of every layout here is to place items at their MINIMUM
+  // and let the tail run off the end: squeezing a control below the size it
+  // declared it needs produces an unreadable widget, whereas a clipped one is
+  // obviously wrong and the counter says so.
+  int clippedCount = 0;
 
   bool any() const;
 };
