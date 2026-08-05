@@ -510,8 +510,21 @@ std::unique_ptr<Widget> Widget::takeChild(Widget* child) {
   // is the sole caller of announceDetached and the sole place `children_.erase`
   // appears, so it is the only way a hook can reach the walk it is standing in.
   // It does NOT catch the other things REM3-G9 forbids -- an update(), an
-  // emit(), a virtual call -- and it is not meant to; those are contract, and
-  // the one that corrupts the traversal is the one worth a runtime cost.
+  // emit(), a virtual call -- and the reason is REACH, not price.  takeChild is
+  // the only memory-unsafe primitive that this flag can be checked against at
+  // all: g_inDetachNotify has INTERNAL LINKAGE in this translation unit, while
+  // Signal::emit lives in core/ and core may not depend on widget, so there is
+  // nowhere over there for it to read this flag from.
+  //
+  // Read that as a residue we CANNOT REACH, not one we decided not to pay for.
+  // An emit() out of a hook is every bit as memory-unsafe as a takeChild() and
+  // harder to find; both remaining paths are written down in section 11.11 of
+  // docs/iterations/02-layout-engine.md rather than left implied here.  Price
+  // would have been a bad argument anyway: update(), setGeometry, setVisible,
+  // invalidateSizeHint and performLayout are all in THIS file and each would
+  // cost one Debug-only boolean test.  They carry no assert because they are
+  // not memory-unsafe.  The trade is written by HARM, not by cost.
+  //
   // Debug-only, abort on hit, same standing as M2's assert in setGeometry.
   assert(!g_inDetachNotify &&
          "REM3-G9: onDescendantDetached may only null its own member pointers");
