@@ -1,22 +1,79 @@
 #include "geeyoou/widget/GroupBox.hpp"
 
+#include <algorithm>
+
 #include "geeyoou/render/Painter.hpp"
 #include "geeyoou/render/Theme.hpp"
 
 namespace geeyoou {
+namespace {
+// The frame contentRect() cuts out of the widget, named so sizeHint() can add
+// back exactly what contentRect() takes away.
+constexpr float kInsetX = 12.0f;
+constexpr float kInsetBottom = 12.0f;
+constexpr float kTopPlain = 12.0f;
+constexpr float kTopTitled = 34.0f;
+// Left indent of the title text plus a matching right margin.
+constexpr float kTitlePad = 13.0f + 13.0f;
+}  // namespace
 
 void GroupBox::setTitle(std::string utf8) {
   title_ = std::move(utf8);
   update();
+  invalidateSizeHint();
 }
 
 Rect GroupBox::contentRect() const {
-  const float top = title_.empty() ? 12.0f : 34.0f;
+  const float top = title_.empty() ? kTopPlain : kTopTitled;
   const Rect r = localRect();
-  const float w = r.width() - 24.0f;
-  const float h = r.height() - top - 12.0f;
+  const float w = r.width() - 2.0f * kInsetX;
+  const float h = r.height() - top - kInsetBottom;
   if (w <= 0.0f || h <= 0.0f) return {};
-  return {12.0f, top, w, h};
+  return {kInsetX, top, w, h};
+}
+
+// The only one of the six that is a CONTAINER, so it is the only one whose hint
+// can be more than its own decoration: if it owns a Layout, what it needs is
+// what that layout needs, plus the frame.
+//
+// This is measure()'s first real consumer.  Note that it asks its OWN layout,
+// not its children's -- a nested GroupBox answers for its own subtree when it
+// is asked, and the recursion stops wherever the tree stops.
+SizeHint GroupBox::sizeHint() const {
+  const float top = title_.empty() ? kTopPlain : kTopTitled;
+  const float frameW = 2.0f * kInsetX;
+  const float frameH = top + kInsetBottom;
+
+  SizeHint inner;
+  if (const Layout* l = layout()) {
+    inner = l->measure(*this);
+  } else {
+    // No layout: absolute positioning, and the natural size the base class
+    // latched is the best statement anyone has made about how big this is.
+    inner = Widget::sizeHint();
+    inner.min = Size{0.0f, 0.0f};
+    // The frame is added below, so what is folded in here is the CONTENT the
+    // natural size was chosen to hold.
+    inner.preferred = Size{(std::max)(0.0f, inner.preferred.width - frameW),
+                           (std::max)(0.0f, inner.preferred.height - frameH)};
+  }
+
+  // A title that does not fit is a title that is drawn over the frame's corner,
+  // so it is a floor on the width in its own right.
+  const float titleW =
+      title_.empty()
+          ? 0.0f
+          : measureText(title_, style(styleState()).fontSizeOr(Theme::current().fontBody))
+                    .width +
+                kTitlePad;
+
+  SizeHint h;
+  h.min = Size{(std::max)(inner.min.width + frameW, titleW), inner.min.height + frameH};
+  h.preferred = Size{(std::max)(inner.preferred.width + frameW, titleW),
+                     inner.preferred.height + frameH};
+  h.preferred.width = (std::max)(h.preferred.width, h.min.width);
+  h.preferred.height = (std::max)(h.preferred.height, h.min.height);
+  return h;
 }
 
 void GroupBox::onPaint(Painter& p, const Rect&) {
