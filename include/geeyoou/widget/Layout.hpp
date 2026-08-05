@@ -154,11 +154,10 @@ class Layout {
   // Widget::sizeHint() and Widget::performLayout() are the doors, and they go
   // through the latch.
   //
-  // RE-ENTRANCY IS THE WHOLE CONTRACT OF BOTH OF THEM.  Every call an
-  // implementation makes back into the tree runs application code, and
-  // application code may do anything the public API allows -- destroy the host,
-  // replace this layout on it, add or remove children.  There are TWO such
-  // calls, not one:
+  // RE-ENTRANCY IS THE WHOLE CONTRACT OF BOTH OF THEM.  Every call into the
+  // tree runs application code, and application code may do anything the public
+  // API allows -- destroy the host, replace this layout on it, add or remove
+  // children.  There are TWO such calls, not one:
   //
   //   * setGeometry(), from arrange();
   //   * sizeHint(), from arrange() AND from measure() -- an application-supplied
@@ -167,11 +166,54 @@ class Layout {
   //
   // So the rule is not "check hostAlive() after every setGeometry".  It is:
   // AFTER EVERY CALL THAT RE-ENTERS APPLICATION CODE, sizeHint() INCLUDED,
-  // check hostAlive() and return immediately when it goes false -- `host` is a
-  // dangling reference from that moment on, and so is anything reached through
-  // it.  This object itself survives (Widget parks it), which buys the chance
-  // to notice and nothing else.  The narrower wording this replaces is what let
-  // BoxLayout::gather and GridLayout::measureAxis ship with no check at all.
+  // check that what the rest of the frame is going to touch is still there, and
+  // give up immediately when it is not.
+  //
+  // WHOM THIS BINDS -- and this is the half that was wrong rather than merely
+  // narrow.  It used to read "an implementation of Layout".  But crossing into
+  // application code is a property of the CALL, so the obligation belongs to
+  // whoever MAKES the call, not to whoever happens to implement this interface.
+  // FOUR kinds of caller, and only the first one is a Layout:
+  //
+  //   1. a Layout implementation, between its own calls.  BoxLayout::gather and
+  //      GridLayout::measureAxis shipped with no check at all under the narrower
+  //      wording, which is why it was widened once already;
+  //   2. a container's own sizeHint(), which forwards the question to its layout
+  //      -- application code, by the second bullet above -- and then goes on
+  //      composing an answer out of its own members (GroupBox does);
+  //   3. a container's own geometry maintenance: relayout(), setContentSize()
+  //      and the like, which measure a child and then write geometry THROUGH
+  //      THEIR OWN MEMBER POINTERS (ScrollArea, AppWindow, WindowHeader).  Note
+  //      what is at stake here and not in 1-2: those are WRITES into memory the
+  //      frame no longer owns, and pre-reading cannot cover a write;
+  //   4. anyone who calls a protected virtual geometry hook -- setVisible(),
+  //      performLayout(), onGeometryChanged() -- and then reads itself.
+  //
+  // Cases 2-4 have no hostAlive() to ask, because they are not layouts.  They
+  // ask geeyoou::detail::DeathWatch (Widget.hpp) instead: the same one-pointer
+  // question, spelled for a frame that is standing on a WIDGET rather than
+  // holding a Layout.
+  //
+  // WHAT "GIVE UP" MEANS, because the answer is not "clean up" -- there is
+  // nothing left to clean up, and unwinding is not available either (ADR-R2-04:
+  // record, never abort):
+  //
+  //   * touch NOTHING reachable through what died -- no member, no virtual
+  //     call, no geometry(), no localRect(), no style(), no layout().  For a
+  //     Layout that is `host`, which is a dangling REFERENCE from that moment
+  //     on; this object itself survives, because Widget parks it, and that buys
+  //     the chance to notice and nothing else;
+  //   * a frame returning void returns immediately.  A frame returning a value
+  //     may build it ONLY out of locals captured before the call and out of
+  //     constants -- never out of a fresh read;
+  //   * call detail::frameDegraded() once, per FRAME that gives up rather than
+  //     per check, so that giving up is a recorded fact instead of an absence.
+  //
+  // Widget::sizeHint() and Widget::setGeometry() carry a pointer back to this
+  // paragraph: the next person to be bitten by it will be reading Widget.hpp,
+  // not this file.  The library does not yet honour the contract at every one
+  // of its own call sites; the enumeration of which sites, and what is planned
+  // for each, is in docs/iterations/02-layout-engine.md section 11.4.
 
   // What the host would need to satisfy this layout.  Pure: no setGeometry, no
   // reads of the host's own geometry (that would be circular -- the geometry is
@@ -275,6 +317,12 @@ struct LayoutDiagnostics {
   std::uint32_t depthExceeded = 0;   // nested past kMaxTreeDepth
   std::uint32_t reentered = 0;       // arrange() reached from inside its own measure()
   std::uint32_t indexClamped = 0;    // a grid row/column index past what a form can be
+  // A frame found the tree moved under it and gave up: the caller's contract
+  // above measure()/arrange().  Counted here with the other four because it is
+  // the same kind of fact and the same reader wants it, but raised by
+  // detail::frameDegraded(), which is declared in Widget.hpp -- next to the
+  // guard that decides it, and where the frames that raise it are written.
+  std::uint32_t framesDegraded = 0;
   const Widget* lastNotConvergedHost = nullptr;
   const Widget* lastDepthExceededHost = nullptr;
 };
