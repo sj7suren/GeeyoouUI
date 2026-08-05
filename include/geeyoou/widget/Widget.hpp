@@ -127,6 +127,14 @@ class Widget : public StyleSubject {
   void clearChildren();
 
   // --- geometry (logical pixels, relative to the parent) -------------------
+  //
+  // CALLING THIS RE-ENTERS APPLICATION CODE.  It runs onGeometryChanged() on
+  // the widget it moves, and an override there may destroy widgets -- the one
+  // whose method is doing the calling included (AppWindow::relayout emits
+  // contentResized from inside one, and a slot is entitled to destroy widgets).
+  // So if your frame reads ANYTHING of its own after this call returns, the
+  // CALLER'S obligation stated in Layout.hpp -- above measure()/arrange(), and
+  // it binds every caller, not only Layout subclasses -- applies to you.
   void setGeometry(const Rect& r);
   const Rect& geometry() const { return geometry_; }
   Rect localRect() const { return {0.0f, 0.0f, geometry_.width(), geometry_.height()}; }
@@ -172,6 +180,14 @@ class Widget : public StyleSubject {
   // circular.  A window dragged smaller step by step would then shrink its
   // children, measure the shrunk children, shrink them again, and never recover
   // when the window was dragged back out.  See ADR-R2-09.
+  //
+  // CALLING THIS RE-ENTERS APPLICATION CODE TOO, and that is easy to miss
+  // because the call looks like a pure query.  It is not: an override is
+  // application code, a container forwards the question to its layout and the
+  // layout asks every child, and any one of those overrides may destroy widgets
+  // -- the container that asked included.  A frame that reads its own members
+  // after asking for a sizeHint() carries the CALLER'S obligation in Layout.hpp
+  // (above measure()/arrange()), whether or not it is a Layout.
   virtual SizeHint sizeHint() const;
 
   // "What I want has changed" -- a Label whose text was replaced, a list that
@@ -363,4 +379,126 @@ class Widget : public StyleSubject {
   friend class Window;
 };
 
+namespace detail {
+
+// --- a frame standing on a widget it does not own ----------------------------
+//
+// ONE in-flight stack frame that handed control to application code and is
+// going to carry on touching the widget it was standing on when that code
+// returns.  Application code is entitled to destroy that widget (contract D7 in
+// core/Signal.hpp lets a slot destroy other objects), so the frame needs to be
+// able to ask, in one pointer compare, whether it still has anything to come
+// back to.
+//
+// Moved here from Widget.cpp's anonymous namespace UNCHANGED.  The reason it
+// had to move: the frames that need it are no longer only in Widget.  A
+// container's own sizeHint() and its own relayout() call into application code
+// and then read themselves -- GroupBox and ScrollArea both do -- and those are
+// widget SUBCLASSES, compiled in their own translation units.  A guard is a
+// pure stack object, so its complete type has to be visible where the frame is
+// written.  Three of the four lists stay private to Widget.cpp; only the one
+// below needs external linkage.
+//
+// The mechanism's full argument -- why a cursor rather than pre-reading what
+// the frame needs, and why one mechanism with four lists rather than four
+// hand-rolled checks -- is in Widget.cpp, next to the three private lists.
+struct LiveCursor {
+  Widget* node = nullptr;
+  LiveCursor* outer = nullptr;
+};
+
+// The list is a TEMPLATE parameter rather than a constructor argument, so each
+// kind of frame gets a distinct type and cannot be threaded onto the wrong list
+// by a typo.  A reference template argument may name an internal-linkage
+// variable, which is what lets three of the four lists stay in Widget.cpp's
+// anonymous namespace now that this template does not.
+template <LiveCursor*& List>
+class LiveGuard {
+ public:
+  explicit LiveGuard(Widget* node) {
+    cursor_.node = node;
+    cursor_.outer = List;
+    List = &cursor_;
+  }
+  ~LiveGuard() { List = cursor_.outer; }
+
+  LiveGuard(const LiveGuard&) = delete;
+  LiveGuard& operator=(const LiveGuard&) = delete;
+
+  // False once the widget this frame is standing on has been destroyed.
+  bool alive() const { return cursor_.node != nullptr; }
+  Widget* node() const { return cursor_.node; }
+  void moveTo(Widget* w) { cursor_.node = w; }
+
+ private:
+  LiveCursor cursor_;
+};
+
+// Frames cancelled by DESTRUCTION and by nothing else -- "dead, not merely
+// detached".
+//
+// Named after the cancellation POLICY, not after a door.  A takeChild has never
+// called sizeHint() and a measurement has never detached anything; what those
+// frames have in common is not where they are written but what must cancel
+// them, and a detach must NOT -- takeChild hands its subtree back alive, and a
+// frame that gave up on a widget which never died has degraded for nothing.
+// The two lists that announceDetached cancels as well (g_bubbles, g_geometries)
+// are named after their frame kind instead, because for those two the two
+// namings agree.
+//
+// NOTHING reads this list in order to DECIDE anything.  alive() on the guards
+// is the whole of it; deathWatchDepth() below reads the depth, but only tests
+// read that and no branch in the library turns on it.  That is a PRECONDITION,
+// not an observation: the day something needs to ask "is a frame in flight on
+// X?" and then behave differently, this list SPLITS first.  The counter-example
+// is already in the library -- see the three readers of g_layouts documented in
+// Widget.cpp, each of which turns the answer into a different engine action.
+//
+// MAINTENANCE, and it is the whole reason for the name: this list is correct
+// only while every frame on it wants the SAME cancellation policy.  A future
+// site that needs "cancel on detach too" does not belong here -- it belongs on
+// g_bubbles / g_geometries, or on a list of its own.
+extern LiveCursor* g_deathWatch;
+
+// The guard for that list, and the only one a widget subclass ever needs.
+//
+// PRIVATE inheritance plus one using-declaration: alive() is exported, node()
+// and moveTo() deliberately are not.  That is what makes the const_cast below
+// safe by CONSTRUCTION rather than by review -- a cursor whose pointer cannot
+// be obtained cannot be dereferenced, and cancelOn only ever COMPARES it.  Nor
+// is the widget a const object: const is a property of the path a const member
+// function reached it by (GroupBox::sizeHint() is one), the object itself lives
+// in its parent's child vector, and nothing here writes through the cast.
+//
+// A null widget is DEFINED as already dead: alive() is false from here on,
+// never undefined and never a crash.  It is still a caller bug, because every
+// site that guards a pointer is about to dereference it -- a null MEMBER is the
+// site's own null check to make, not something a guard may impersonate.
+class DeathWatch : private LiveGuard<g_deathWatch> {
+ public:
+  explicit DeathWatch(const Widget* w)
+      : LiveGuard<g_deathWatch>(const_cast<Widget*>(w)) {
+    assert(w && "a null here means the caller's own null check is missing");
+  }
+
+  using LiveGuard<g_deathWatch>::alive;
+};
+
+// How many death-watch frames are on the stack.  DIAGNOSTIC ONLY -- nothing in
+// the library branches on it -- and it exists because a list that does not come
+// back to zero means a guard outlived its own frame, which nothing else can
+// observe.
+std::size_t deathWatchDepth();
+
+// A guarded frame found the tree moved under it and gave up.  Recorded, never
+// fatal (ADR-R2-04): it is what lets a test assert a POSITIVE fact instead of
+// "it did not crash".  The counter lives in LayoutDiagnostics (Layout.hpp),
+// with the four the layout engine already keeps.
+//
+// ONE call per FRAME, not one per check, and it covers both reasons a frame
+// bails out: a cancelled cursor, and a member pointer that changed across the
+// door.  Named after neither of them on purpose.
+void frameDegraded();
+
+}  // namespace detail
 }  // namespace geeyoou
