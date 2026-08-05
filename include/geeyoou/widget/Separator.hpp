@@ -14,6 +14,8 @@ class Separator : public Widget {
   void setOrientation(Orientation o);
   void setColor(Color c);
 
+  SizeHint sizeHint() const override;
+
  protected:
   void onPaint(Painter& p, const Rect& dirtyLocal) override;
 

@@ -8,6 +8,30 @@ namespace geeyoou {
 void Separator::setOrientation(Orientation o) {
   orientation_ = o;
   update();
+  invalidateSizeHint();  // the thickness swapped axes
+}
+
+// The only widget in the library whose hint has a real MAXIMUM.  A rule is its
+// stroke and nothing else, so a box that grew it to forty pixels would be
+// handing thirty-nine pixels to something that cannot draw in them -- and,
+// worse, would take those pixels off a neighbour that could.  Across its axis
+// it is happy with anything at all.
+SizeHint Separator::sizeHint() const {
+  // The same expression onPaint() uses, so a sheet that thickens the rule also
+  // widens the slot the layout reserves for it.
+  const float thickness = style(styleState()).borderWidthOr(1.0f);
+
+  SizeHint h;
+  if (orientation_ == Orientation::Horizontal) {
+    h.min = Size{0.0f, thickness};
+    h.preferred = Size{0.0f, thickness};
+    h.max = Size{kUnbounded, thickness};
+  } else {
+    h.min = Size{thickness, 0.0f};
+    h.preferred = Size{thickness, 0.0f};
+    h.max = Size{thickness, kUnbounded};
+  }
+  return h;
 }
 
 void Separator::setColor(Color c) {
