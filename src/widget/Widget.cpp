@@ -38,105 +38,122 @@ static_assert(sizeof(Widget) <= sizeof(WidgetSizeBeforeR2) + 16,
               "The flags belong in the padding after focusPolicy_; anything "
               "bigger than a pointer belongs in the Layout object instead.");
 
-// --- in-flight event bubbles -------------------------------------------------
+// --- in-flight frames a widget can die underneath ----------------------------
 //
-// dispatchMouse/dispatchKey walk from the target widget up to the root, calling
-// a handler at every step.  A handler runs application code, and application
-// code may now destroy widgets -- including the one the walk is standing on.
-// Reading `w->parent_` after such a handler returns is then a use-after-free:
-// the systemic risk recorded in docs/iterations/01-lifecycle-and-tests.md.
+// THREE places in this file hand control to application code and then carry on
+// touching the widget they were standing on:
 //
-// Pre-reading the parent BEFORE the call only covers the narrow case where the
-// handler removes exactly the current node.  Cancelling the walk covers all of
-// them, and is sound because what leaves the tree is always a whole SUBTREE: if
-// any ancestor of the current node is going, the current node is going with it.
-// So the remaining path is unsafe if and only if the CURRENT node is doomed --
-// one pointer compare per departing node, and no ancestry search.
+//   * dispatchMouse/dispatchKey walk from the target widget up to the root,
+//     calling a handler at every step, and then read `w->parent_`;
+//   * setGeometry calls onGeometryChanged -- AppWindow::relayout emits
+//     contentResized from inside one -- and then reads visible_ and repaints;
+//   * runLayoutIfAny calls Layout::arrange, which calls setGeometry on every
+//     child, and then writes the pass result back.
 //
-// The cursors live in the dispatching stack frames and are threaded onto one
-// list, so nested dispatch simply nests and nothing allocates.  A plain static
-// rather than a thread_local: input dispatch is UI-thread-only by construction
-// (docs/architecture.md section 3.4), and a TLS lookup on every mouse move
-// would be paid to describe a case that cannot happen.
-struct BubbleCursor {
+// Application code may destroy widgets from any of them (contract D7 in
+// core/Signal.hpp lets a slot destroy other objects), so every one of those
+// reads is a potential use-after-free: the systemic risk recorded in
+// docs/iterations/01-lifecycle-and-tests.md.
+//
+// Pre-reading what is needed BEFORE the call only covers the narrow case where
+// the handler removes exactly the current node.  A liveness cursor covers all
+// of them, and is sound because what leaves the tree is always a whole SUBTREE:
+// if any ancestor of the current node is going, the current node is going with
+// it.  So the remaining work is unsafe if and only if the CURRENT node is
+// doomed -- one pointer compare per departing node, and no ancestry search.
+//
+// The cursors live in the calling stack frames and are threaded onto one list
+// per kind, so nesting simply nests and nothing allocates.  Plain statics
+// rather than thread_locals: the widget tree is UI-thread-only by construction
+// (docs/architecture.md section 3.4), and a TLS lookup on every mouse move and
+// every setGeometry would be paid to describe a case that cannot happen.
+//
+// ONE mechanism written once, three lists: a second hand-rolled copy of this
+// pattern is a second place to forget a check.
+struct LiveCursor {
   Widget* node = nullptr;
-  BubbleCursor* outer = nullptr;
+  LiveCursor* outer = nullptr;
 };
 
-BubbleCursor* g_bubbles = nullptr;
+LiveCursor* g_bubbles = nullptr;      // dispatchMouse / dispatchKey
+LiveCursor* g_geometries = nullptr;   // setGeometry, across onGeometryChanged
+LiveCursor* g_layouts = nullptr;      // runLayoutIfAny, across arrange
+std::uint32_t g_layoutDepth = 0;
 
-class BubbleGuard {
+template <LiveCursor*& List>
+class LiveGuard {
  public:
-  explicit BubbleGuard(Widget* start) {
-    cursor_.node = start;
-    cursor_.outer = g_bubbles;
-    g_bubbles = &cursor_;
+  explicit LiveGuard(Widget* node) {
+    cursor_.node = node;
+    cursor_.outer = List;
+    List = &cursor_;
   }
-  ~BubbleGuard() { g_bubbles = cursor_.outer; }
+  ~LiveGuard() { List = cursor_.outer; }
 
-  BubbleGuard(const BubbleGuard&) = delete;
-  BubbleGuard& operator=(const BubbleGuard&) = delete;
+  LiveGuard(const LiveGuard&) = delete;
+  LiveGuard& operator=(const LiveGuard&) = delete;
 
+  // False once the widget this frame is standing on has been destroyed.
+  bool alive() const { return cursor_.node != nullptr; }
   Widget* node() const { return cursor_.node; }
   void moveTo(Widget* w) { cursor_.node = w; }
 
  private:
-  BubbleCursor cursor_;
+  LiveCursor cursor_;
 };
 
-void cancelBubblesOn(const Widget* doomed) {
-  for (BubbleCursor* c = g_bubbles; c; c = c->outer) {
+using BubbleGuard = LiveGuard<g_bubbles>;
+using GeometryGuard = LiveGuard<g_geometries>;
+
+// Cancels every cursor in `list` standing on `doomed`.
+void cancelOn(LiveCursor* list, const Widget* doomed) {
+  for (LiveCursor* c = list; c; c = c->outer) {
     if (c->node == doomed) c->node = nullptr;
   }
 }
 
-// --- in-flight layout passes -------------------------------------------------
+// --- layouts that must outlive their owner -----------------------------------
 //
-// Exactly the shape of the bubble cursors above, and for exactly the same
-// reason.  A geometry change is already a place where application code runs --
-// AppWindow::relayout() emits contentResized from the middle of one -- so an
-// arrange() can return to find the widget it was arranging destroyed.  Reading
-// layoutRunning_ or layout_ after that is a use-after-free.
+// Cancelling the cursor stops runLayoutIfAny from touching a dead host, but it
+// is one frame too late for the arrange() UNDER it: BoxLayout::arrange returns
+// from setGeometry straight into `i < items_.size()`, and items_ lives in the
+// Layout, which the host owns.  Freeing the layout with its host is therefore a
+// use-after-free that no amount of checking in Widget can reach.
 //
-// Copying the existing mechanism rather than inventing a second one is
-// deliberate: there is now one answer to "how does this library survive an
-// object dying inside its own callback", and it is this pattern.
-struct LayoutCursor {
-  Widget* host = nullptr;
-  LayoutCursor* outer = nullptr;
-};
-
-LayoutCursor* g_layouts = nullptr;
-std::uint32_t g_layoutDepth = 0;
+// So the layout is PARKED instead of destroyed, and released when the outermost
+// pass unwinds and nothing is reading it any more.  Its host_ is cleared on the
+// way, which is what Layout::hostAlive() reports and what makes arrange() stop
+// at its next check -- the `host` REFERENCE it was handed is dangling too, and
+// keeping the object alive does not fix that.
+//
+// "Is a pass standing on this host?" is asked of the host's own layoutRunning_
+// flag rather than of the cursor list, because the cursor may already have been
+// cancelled by announceDetached on the way here -- and a widget that is merely
+// DETACHED still owns its layout.
+//
+// The list itself lives in Layout.cpp (detail::parkLayout) and is intrusive,
+// chained through the layouts themselves, so this path -- which runs inside a
+// destructor -- allocates nothing.
 
 class LayoutGuard {
  public:
-  explicit LayoutGuard(Widget* host) {
-    cursor_.host = host;
-    cursor_.outer = g_layouts;
-    g_layouts = &cursor_;
-    ++g_layoutDepth;
-  }
+  explicit LayoutGuard(Widget* host) : live_(host) { ++g_layoutDepth; }
   ~LayoutGuard() {
-    g_layouts = cursor_.outer;
     --g_layoutDepth;
+    // The outermost frame: no arrange() is on the stack any more, so nothing
+    // can still be reading a parked layout.
+    if (g_layoutDepth == 0) detail::releaseParkedLayouts();
   }
 
   LayoutGuard(const LayoutGuard&) = delete;
   LayoutGuard& operator=(const LayoutGuard&) = delete;
 
   // False once the host has been destroyed under us.
-  bool alive() const { return cursor_.host != nullptr; }
+  bool alive() const { return live_.alive(); }
 
  private:
-  LayoutCursor cursor_;
+  LiveGuard<g_layouts> live_;
 };
-
-void cancelLayoutsOn(const Widget* doomed) {
-  for (LayoutCursor* c = g_layouts; c; c = c->outer) {
-    if (c->host == doomed) c->host = nullptr;
-  }
-}
 
 #ifndef NDEBUG
 // M2, the downward one-way rule.  Non-null ONLY while control is directly
@@ -207,8 +224,12 @@ bool stillAChild(const Widget& parent, const Widget* w, std::size_t& hint) {
 //     snapshotted and each entry re-checked against the live one.
 void announceDetached(const Widget& parent, Widget* node, std::size_t nodeHint,
                       Window* win) {
-  cancelBubblesOn(node);
-  cancelLayoutsOn(node);
+  cancelOn(g_bubbles, node);
+  cancelOn(g_geometries, node);
+  // NOT parked here: `node` is only being ANNOUNCED, not destroyed -- takeChild
+  // may still hand it back alive.  ~Widget is the one door every departure goes
+  // through, and that is where the layout is parked.
+  cancelOn(g_layouts, node);
   if (win) win->widgetDetached(node);
   if (!stillAChild(parent, node, nodeHint)) return;
   if (node->children().empty()) return;  // the common case: no snapshot, no allocation
@@ -238,10 +259,19 @@ Widget::~Widget() {
   //
   // Descendants are covered without a walk: children_ is destroyed right after
   // this body, so every one of them arrives here on its own.
-  cancelBubblesOn(this);
-  // Same argument, same doors, for a layout pass standing on this widget.
-  cancelLayoutsOn(this);
-  if (layout_) --detail::g_layoutHosts;
+  cancelOn(g_bubbles, this);
+  // Same argument, same doors, for a setGeometry and for a layout pass standing
+  // on this widget.
+  cancelOn(g_geometries, this);
+  cancelOn(g_layouts, this);
+
+  if (layout_) {
+    --detail::g_layoutHosts;
+    // An arrange() of ours is still on the stack, reading items_, scratch_ and
+    // the `host` reference it was handed.  Freeing the layout here would pull
+    // all of that out from under it; parking hands it to the outermost pass.
+    if (layoutRunning_) detail::parkLayout(layout_.release());
+  }
 }
 
 std::unique_ptr<Widget> Widget::takeChild(Widget* child) {
@@ -309,34 +339,57 @@ void Widget::setGeometry(const Rect& r) {
 
   if (visible_) update();  // repaint what we are vacating
   geometry_ = r;
-  // The natural size is the FIRST real size a widget was ever given, and after
-  // that it is frozen -- including against the arrange that is very likely what
-  // just called us.  ADR-R2-09.
+  // The natural size is the first real size a widget was ever given BY HAND,
+  // and after that it is frozen.  Both halves are decided in one place; the
+  // test here is only the fast path out of a call that would do nothing.
+  // ADR-R2-09.
   if (naturalSize_.isEmpty()) latchNaturalSize();
   // Before onGeometryChanged, not after: explicit code wins.  A container that
   // both owns a layout and overrides onGeometryChanged gets to place whatever
   // the layout did not, and its placement is the one that survives.
   if (layout_ && !runLayoutIfAny()) return;  // destroyed under us -- touch nothing
-  onGeometryChanged();
+
+  // onGeometryChanged runs APPLICATION code: AppWindow::relayout emits
+  // contentResized from inside one, and a slot is entitled to destroy widgets
+  // -- this one included.  Everything below reads a member, so the frame needs
+  // the same cursor the event bubble and the layout pass already have.  Without
+  // it a real BoxLayout::arrange, which does not return after the removal the
+  // way the test-suite's SuicidalLayout does, walks straight back into visible_
+  // and then into window() on a freed object.
+  {
+    GeometryGuard alive(this);
+    onGeometryChanged();
+    if (!alive.alive()) return;  // freed under us -- touch nothing, `this` included
+  }
   if (visible_) update();  // ...and what we now occupy
 }
 
 // ------------------------------------------------------------------ layout ---
 void Widget::adoptLayout(std::unique_ptr<Layout> l) {
-  if (!layout_) ++detail::g_layoutHosts;
+  const bool hadLayout = layout_ != nullptr;
+  // Replacing a layout from inside its own arrange() is ordinary application
+  // code -- an onGeometryChanged that switches a panel from a row to a column
+  // -- and destroying the old object there would free the items_ and scratch_
+  // that arrange is still reading two frames up.  Parked, exactly as a dead
+  // host's layout is, and released when the outermost pass unwinds.  Clearing
+  // its host_ is what stops the outgoing arrange at its next check; the
+  // incoming layout re-places the same children in this pass's second round.
+  if (layout_ && layoutRunning_) detail::parkLayout(layout_.release());
+
   layout_ = std::move(l);
   if (!layout_) {
-    --detail::g_layoutHosts;  // setLayout cannot get here; a future reset could
+    if (hadLayout) --detail::g_layoutHosts;  // setLayout cannot get here; a future reset could
     return;
   }
+  if (!hadLayout) ++detail::g_layoutHosts;
   layout_->host_ = this;
 
-  // "First taken into a layout" is the other latch point: these widgets were
-  // positioned by hand until a moment ago, and that hand-written size is the
-  // best statement of what they want that anyone has made.
-  latchNaturalSize();
-  for (const std::unique_ptr<Widget>& c : children_) c->latchNaturalSize();
-
+  // NOTE: this used to latch the natural size of the host and of every child it
+  // already had.  Both were dead: setGeometry latches unconditionally, so
+  // anything that had ever been given a size by hand was already latched.  What
+  // they were NOT dead against is a widget whose only size came from a layout
+  // pass -- which is exactly the size that must never be latched (ADR-R2-09,
+  // and see latchNaturalSize below).
   performLayout();
 }
 
@@ -351,7 +404,10 @@ void Widget::adoptLayout(std::unique_ptr<Layout> l) {
 // docs/iterations/02-layout-engine.md; the fix is a per-control width cache in
 // the text round (R3), not here.
 SizeHint Widget::sizeHint() const {
-  if (layout_) return layout_->measure(*this);
+  // measureFor, not measure: the layout's measuring buffers are the ones its
+  // arrange() is using, and this is the door application code comes back
+  // through in the middle of one.  See Layout::measureFor.
+  if (layout_) return layout_->measureFor(*this);
   return SizeHint{Size{0.0f, 0.0f}, naturalSize_, Size{kUnbounded, kUnbounded}};
 }
 
@@ -372,6 +428,14 @@ void Widget::performLayout() {
 
 void Widget::latchNaturalSize() {
   if (!naturalSize_.isEmpty()) return;  // already latched, and it is for life
+  // ADR-R2-09 is one-way in BOTH directions.  It stopped a window dragged
+  // smaller from ratcheting its contents down; latching the OUTPUT of a layout
+  // pass is the same mistake pointing the other way -- a plain panel first
+  // arranged into a 500 wide host would claim preferred.width = 500 for ever
+  // and never fit back into a 120 wide one.  The natural size is the first
+  // non-empty size a HUMAN gave this widget, which is what sizeHint()'s
+  // contract says it is; a size a layout computed is not one.
+  if (detail::layoutPassActive()) return;
   const Size s = geometry_.size();
   if (s.isEmpty()) return;  // nothing worth remembering yet
   naturalSize_ = s;
@@ -456,18 +520,24 @@ bool Widget::runLayoutIfAny() {
   do {
     layoutDirty_ = false;
     const Rect content = contentRect();
+    // Captured, not re-read: application code run from inside arrange() may
+    // replace this widget's layout, and the result below belongs to the object
+    // that PRODUCED it, not to whatever is installed by the time it returns.
+    // adoptLayout parks the outgoing object, so this pointer stays valid until
+    // the outermost pass unwinds.
+    Layout* const running = layout_.get();
 #ifndef NDEBUG
     const Widget* savedArrange = g_arrangeHost;
     g_arrangeHost = this;
 #endif
-    const LayoutOverflow result = layout_->arrange(*this, content);
+    const LayoutOverflow result = running->arrangeFor(*this, content);
 #ifndef NDEBUG
     g_arrangeHost = savedArrange;
 #endif
     // arrange() ran application code; this widget may be gone.  Nothing below
     // may touch a member, layout_ included -- it died with us.
     if (!guard.alive()) return false;
-    layout_->lastOverflow_ = result;
+    running->lastOverflow_ = result;
     // At most ONE re-run.  A layout that has not settled after seeing its own
     // output once will not settle on the third try either; it will just burn a
     // frame budget doing it.
@@ -484,7 +554,7 @@ namespace detail {
 bool layoutPassActive() { return g_layouts != nullptr; }
 
 const Widget* currentLayoutHost() {
-  return g_layouts ? g_layouts->host : nullptr;
+  return g_layouts ? g_layouts->node : nullptr;
 }
 
 }  // namespace detail

@@ -29,7 +29,24 @@
 
 namespace geeyoou {
 
+class Layout;
 class Widget;
+
+namespace detail {
+
+// A layout whose host was destroyed, or which was replaced on its host, while
+// its own arrange() was still on the stack.  Freeing it there would pull items_
+// and the scratch buffers out from under that arrange; instead it is PARKED and
+// released once no layout pass remains anywhere on the stack.  See the note
+// above the park list in src/widget/Widget.cpp -- these two are its plumbing,
+// and Widget is their only caller.
+//
+// parkLayout() takes ownership; the caller must have released it from whatever
+// unique_ptr held it.
+void parkLayout(Layout* l);
+void releaseParkedLayouts();
+
+}  // namespace detail
 
 // The upper bound a widget uses to say "no limit".  A large finite number
 // rather than infinity: sizes get added, subtracted and scaled all over a
@@ -95,7 +112,22 @@ class Layout {
   // draws decoration of its own, its frame too (Widget::layoutRect; GroupBox
   // hands back the area inside its border and under its title rule).  It is
   // therefore NOT always at the origin.  Returns whatever did not fit.
+  //
+  // EVERY setGeometry in here runs application code, which may destroy the host
+  // or replace this layout on it.  An implementation MUST therefore check
+  // hostAlive() after every one of them and return immediately when it goes
+  // false -- `host` is a dangling reference from that moment on.
   virtual LayoutOverflow arrange(Widget& host, const Rect& content) = 0;
+
+  // Whether this layout still has a host to place children into.
+  //
+  // Goes false in exactly two places, both of them from inside this layout's
+  // own arrange(): the host was destroyed, or the host was given a different
+  // layout.  In both cases the object itself is kept alive until the outermost
+  // pass unwinds -- the arrange on the stack is still reading its item list --
+  // but the `host` reference it was handed is not, and the tree below it is no
+  // longer this layout's business.
+  bool hostAlive() const { return host_ != nullptr; }
 
   void setMargins(const Margins& m);
   const Margins& margins() const { return margins_; }
@@ -127,8 +159,31 @@ class Layout {
 
  private:
   friend class Widget;
+  friend void detail::parkLayout(Layout*);
+  friend void detail::releaseParkedLayouts();
+
+  // The two entry points Widget uses, and the ONLY ones that are re-entrancy
+  // safe.  measure() and arrange() share one set of mutable scratch buffers in
+  // every subclass here -- that is what keeps a stable layout at zero
+  // allocations per pass -- so a measurement that starts while this layout is
+  // already measuring or arranging rewrites the numbers the outer pass is still
+  // reading, and reallocates them out from under its pointers.
+  //
+  // Application code reaches that door routinely and legitimately: a child's
+  // onGeometryChanged asking its container how big it wants to be is the whole
+  // point of sizeHint(), and ScrollArea::relayout does exactly that.  So a
+  // re-entrant measurement answers with the last completed one instead.  It is
+  // the number the outer pass is working from anyway, and it terminates the
+  // recursion; the alternative, measured on a 3x3 grid, was every cell but the
+  // first landing on the same point.
+  SizeHint measureFor(const Widget& host) const;
+  LayoutOverflow arrangeFor(Widget& host, const Rect& content);
 
   Widget* host_ = nullptr;
+  // Set only while this layout is destroyed-but-still-on-the-stack; see the
+  // park list in Widget.cpp.  One pointer, and only on widgets that own a
+  // layout at all.
+  Layout* deferredNext_ = nullptr;
   Margins margins_;
   float spacing_ = 6.0f;
   // Lives here rather than in the Widget: it is the result of THIS object's
@@ -136,6 +191,10 @@ class Layout {
   // majority of which will never own a layout -- buys nothing.  Widget
   // forwards lastLayoutOverflow() to it.
   LayoutOverflow lastOverflow_;
+  // The answer a re-entrant measureFor() hands back, and the latch that decides
+  // when it does.
+  mutable SizeHint lastMeasure_;
+  mutable bool buffersBusy_ = false;
 };
 
 namespace detail {
@@ -157,6 +216,8 @@ extern std::size_t g_layoutHosts;
 struct LayoutDiagnostics {
   std::uint32_t notConverged = 0;    // arrange kept re-dirtying itself
   std::uint32_t depthExceeded = 0;   // nested past kMaxTreeDepth
+  std::uint32_t reentered = 0;       // arrange() reached from inside its own measure()
+  std::uint32_t indexClamped = 0;    // a grid row/column index past what a form can be
   const Widget* lastNotConvergedHost = nullptr;
   const Widget* lastDepthExceededHost = nullptr;
 };
@@ -165,6 +226,8 @@ const LayoutDiagnostics& layoutDiagnostics();
 void resetLayoutDiagnostics();
 void layoutNotConverged(const Widget* host);
 void layoutDepthExceeded(const Widget* host);
+void layoutReentered();
+void layoutIndexClamped();
 
 // True while any layout pass is on the stack.  Content-driven invalidation
 // consults it: during a pass the running pass will pick the dirt up itself, and
