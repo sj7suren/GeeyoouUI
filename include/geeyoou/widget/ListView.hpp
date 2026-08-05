@@ -62,6 +62,8 @@ class ListView : public Widget {
   void scrollToBottom();
   void ensureRowVisible(int row);
 
+  SizeHint sizeHint() const override;
+
   Signal<int> rowClicked;
   Signal<int> rowActivated;   // double-ish: Enter, or a click on the current row
   Signal<> selectionChanged;

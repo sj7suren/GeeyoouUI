@@ -36,6 +36,8 @@ class ScrollArea : public Widget {
   void setScrollStep(float px);
   void setFrameVisible(bool on);
 
+  SizeHint sizeHint() const override;
+
   Signal<Point> scrolled;
 
  protected:

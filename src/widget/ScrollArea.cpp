@@ -27,6 +27,25 @@ void ScrollArea::setContentSize(Size size) {
   update();
 }
 
+// A VIEWPORT size, and deliberately not the content's.
+//
+// Reporting contentSize() here would defeat the widget: a scroll area exists
+// because its content does not fit, so a hint of "as big as what I hold" asks
+// the enclosing layout for exactly the room that would make the scrollbars
+// unnecessary -- and, when it cannot have it, records the difference as an
+// overflow that is not a fault.  It would also be circular the moment the
+// content is itself laid out.
+//
+// So the numbers below are a default WINDOW: big enough to be usable, small
+// enough to sit in a form, and meant to be overridden by giving the scroll area
+// stretch in whatever box holds it.
+SizeHint ScrollArea::sizeHint() const {
+  SizeHint h;
+  h.preferred = Size{320.0f, 200.0f};
+  h.min = Size{4.0f * kBar, 4.0f * kBar};
+  return h;
+}
+
 Point ScrollArea::scrollOffset() const { return viewport_->contentOffset(); }
 
 Point ScrollArea::maxScroll() const {

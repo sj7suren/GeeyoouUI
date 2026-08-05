@@ -9,11 +9,41 @@ namespace geeyoou {
 namespace {
 constexpr float kCellPad = 8.0f;
 constexpr float kScrollbarW = 9.0f;
+// What sizeHint() asks for.  A flexible column (width <= 0, "take what is
+// left") still has to ask for something, or a view made entirely of them would
+// declare itself zero pixels wide.
+constexpr float kMinFlexColumn = 80.0f;
+constexpr float kNoColumnsWidth = 160.0f;
+constexpr float kMinWidth = 120.0f;
+constexpr float kPreferredRows = 6.0f;
+constexpr float kMinRows = 2.0f;
 }  // namespace
 
 void ListView::setColumns(std::vector<Column> cols) {
   columns_ = std::move(cols);
   update();
+  invalidateSizeHint();  // the columns ARE the width this view asks for
+}
+
+// Columns for the width, a ROW COUNT for the height -- never rowCount().
+//
+// This is the pull model's whole point: the view holds no rows, and a 2000-row
+// alarm buffer must not turn into a 52000-pixel size hint that the enclosing
+// layout dutifully reports as a 51000-pixel overflow.  A list is a WINDOW onto
+// its model.  So the hint says "I can show six rows and I would rather show
+// more", and a panel that wants a taller list gives it stretch.
+SizeHint ListView::sizeHint() const {
+  float cols = 0.0f;
+  for (const Column& c : columns_) cols += (c.width > 0.0f) ? c.width : kMinFlexColumn;
+  if (cols <= 0.0f) cols = kNoColumnsWidth;
+
+  const float chrome = 2.0f + kScrollbarW + 2.0f;  // borders, plus room for the bar
+  const float head = headerHeight();
+
+  SizeHint h;
+  h.preferred = Size{cols + chrome, head + rowHeight_ * kPreferredRows};
+  h.min = Size{kMinWidth, head + rowHeight_ * kMinRows};
+  return h;
 }
 
 void ListView::setRowCount(int n) {
@@ -49,11 +79,13 @@ void ListView::clearSelection() {
 void ListView::setHeaderVisible(bool on) {
   header_ = on;
   update();
+  invalidateSizeHint();
 }
 
 void ListView::setRowHeight(float px) {
   rowHeight_ = std::max(12.0f, px);
   update();
+  invalidateSizeHint();
 }
 
 void ListView::setAlternatingRows(bool on) {
