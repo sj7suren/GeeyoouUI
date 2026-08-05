@@ -1,6 +1,7 @@
 #include "geeyoou/widget/Widget.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cctype>
 
 #include "geeyoou/render/Painter.hpp"
@@ -8,6 +9,34 @@
 
 namespace geeyoou {
 namespace {
+
+// --- size budget -------------------------------------------------------------
+//
+// The layout engine was allowed to add at most 16 bytes to every widget in
+// every tree.  Rather than assert against a number somebody measured by hand
+// once -- which would be wrong in Debug, where MSVC's containers carry an extra
+// pointer each -- the budget is measured against a struct holding exactly the
+// member set Widget had before R2, in the same order.  It compiles to nothing.
+struct WidgetSizeBeforeR2 {
+  virtual ~WidgetSizeBeforeR2() = default;
+  Rect geometry_;
+  Point contentOffset_;
+  void* parent_;
+  std::vector<std::unique_ptr<int>> children_;
+  bool visible_;
+  bool enabled_;
+  FocusPolicy focusPolicy_;
+  std::string objectName_;
+  std::vector<std::string> classes_;
+  StyleProps styleCache_;
+  StyleState styleCacheState_;
+  std::uint64_t styleCacheGen_;
+};
+
+static_assert(sizeof(Widget) <= sizeof(WidgetSizeBeforeR2) + 16,
+              "R2 budget: the layout engine may add at most 16 bytes to Widget. "
+              "The flags belong in the padding after focusPolicy_; anything "
+              "bigger than a pointer belongs in the Layout object instead.");
 
 // --- in-flight event bubbles -------------------------------------------------
 //
@@ -61,6 +90,77 @@ void cancelBubblesOn(const Widget* doomed) {
   }
 }
 
+// --- in-flight layout passes -------------------------------------------------
+//
+// Exactly the shape of the bubble cursors above, and for exactly the same
+// reason.  A geometry change is already a place where application code runs --
+// AppWindow::relayout() emits contentResized from the middle of one -- so an
+// arrange() can return to find the widget it was arranging destroyed.  Reading
+// layoutRunning_ or layout_ after that is a use-after-free.
+//
+// Copying the existing mechanism rather than inventing a second one is
+// deliberate: there is now one answer to "how does this library survive an
+// object dying inside its own callback", and it is this pattern.
+struct LayoutCursor {
+  Widget* host = nullptr;
+  LayoutCursor* outer = nullptr;
+};
+
+LayoutCursor* g_layouts = nullptr;
+std::uint32_t g_layoutDepth = 0;
+
+class LayoutGuard {
+ public:
+  explicit LayoutGuard(Widget* host) {
+    cursor_.host = host;
+    cursor_.outer = g_layouts;
+    g_layouts = &cursor_;
+    ++g_layoutDepth;
+  }
+  ~LayoutGuard() {
+    g_layouts = cursor_.outer;
+    --g_layoutDepth;
+  }
+
+  LayoutGuard(const LayoutGuard&) = delete;
+  LayoutGuard& operator=(const LayoutGuard&) = delete;
+
+  // False once the host has been destroyed under us.
+  bool alive() const { return cursor_.host != nullptr; }
+
+ private:
+  LayoutCursor cursor_;
+};
+
+void cancelLayoutsOn(const Widget* doomed) {
+  for (LayoutCursor* c = g_layouts; c; c = c->outer) {
+    if (c->host == doomed) c->host = nullptr;
+  }
+}
+
+#ifndef NDEBUG
+// M2, the downward one-way rule.  Non-null ONLY while control is directly
+// inside a Layout::arrange -- the moment that arrange calls setGeometry, the
+// scope below parks it for the duration, so the application code a child's
+// onGeometryChanged runs is not mistaken for the layout still writing.  That
+// distinction is the difference between an assert that catches a Layout
+// reaching past its own children and one that fires on every container in the
+// library the first time it is put inside a layout.
+const Widget* g_arrangeHost = nullptr;
+
+class ArrangeSuspend {
+ public:
+  ArrangeSuspend() : saved_(g_arrangeHost) { g_arrangeHost = nullptr; }
+  ~ArrangeSuspend() { g_arrangeHost = saved_; }
+
+  ArrangeSuspend(const ArrangeSuspend&) = delete;
+  ArrangeSuspend& operator=(const ArrangeSuspend&) = delete;
+
+ private:
+  const Widget* saved_;
+};
+#endif
+
 // --- detach bookkeeping ------------------------------------------------------
 constexpr std::size_t kNotAChild = std::size_t(-1);
 
@@ -108,6 +208,7 @@ bool stillAChild(const Widget& parent, const Widget* w, std::size_t& hint) {
 void announceDetached(const Widget& parent, Widget* node, std::size_t nodeHint,
                       Window* win) {
   cancelBubblesOn(node);
+  cancelLayoutsOn(node);
   if (win) win->widgetDetached(node);
   if (!stillAChild(parent, node, nodeHint)) return;
   if (node->children().empty()) return;  // the common case: no snapshot, no allocation
@@ -138,6 +239,9 @@ Widget::~Widget() {
   // Descendants are covered without a walk: children_ is destroyed right after
   // this body, so every one of them arrives here on its own.
   cancelBubblesOn(this);
+  // Same argument, same doors, for a layout pass standing on this widget.
+  cancelLayoutsOn(this);
+  if (layout_) --detail::g_layoutHosts;
 }
 
 std::unique_ptr<Widget> Widget::takeChild(Widget* child) {
@@ -160,6 +264,9 @@ std::unique_ptr<Widget> Widget::takeChild(Widget* child) {
   std::unique_ptr<Widget> owned = std::move(children_[index]);
   children_.erase(children_.begin() + std::ptrdiff_t(index));
   owned->parent_ = nullptr;
+  // After the unlink, so a layout that re-arranges from here sees the vector it
+  // is about to index into, not the one that still holds the departing child.
+  if (detail::g_layoutHosts != 0) childRemoved(index);
   return owned;
 }
 
@@ -182,11 +289,193 @@ void Widget::clearChildren() {
 }
 
 void Widget::setGeometry(const Rect& r) {
+  // M3, idempotence.  A layout pass hands the same rectangle back to most of
+  // its children most of the time -- resizing a window by one pixel moves one
+  // edge and nothing else -- and without this the work, the two repaints and
+  // every onGeometryChanged below would all happen anyway.  It is also what
+  // stops "child changed -> re-arrange -> child's geometry set -> child changed"
+  // from being a cycle.
+  //
+  // The dirty flag is part of the test: a host whose layout was invalidated
+  // DURING a pass must still re-run even though its own rectangle did not move.
+  if (r == geometry_ && !layoutDirty_) return;
+
+#ifndef NDEBUG
+  // M2: an arrange may only write to its host's DIRECT children.
+  assert((g_arrangeHost == nullptr || parent_ == g_arrangeHost) &&
+         "Layout::arrange may only setGeometry on its host's direct children");
+  const ArrangeSuspend suspend;
+#endif
+
   if (visible_) update();  // repaint what we are vacating
   geometry_ = r;
+  // The natural size is the FIRST real size a widget was ever given, and after
+  // that it is frozen -- including against the arrange that is very likely what
+  // just called us.  ADR-R2-09.
+  if (naturalSize_.isEmpty()) latchNaturalSize();
+  // Before onGeometryChanged, not after: explicit code wins.  A container that
+  // both owns a layout and overrides onGeometryChanged gets to place whatever
+  // the layout did not, and its placement is the one that survives.
+  if (layout_ && !runLayoutIfAny()) return;  // destroyed under us -- touch nothing
   onGeometryChanged();
   if (visible_) update();  // ...and what we now occupy
 }
+
+// ------------------------------------------------------------------ layout ---
+void Widget::adoptLayout(std::unique_ptr<Layout> l) {
+  if (!layout_) ++detail::g_layoutHosts;
+  layout_ = std::move(l);
+  if (!layout_) {
+    --detail::g_layoutHosts;  // setLayout cannot get here; a future reset could
+    return;
+  }
+  layout_->host_ = this;
+
+  // "First taken into a layout" is the other latch point: these widgets were
+  // positioned by hand until a moment ago, and that hand-written size is the
+  // best statement of what they want that anyone has made.
+  latchNaturalSize();
+  for (const std::unique_ptr<Widget>& c : children_) c->latchNaturalSize();
+
+  relayout();
+}
+
+SizeHint Widget::sizeHint() const {
+  return SizeHint{Size{0.0f, 0.0f}, naturalSize_, Size{kUnbounded, kUnbounded}};
+}
+
+const LayoutOverflow& Widget::lastLayoutOverflow() const {
+  // A widget with no layout never overflowed anything.  A file-scope constant
+  // rather than a member keeps those 12 bytes off every widget in the tree.
+  static const LayoutOverflow kNone;
+  return layout_ ? layout_->lastOverflow() : kNone;
+}
+
+void Widget::invalidateSizeHint() { markLayoutDirty(); }
+
+void Widget::relayout() {
+  if (!layout_) return;
+  layoutDirty_ = true;
+  runLayoutIfAny();
+}
+
+void Widget::latchNaturalSize() {
+  if (!naturalSize_.isEmpty()) return;  // already latched, and it is for life
+  const Size s = geometry_.size();
+  if (s.isEmpty()) return;  // nothing worth remembering yet
+  naturalSize_ = s;
+}
+
+Rect Widget::contentRect() const {
+  const Rect r = localRect();
+  if (!layout_) return r;
+  const Margins& m = layout_->margins();
+  return {m.left, m.top, std::max(0.0f, r.width() - m.left - m.right),
+          std::max(0.0f, r.height() - m.top - m.bottom)};
+}
+
+// Marks every layout host from here to the root, then -- unless a pass is
+// already running -- runs the topmost one.
+//
+// Only widgets that actually own a layout are marked.  Setting the flag on the
+// rest would leave it stuck on forever (nothing ever clears it for them) and
+// permanently disable the idempotence check in setGeometry, which is the whole
+// reason the flag exists.
+void Widget::markLayoutDirty() {
+  if (detail::g_layoutHosts == 0) return;
+
+  Widget* top = nullptr;
+  for (Widget* w = this; w; w = w->parent_) {
+    if (!w->layout_) continue;
+    w->layoutDirty_ = true;
+    top = w;
+  }
+  if (!top) return;
+  // Inside a pass there is nothing to start: the flag we just set is what the
+  // running pass re-reads, and starting a second pass under it is the
+  // re-entrancy M1 exists to prevent.
+  if (g_layouts) return;
+  top->runLayoutIfAny();
+}
+
+void Widget::childAppended() {
+  if (layout_) layout_->onChildAppended();
+  markLayoutDirty();
+}
+
+void Widget::childRemoved(std::size_t index) {
+  if (layout_) layout_->onChildRemoved(index);
+  markLayoutDirty();
+}
+
+void Widget::rebaseSubtreeDepth() {
+  for (const std::unique_ptr<Widget>& c : children_) {
+    assert(depth_ + 1 < int(kMaxTreeDepth) && "widget tree deeper than kMaxTreeDepth");
+    c->depth_ = std::uint16_t(depth_ + 1);
+    if (!c->children_.empty()) c->rebaseSubtreeDepth();
+  }
+}
+
+// The four anti-re-entrancy mechanisms, in one function.  See
+// docs/iterations/02-layout-engine.md for why each of them is here.
+bool Widget::runLayoutIfAny() {
+  if (!layout_) return true;
+
+  // M1, the re-entrancy latch.  An arrange that ends up back here -- through a
+  // child's onGeometryChanged, through a slot, through anything -- does not
+  // recurse.  It leaves a note, and the loop below picks it up.
+  if (layoutRunning_) {
+    layoutDirty_ = true;
+    return true;
+  }
+
+  // M4, the global ceiling.  Nesting deeper than a legal tree can be means the
+  // other three missed a cycle.  Abandoning the pass leaves the geometry of the
+  // last converged one on screen -- wrong but stable, which in a control room
+  // beats a stack overflow.
+  if (g_layoutDepth >= kMaxTreeDepth) {
+    detail::layoutDepthExceeded(this);
+    return true;
+  }
+
+  LayoutGuard guard(this);
+  layoutRunning_ = true;
+  int rounds = 0;
+  do {
+    layoutDirty_ = false;
+    const Rect content = contentRect();
+#ifndef NDEBUG
+    const Widget* savedArrange = g_arrangeHost;
+    g_arrangeHost = this;
+#endif
+    const LayoutOverflow result = layout_->arrange(*this, content);
+#ifndef NDEBUG
+    g_arrangeHost = savedArrange;
+#endif
+    // arrange() ran application code; this widget may be gone.  Nothing below
+    // may touch a member, layout_ included -- it died with us.
+    if (!guard.alive()) return false;
+    layout_->lastOverflow_ = result;
+    // At most ONE re-run.  A layout that has not settled after seeing its own
+    // output once will not settle on the third try either; it will just burn a
+    // frame budget doing it.
+  } while (layoutDirty_ && ++rounds < 2);
+
+  if (layoutDirty_) detail::layoutNotConverged(this);
+  layoutDirty_ = false;
+  layoutRunning_ = false;
+  return true;
+}
+
+namespace detail {
+
+bool layoutPassActive() { return g_layouts != nullptr; }
+
+const Widget* currentLayoutHost() {
+  return g_layouts ? g_layouts->host : nullptr;
+}
+
+}  // namespace detail
 
 void Widget::setContentOffset(Point offset) {
   if (contentOffset_.x == offset.x && contentOffset_.y == offset.y) return;
@@ -221,6 +510,9 @@ void Widget::setVisible(bool on) {
   visible_ = on;
   if (!on && hasFocus()) clearFocus();
   update();
+  // Content-driven: a layout that skips hidden items has just lost or gained
+  // one, so the space it was holding has to be redistributed.
+  markLayoutDirty();
 }
 
 void Widget::setEnabled(bool on) {
