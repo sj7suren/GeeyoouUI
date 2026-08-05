@@ -46,6 +46,17 @@ struct SignalBlock {
   // Debug build and a Release build agree on sizeof(Signal).
   int emitDepth = 0;
 
+  // Cleared by ~Signal, through detach(), in EVERY build.  emit() re-reads it
+  // once per slot through the copy of the block it pinned for the duration of
+  // the emission -- which is the one part of a signal that outlives the signal
+  // -- so a slot that breaks D7 stops the emission instead of leaving emit()
+  // walking a freed vector.  See the loop in emit().
+  //
+  // Deliberately a plain bool and not an atomic: a signal belongs to the UI
+  // thread and is never emitted from another one (docs/architecture.md section
+  // 3.11).  It also lands in padding the block already had, so nothing grows.
+  bool alive = true;
+
   void disconnect(std::uint64_t id) {
     if (signal && disconnectFn) disconnectFn(signal, id);
   }
@@ -106,6 +117,12 @@ class Signal {
     // signal it is running inside.  Doing so unwinds into a list emit() is
     // still walking, and the resulting crash lands somewhere unrelated -- so it
     // is caught at the scene instead.
+    //
+    // The assert is the DEBUG half.  It is not the whole enforcement, because
+    // the build that runs unattended in a plant for months is the Release one,
+    // where NDEBUG deletes this line: detach() below clears block_->alive in
+    // every build, and that is what stops emit() in its tracks.  A contract
+    // that only holds on a programmer's machine is not a contract.
     assert(!isEmitting() && "Signal destroyed from inside its own emit()");
     detach();
   }
@@ -182,6 +199,12 @@ class Signal {
   //     still ahead of us -- including when it disconnects itself
   //   * a slot MAY destroy other objects
   //   * a slot MAY NOT destroy the object that owns this signal
+  //
+  // What happens if it does anyway: Debug stops on the assert in ~Signal;
+  // Release stops the emission, and every slot after the offending one is
+  // skipped.  Neither is "supported" -- the second one exists so that the
+  // failure a customer reports is "the second handler stopped running" and not
+  // a heap corruption that surfaces an hour later in unrelated code.
   void emit(Args... args) const {
     if (slots_.empty()) return;
     // Invariant: a non-empty slot list means connect() ran, which allocated the
@@ -200,6 +223,19 @@ class Signal {
 
     const DepthGuard guard(block_);
     for (std::size_t i = 0; i < n; ++i) {
+      // The D7 backstop, and the FIRST thing each round for a reason: if the
+      // slot we just called destroyed the object owning this signal, then
+      // `this` is already freed and the findSlot() below would binary-search a
+      // dead vector.  The block is not freed with it -- the guard pinned it --
+      // so this one read stays legal after everything around it stopped being
+      // so, and it is read through the guard rather than through block_ for
+      // exactly that reason.
+      //
+      // Costs one predictable branch per slot and no allocation, which is the
+      // price of turning a silent use-after-free into a bounded, reportable
+      // "the rest of the handlers did not run".
+      if (!guard.block->alive) break;
+
       // Resolved afresh every iteration: the slot we just called is allowed to
       // have added or removed entries, either of which moves them.  Nothing may
       // be held across the call except the shared_ptr below.
@@ -230,6 +266,10 @@ class Signal {
   // D7 assert is compiled out) that stray write IS the first thing that
   // happens.  Pinning the block turns it back into a plain leak-free no-op, so
   // the assert stays the first symptom.
+  //
+  // The dispatch loop then leans on the same pin for the `alive` check: the
+  // block being the one thing that outlives a D7 violation is what makes a
+  // Release build able to notice one at all.
   //
   // Cost is one atomic increment/decrement pair per emission and no allocation.
   struct DepthGuard {
@@ -288,8 +328,13 @@ class Signal {
   // Cuts every outstanding Connection loose.  Releasing our shared_ptr is what
   // actually expires their weak_ptrs; clearing the back-pointer first keeps the
   // block harmless in case anything else ever holds a strong reference.
+  //
+  // `alive` is cleared here rather than in ~Signal so that the other caller --
+  // move-assignment, which likewise leaves the incumbent's slot list gone --
+  // gets the same protection.  One store, unconditionally, in every build.
   void detach() {
     if (!block_) return;
+    block_->alive = false;
     block_->signal = nullptr;
     block_->disconnectFn = nullptr;
     block_.reset();
