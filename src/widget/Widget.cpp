@@ -337,7 +337,7 @@ void Widget::adoptLayout(std::unique_ptr<Layout> l) {
   latchNaturalSize();
   for (const std::unique_ptr<Widget>& c : children_) c->latchNaturalSize();
 
-  relayout();
+  performLayout();
 }
 
 SizeHint Widget::sizeHint() const {
@@ -353,7 +353,7 @@ const LayoutOverflow& Widget::lastLayoutOverflow() const {
 
 void Widget::invalidateSizeHint() { markLayoutDirty(); }
 
-void Widget::relayout() {
+void Widget::performLayout() {
   if (!layout_) return;
   layoutDirty_ = true;
   runLayoutIfAny();
