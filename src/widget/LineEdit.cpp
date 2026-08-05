@@ -16,6 +16,19 @@ constexpr float kIconWidth = 26.0f;
 const char* const kBullet = "\xE2\x80\xA2";  // U+2022, 3 bytes in UTF-8
 constexpr std::size_t kBulletLen = 3;
 constexpr int kBlinkTicks = 16;  // ~530 ms at 30 fps
+
+// How much EDITABLE strip the field asks for, and the least it will accept.
+// Not derived from the current text: a field is sized for what will be typed
+// into it, and an empty one that asked for zero would be laid out as a slit and
+// then never grow, because sizeHint() must not read back the width a previous
+// pass gave it (ADR-R2-09).  180 fits a filename or an IP address; 56 still
+// shows five or six characters at a time.
+constexpr float kStripPreferred = 180.0f;
+constexpr float kStripMin = 56.0f;
+// Padding above and below the text.  The comfortable one gives the 32px field
+// every showcase form uses at the default 13px body font.
+constexpr float kPadYComfortable = 8.0f;
+constexpr float kPadYTight = 3.0f;
 }  // namespace
 
 // ---------------------------------------------------------------- setters ---
@@ -26,6 +39,7 @@ void LineEdit::setText(std::string utf8) {
   selAnchor_ = caret_;
   scroll_ = 0.0f;
   update();
+  invalidateSizeHint();
   textChanged.emit(text_);
 }
 
@@ -38,6 +52,7 @@ void LineEdit::setEchoMode(EchoMode m) {
   echo_ = m;
   revealed_ = false;
   update();
+  invalidateSizeHint();
 }
 
 void LineEdit::setReadOnly(bool on) {
@@ -50,16 +65,19 @@ void LineEdit::setMaxLength(std::size_t codepoints) { maxLength_ = codepoints; }
 void LineEdit::setLeadingIcon(Icon icon) {
   leadingIcon_ = icon;
   update();
+  invalidateSizeHint();
 }
 
 void LineEdit::setClearButtonEnabled(bool on) {
   clearButton_ = on;
   update();
+  invalidateSizeHint();
 }
 
 void LineEdit::setRevealButtonEnabled(bool on) {
   revealButton_ = on;
   update();
+  invalidateSizeHint();
 }
 
 void LineEdit::setInvalid(bool on) {
@@ -156,6 +174,24 @@ Rect LineEdit::buttonRect(Button b) const {
   return {};
 }
 
+// The chrome is measured, the strip is asked for.
+//
+// left/right come from the SAME expressions contentRect() uses, so a field that
+// gains a leading icon or a clear button widens by exactly the room that icon
+// or button is about to take -- rather than by a second, hand-copied guess at
+// it that drifts the first time one of those constants changes.
+SizeHint LineEdit::sizeHint() const {
+  const float left = (leadingIcon_ != Icon::None) ? kIconWidth + 4.0f : kPadX;
+  const float right = trailingWidth() + kPadX;
+  const float chrome = left + right;
+  const float line = fontLineHeight(Theme::current().fontBody);
+
+  SizeHint h;
+  h.preferred = Size{chrome + kStripPreferred, line + 2.0f * kPadYComfortable};
+  h.min = Size{chrome + kStripMin, line + 2.0f * kPadYTight};
+  return h;
+}
+
 LineEdit::Button LineEdit::buttonAt(Point p) const {
   if (buttonRect(Button::Clear).contains(p)) return Button::Clear;
   if (buttonRect(Button::Reveal).contains(p)) return Button::Reveal;
@@ -165,6 +201,11 @@ LineEdit::Button LineEdit::buttonAt(Point p) const {
 // ------------------------------------------------------------------- edit ---
 void LineEdit::emitChanged() {
   update();
+  // Typing the first character makes the clear button appear, which widens the
+  // chrome by a whole button -- so the hint really does change on a keystroke,
+  // and a field inside a layout has to be told.  Free when nothing in the
+  // process owns a Layout: markLayoutDirty tests g_layoutHosts first.
+  invalidateSizeHint();
   textChanged.emit(text_);
 }
 
