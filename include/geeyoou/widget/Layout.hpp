@@ -209,6 +209,23 @@ class Layout {
   //   * call detail::frameDegraded() once, per FRAME that gives up rather than
   //     per check, so that giving up is a recorded fact instead of an absence.
   //
+  //     THE ONE EXCEPTION, and it belongs here rather than only in the comment
+  //     at the site: a frame whose give-up is VISIBLE TO ITS CALLER IN THE
+  //     RETURN VALUE does not record.  The counter exists because giving up is
+  //     otherwise an absence -- a void return, or a fabricated hint, leaves no
+  //     trace at all -- and a `false` handed back to the caller is not an
+  //     absence.  The whole library has exactly ONE instance:
+  //     Widget::runLayoutIfAny.  Of its three callers, setGeometry consumes the
+  //     bool (`if (layout_ && !runLayoutIfAny()) return;`); performLayout and
+  //     markLayoutDirty discard it, which is safe for a different reason --
+  //     each ends immediately after the call, with no member access after the
+  //     door.  So "consumed by the caller" is one of three, and the exception
+  //     rests on the RETURN, not on what the callers do with it.
+  //
+  //     Written down because the numbers depend on it: recording it as well
+  //     would silently change both the `x 5` in test_layout_soak.cpp and the
+  //     `+2` in test_rem3_doors.cpp, and nothing would say why.
+  //
   // Widget::sizeHint() and Widget::setGeometry() carry a pointer back to this
   // paragraph: the next person to be bitten by it will be reading Widget.hpp,
   // not this file.  The library does not yet honour the contract at every one
