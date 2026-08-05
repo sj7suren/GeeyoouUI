@@ -6,10 +6,40 @@
 #include "geeyoou/render/Theme.hpp"
 
 namespace geeyoou {
+namespace {
+// The box onPaint() draws at full height, and the gap it leaves before the
+// label.  Kept next to each other so the two stay in step.
+constexpr float kBoxSide = 16.0f;
+constexpr float kLabelGap = 9.0f;
+constexpr float kRowHeight = 22.0f;
+}  // namespace
 
 void CheckBox::setText(std::string utf8) {
   text_ = std::move(utf8);
   update();
+  invalidateSizeHint();
+}
+
+// Box + gap + label, and the width does NOT shrink.
+//
+// onPaint() draws the box at min(16, height) and the label immediately after
+// it, with no ellipsis and no second line: there is nothing for a narrower
+// CheckBox to do except cut its label in half, and a half-read "启用联锁" is
+// worse than an overflow the diagnostics can report.  So min.width ==
+// preferred.width, and a row that cannot fit says so through lastLayoutOverflow.
+//
+// The height does have slack: the box is drawn at min(16, h), so 16 is a real
+// floor rather than an arbitrary one, and the extra six pixels of preferred
+// height are the touch target.
+SizeHint CheckBox::sizeHint() const {
+  const float fontSize = style(styleState()).fontSizeOr(Theme::current().fontBody);
+  const float labelW =
+      text_.empty() ? 0.0f : kLabelGap + measureText(text_, fontSize).width;
+
+  SizeHint h;
+  h.preferred = Size{kBoxSide + labelW, kRowHeight};
+  h.min = Size{kBoxSide + labelW, kBoxSide};
+  return h;
 }
 
 void CheckBox::setChecked(bool on) {
@@ -26,7 +56,7 @@ void CheckBox::onPaint(Painter& p, const Rect&) {
 
   const StyleProps& sp = style(styleState());
   const Color accent = sp.accentOr(t.accent);
-  const float side = std::min(16.0f, r.height());
+  const float side = std::min(kBoxSide, r.height());
   const Rect box(0.0f, r.center().y - side * 0.5f, side, side);
 
   Color fill = checked_ ? accent : sp.backgroundOr(t.field);
@@ -61,7 +91,7 @@ void CheckBox::onPaint(Painter& p, const Rect&) {
   }
 
   if (!text_.empty()) {
-    p.drawText({side + 9.0f, r.center().y}, text_, t.fontBody,
+    p.drawText({side + kLabelGap, r.center().y}, text_, t.fontBody,
                on ? t.text : t.textDisabled, HAlign::Left, VAlign::Middle);
   }
 }

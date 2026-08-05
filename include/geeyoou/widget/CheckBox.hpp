@@ -21,6 +21,8 @@ class CheckBox : public Widget {
 
   Signal<bool> toggled;
 
+  SizeHint sizeHint() const override;
+
  protected:
   void onPaint(Painter& p, const Rect& dirtyLocal) override;
   void onMouse(const MouseEvent& e) override;
