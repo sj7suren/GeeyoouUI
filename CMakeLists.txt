@@ -17,6 +17,7 @@ include(cmake/Dependencies.cmake)
 # ---------------------------------------------------------------- library ----
 set(GEEYOOU_SOURCES
   src/core/Types.cpp
+  src/core/TagRegistry.cpp
   src/render/Painter.cpp
   src/render/Icon.cpp
   src/render/IconRegistry.cpp

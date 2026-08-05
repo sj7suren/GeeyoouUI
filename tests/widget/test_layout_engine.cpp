@@ -261,14 +261,61 @@ GEEYOOU_TEST(layout_engine, layout_is_bound_once_and_arranges_the_content_rect) 
   CHECK_NEAR(a->geometry().height(), 30.0f, kEps);
 
   // measure() is a pure query: it can be called at any time and moves nothing.
-  // The engine itself never calls it -- placing children needs only arrange, and
-  // a measure pass that nothing consumes is a pass nobody pays for.
+  //
+  // There is no measure PASS: arranging a host reads its children's hints and
+  // places them, and a separate top-down measure sweep that nothing consumed
+  // would be a pass nobody pays for.  So a host at the TOP of a layout tree --
+  // `root` here, which nothing else measures -- has its own measure() called
+  // exactly as often as the application calls it, which is zero times.
+  //
+  // (T-11 note: this assertion used to be described as "the engine never calls
+  // measure()".  That is no longer true, and the case below shows why: since
+  // Widget::sizeHint() forwards to the layout, a host that is itself an ITEM in
+  // another layout is measured by that layout.  Nesting does not work any other
+  // way -- the enclosing box has no other means of finding out how big the
+  // panel wants to be.)
   CHECK_EQ(lay->measures, 0);
   const Rect snapshot = a->geometry();
   const SizeHint hint = lay->measure(root);
   CHECK_EQ(lay->measures, 1);
   CHECK_NEAR(hint.preferred.height, 90.0f, kEps);  // 3 rows of 30, no spacing
   CHECK(a->geometry() == snapshot);
+}
+
+GEEYOOU_TEST(layout_engine, a_nested_host_reports_what_its_own_layout_needs) {
+  // The change T-11 needed: a container's sizeHint() IS its layout's measure().
+  // Without it every nested panel answers with the size it happened to be given
+  // by hand once, and a form inside a GroupBox inside a page cannot be sized at
+  // all.
+  Widget root;
+  StackLayout* outer = root.setLayout<StackLayout>();
+  outer->setSpacing(0.0f);
+
+  Widget* panel = root.add<Widget>();
+  StackLayout* inner = panel->setLayout<StackLayout>();
+  inner->setSpacing(0.0f);
+  inner->setRowHeight(15.0f);
+  for (int i = 0; i < 4; ++i) panel->add<Widget>();
+
+  // 4 rows of 15 with no spacing and no margins.
+  const SizeHint h = panel->sizeHint();
+  CHECK_NEAR(h.preferred.height, 60.0f, kEps);
+  CHECK(inner->measures > 0);
+
+  // ...and it TRACKS the layout: the forwarding is a live query, not a value
+  // captured when the layout was adopted.  (What a measure() folds into its
+  // answer is that layout's business -- BoxLayout and GridLayout add their
+  // margins, this deliberately crude toy does not.)
+  inner->setRowHeight(25.0f);
+  CHECK_NEAR(panel->sizeHint().preferred.height, 100.0f, kEps);
+  panel->add<Widget>();
+  CHECK_NEAR(panel->sizeHint().preferred.height, 125.0f, kEps);
+
+  // A widget with NO layout still answers with its natural size: the base
+  // behaviour is unchanged for the 32 controls that do not use the engine.
+  Widget plain;
+  plain.setGeometry({0.0f, 0.0f, 40.0f, 25.0f});
+  CHECK_NEAR(plain.sizeHint().preferred.width, 40.0f, kEps);
 }
 
 GEEYOOU_TEST(layout_engine, overflow_is_reported_and_never_signalled) {

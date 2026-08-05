@@ -12,6 +12,7 @@ add_executable(geeyoou_tests
   core/test_d7_assert.cpp
   core/test_connection_scope.cpp
   core/test_platform_timer.cpp
+  core/test_tag_id.cpp
   widget/test_tree.cpp
   widget/test_hittest.cpp
   widget/test_removal.cpp
@@ -20,6 +21,8 @@ add_executable(geeyoou_tests
   widget/test_layout_engine.cpp
   widget/test_box_grid_layout.cpp
   widget/test_layout_alloc.cpp
+  widget/test_size_hints.cpp
+  widget/test_showcase_pages.cpp
   render/test_style_cascade.cpp
   visual/test_golden.cpp
 
@@ -28,12 +31,21 @@ add_executable(geeyoou_tests
   # every showcase page stands on, and a geometry regression in it would
   # otherwise only be visible by looking at the running application.
   ${CMAKE_SOURCE_DIR}/examples/showcase/Shell.cpp
+
+  # Same argument, for the three pages R2 migrated to the layout engine: they
+  # are the acceptance evidence for the round, and "it looked right when I ran
+  # it" is not evidence.  The other five pages stay out -- they are absolutely
+  # positioned, which is a supported way to write a page, not a backlog item.
+  ${CMAKE_SOURCE_DIR}/examples/showcase/PageWidgets.cpp
+  ${CMAKE_SOURCE_DIR}/examples/showcase/PageInputs.cpp
+  ${CMAKE_SOURCE_DIR}/examples/showcase/PageOps.cpp
 )
 
 target_link_libraries(geeyoou_tests PRIVATE geeyoou::geeyoou)
 target_include_directories(geeyoou_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
-  ${CMAKE_SOURCE_DIR}/examples)
+  ${CMAKE_SOURCE_DIR}/examples
+  ${CMAKE_SOURCE_DIR}/examples/showcase)
 
 # Baked in rather than resolved relative to the executable: the binary lives in
 # build/bin and the baselines live in the source tree, and a test that guessed

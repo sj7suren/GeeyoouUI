@@ -24,15 +24,18 @@
 // allocations would call that "one per pass"; it is really two.
 //
 #include <cstddef>
+#include <cstdint>
 #include <string>
 
 #include "framework/Test.hpp"
 #include "geeyoou/widget/BoxLayout.hpp"
 #include "geeyoou/widget/GridLayout.hpp"
+#include "geeyoou/widget/Label.hpp"
 #include "geeyoou/widget/Widget.hpp"
 
 using geeyoou::BoxLayout;
 using geeyoou::GridLayout;
+using geeyoou::Label;
 using geeyoou::Size;
 using geeyoou::SizeHint;
 using geeyoou::Widget;
@@ -172,6 +175,82 @@ GEEYOOU_TEST(layout_alloc, grid_arrange_allocates_nothing_once_the_tree_is_stabl
     CHECK_EQ(guard.count(), std::uint64_t(0));
     CHECK_EQ(guard.frees(), std::uint64_t(0));
   }
+}
+
+// ============================================================ KNOWN LIMIT ===
+//
+// This case asserts that work HAPPENS.  That is not a mistake and it is not a
+// test of a feature -- it is a record, in the gate, of a limitation the
+// architecture team ruled out of scope for R2 and into R3.
+//
+// The zero-allocation promise above covers the layout ENGINE: the scratch
+// buffers in BoxLayout and GridLayout, the item vectors, the arithmetic.  It
+// does NOT cover what the engine CALLS.  A layout asks every item for its
+// sizeHint() on every pass, and Label::sizeHint() shapes the text: it builds a
+// BLGlyphBuffer and runs get_text_metrics, per label, per pass -- which during
+// a window drag is per label, per frame.
+//
+// Two things to be careful about here, in this order:
+//
+//   * DO NOT reach for AllocGuard to measure this.  It reads zero, and it is
+//     lying by omission: the harness replaces global operator new, while
+//     Blend2D allocates through its own runtime allocator on top of malloc.
+//     The shaping work is real and invisible to this counter.  A future reader
+//     who "proves" the problem away with an allocation count will have proved
+//     only that the counter cannot see it.
+//   * So what is counted instead is the thing that actually costs: how many
+//     times the engine asks a text control to measure itself.
+//
+// Why it is not fixed here: the fix is a width cache on the control, keyed on
+// (text, font size, style generation), and that is a text-engine change rather
+// than a layout one.  R3 rebuilds the text stack (docs/roadmap.md) and owns it.
+//
+// Why it is a test rather than a paragraph in a document: a limitation nobody
+// measured is a limitation nobody will notice has changed.  When R3 lands the
+// cache this case goes red, and whoever is holding it then gets to rewrite it
+// as "measured once, then cached".  That is the intended ending.
+GEEYOOU_TEST(layout_alloc, text_is_re_measured_on_every_pass_r3) {
+  // Counts what Label::sizeHint costs without changing what it answers.
+  class CountingLabel : public Label {
+   public:
+    mutable int measured = 0;
+    SizeHint sizeHint() const override {
+      ++measured;
+      return Label::sizeHint();
+    }
+  };
+
+  Widget root;
+  BoxLayout* box = root.setLayout<BoxLayout>(BoxLayout::Orientation::Vertical);
+  box->setSpacing(6.0f);
+
+  CountingLabel* labels[6] = {};
+  for (int i = 0; i < 6; ++i) {
+    labels[i] = root.add<CountingLabel>();
+    labels[i]->setText("进料泵 P-101 流量 52 m3/h");
+    box->addWidget(labels[i]);
+  }
+  root.setGeometry({0.0f, 0.0f, 400.0f, 300.0f});
+  for (CountingLabel* l : labels) l->measured = 0;
+
+  // Ten resizes, i.e. ten frames of an operator dragging a window edge.
+  for (int i = 0; i < 10; ++i) root.setGeometry(geometryFor(i));
+
+  int total = 0;
+  for (CountingLabel* l : labels) total += l->measured;
+
+  // Exactly once per label per pass -- BoxLayout::gather carries the cross-axis
+  // pair in scratch_ precisely so the placement loop does not ask a second
+  // time.  The engine is already as thrifty with the question as it can be;
+  // what is expensive is the ANSWER, and only a cache on the control fixes it.
+  CHECK_EQ(total, 60);
+  geeyoou::test::note(
+      "[known] layout_alloc.text_is_re_measured_on_every_pass_r3："
+      "10 趟布局 x 6 个 Label = " +
+      std::to_string(total) +
+      " 次文本度量（每次 measureText 建一个 BLGlyphBuffer）。"
+      "布局引擎自身零分配，这部分开销在 Blend2D 的分配器里，AllocGuard 看不见。"
+      "已知限制，归 R3 文本引擎轮（按 text/fontSize/styleGeneration 做宽度缓存）。");
 }
 
 GEEYOOU_TEST(layout_alloc, capacity_only_ever_grows) {
