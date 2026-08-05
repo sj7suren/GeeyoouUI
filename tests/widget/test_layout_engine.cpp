@@ -1160,9 +1160,26 @@ GEEYOOU_TEST(layout_engine, a_chain_of_measurements_stops_at_the_same_ceiling_a_
   // COUNT BALANCE, the first of the two properties the check's position has to
   // buy (see the note on it in Layout.cpp).  The refused call never touched
   // g_measureDepth, so the counter is back at zero and a second, identical
-  // measurement behaves identically.  A ceiling that had incremented before
-  // giving up would leave the counter stuck at 64 and refuse trees[0] outright
-  // on this line.
+  // measurement behaves identically.
+  //
+  // WHAT A CEILING THAT INCREMENTED BEFORE GIVING UP WOULD LEAK, and which line
+  // below would catch it.  ONE count, not sixty-four: a refusal CUTS the chain
+  // -- the refused host measures nothing, so nothing beyond it is ever asked --
+  // so one whole traversal of this chain contains exactly ONE refusal, and a
+  // ceiling that incremented first leaks exactly that one.  The second
+  // measurement then starts from 1 and refuses one link EARLIER, at trees[63];
+  // trees[0] sits at depth 1 and is measured perfectly normally.
+  //
+  // So the line that goes red is NOT the depthExceeded count (still 2: one
+  // refusal per traversal) and NOT layouts[0] (still 2).  It is layouts[63],
+  // which stays at 1 because the refusal landed on it.
+  //
+  // Run, not reasoned, by the E5/E6 review: the mutation reddens layouts[63]
+  // here and SIX further cases elsewhere in the suite, because a counter that
+  // never returns to zero also parks every layout for good -- releaseParked-
+  // Layouts() returns early while g_measureDepth != 0, and the
+  // parkedLayoutCount() assertion below goes from 0 to 3639.  That assertion
+  // has more teeth than the sentence that introduces it suggests.
   const SizeHint again = trees[0]->sizeHint();
   (void)again;
   CHECK_EQ(int(geeyoou::detail::layoutDiagnostics().depthExceeded), 2);
