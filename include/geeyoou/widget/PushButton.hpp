@@ -56,6 +56,8 @@ class PushButton : public Widget {
   // Adds :hover / :pressed / :checked on top of what Widget can see.
   StyleState styleState() const override;
 
+  SizeHint sizeHint() const override;
+
  protected:
   void onPaint(Painter& p, const Rect& dirtyLocal) override;
   void onMouse(const MouseEvent& e) override;

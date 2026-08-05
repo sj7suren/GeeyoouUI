@@ -9,12 +9,23 @@ namespace geeyoou {
 namespace {
 constexpr float kIconGap = 7.0f;
 constexpr float kSpinDegreesPerTick = 12.0f;  // ~one turn per second at 30 fps
+
+// Breathing room either side of the label.  Two numbers rather than one: a
+// button squeezed in a toolbar may give up half its padding and still read as a
+// button, but it may never give up a letter of its label.
+constexpr float kPadComfortable = 16.0f;
+constexpr float kPadTight = 8.0f;
+// The glyph box onPaint() would use at the preferred height: min(18, h - 12).
+constexpr float kGlyph = 18.0f;
+constexpr float kHeightComfortable = 36.0f;  // the size every showcase page uses
+constexpr float kHeightTight = 26.0f;        // still a 44px touch target with 9px around it
 }  // namespace
 
 void PushButton::setText(std::string utf8) {
   if (text_ == utf8) return;
   text_ = std::move(utf8);
   update();
+  invalidateSizeHint();
 }
 
 void PushButton::setVariant(ButtonVariant v) {
@@ -31,6 +42,7 @@ void PushButton::setAccent(Color c) {
 void PushButton::setIcon(Icon icon) {
   icon_ = icon;
   update();
+  invalidateSizeHint();
 }
 
 void PushButton::setCheckable(bool on) {
@@ -58,6 +70,34 @@ void PushButton::setLoading(bool on) {
 void PushButton::setLoadingText(std::string utf8) {
   loadingText_ = std::move(utf8);
   update();
+  invalidateSizeHint();
+}
+
+// Label + icon + padding, at the font the style sheet actually resolves.
+//
+// Two properties this deliberately has:
+//
+//   * it does not move when the button starts or stops loading.  The WIDER of
+//     the two labels is measured, and the spinner is drawn in the icon's slot,
+//     so a form does not reflow the instant an operator presses "apply" -- the
+//     one moment they are looking at exactly that button.
+//   * its minimum is the label plus tight padding.  A button may lose padding;
+//     it may not lose a letter, because a control whose caption reads "确" is
+//     not a smaller version of "确认", it is a different instruction.
+SizeHint PushButton::sizeHint() const {
+  const float fontSize = style(styleState()).fontSizeOr(Theme::current().fontBody);
+  const float textW =
+      std::max(text_.empty() ? 0.0f : measureText(text_, fontSize).width,
+               loadingText_.empty() ? 0.0f : measureText(loadingText_, fontSize).width);
+  const bool hasLabel = !text_.empty() || !loadingText_.empty();
+  const float glyphW =
+      (icon_ != Icon::None) ? kGlyph + (hasLabel ? kIconGap : 0.0f) : 0.0f;
+
+  const float content = textW + glyphW;
+  SizeHint h;
+  h.preferred = Size{content + 2.0f * kPadComfortable, kHeightComfortable};
+  h.min = Size{content + 2.0f * kPadTight, kHeightTight};
+  return h;
 }
 
 void PushButton::activate() {
