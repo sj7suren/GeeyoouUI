@@ -11,13 +11,20 @@
 namespace geeyoou {
 namespace {
 constexpr float kButtonWidth = 22.0f;
-}
+// onPaint() right-aligns the value at (right - kButtonWidth - 8), so 8 is the
+// real gap between the text and the stepper; the left one matches it.
+constexpr float kTextGap = 8.0f;
+constexpr float kPadLeft = 8.0f;
+constexpr float kPadYComfortable = 8.0f;
+constexpr float kPadYTight = 3.0f;
+}  // namespace
 
 void SpinBox::setRange(double minValue, double maxValue) {
   min_ = minValue;
   max_ = maxValue;
   setValue(value_);  // re-clamp
   update();
+  invalidateSizeHint();
 }
 
 void SpinBox::setValue(double v) {
@@ -33,11 +40,43 @@ void SpinBox::setStep(double s) { step_ = (s > 0.0) ? s : 1.0; }
 void SpinBox::setDecimals(int d) {
   decimals_ = std::clamp(d, 0, 6);
   update();
+  invalidateSizeHint();
 }
 
 void SpinBox::setSuffix(std::string utf8) {
   suffix_ = std::move(utf8);
   update();
+  invalidateSizeHint();
+}
+
+// Sized for the WIDEST value the range can produce, not for the value it
+// happens to be showing.
+//
+// This is the whole reason a SpinBox needs a hint of its own.  A field measured
+// from its current text is 42px wide at 9.9 and 58px at -100.0, so a form full
+// of them re-flows every time a pump changes speed -- on a screen an operator
+// is reading numbers off.  Measuring both ends of the range instead makes the
+// width a property of the CONFIGURATION, which only a commissioning engineer
+// changes, and setRange/setDecimals/setSuffix are exactly the three calls that
+// re-measure it.
+SizeHint SpinBox::sizeHint() const {
+  char buf[64];
+  std::snprintf(buf, sizeof(buf), "%.*f", decimals_, min_);
+  float textW = measureText(buf, Theme::current().fontBody).width;
+  std::snprintf(buf, sizeof(buf), "%.*f", decimals_, max_);
+  textW = std::max(textW, measureText(buf, Theme::current().fontBody).width);
+  if (!suffix_.empty()) {
+    textW += measureText(suffix_, Theme::current().fontBody).width;
+  }
+
+  const float line = fontLineHeight(Theme::current().fontBody);
+  const float width = kPadLeft + textW + kTextGap + kButtonWidth;
+  SizeHint h;
+  h.preferred = Size{width, line + 2.0f * kPadYComfortable};
+  // The stepper buttons and the digits are the widget; there is nothing left to
+  // give up horizontally, so the minimum width is the preferred one.
+  h.min = Size{width, line + 2.0f * kPadYTight};
+  return h;
 }
 
 // ------------------------------------------------------------------ layout --

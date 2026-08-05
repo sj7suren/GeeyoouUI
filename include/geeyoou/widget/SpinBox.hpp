@@ -29,6 +29,8 @@ class SpinBox : public Widget {
 
   Signal<double> valueChanged;
 
+  SizeHint sizeHint() const override;
+
  protected:
   void onPaint(Painter& p, const Rect& dirtyLocal) override;
   void onMouse(const MouseEvent& e) override;
