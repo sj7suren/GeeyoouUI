@@ -405,9 +405,16 @@ void ScrollArea::relayout() {
 
 ---
 
-## 11. 【REM3 · E1】跨越应用代码的帧守卫 —— 设计定案（第 2 版）
+## 11. 【REM3 · E1】跨越应用代码的帧守卫 —— 设计定案（第 3 版）
 
-> 状态：**第 1 版经 `eng-frontend-ui`（Leo）书面评审，有条件放行。本版按 B1~B7 + 登记项修订，待复签。**
+> 状态：**第 2 版经 `eng-frontend-ui`（Leo）复签放行（Q2/Q3/Q6 无条件签字，合并判据成立）。本版按复签的一处实质异议 + 两处注释补正修订，并按放行后的范围把契约改写收进 E2。**
+> 复签带来的三处改动，逐条可查：
+> * **判据 2 改写**（§11.1）：「表外读者为零」→「**没有任何读者的返回值参与引擎决策；纯诊断读者不计**」。原措辞被本节自己引入的 `deathWatchDepth()` 证伪，是文档自相矛盾，不是设计错误；两条结论一字不改。同步改到 §11.2 的注释、REM3-G6、§11.7 2c。
+> * **`markLayoutDirty` 的机制更正**（§11.1 候选 E 第一条）：脏标记**不会丢**（`:613-618` 在 `:623` 之前就打完了），**丢的是执行**。原文的「would be swallowed / 被吞掉」会让下一个人看到 `layoutDirty_` 还在就判定这条否决理由是错的。同步改到 `Widget.cpp:113-134` 的注释。
+> * **`takeChild` 第二道门入表**（§11.4 #13b）：`:416 childRemoved(index)` 在守卫作用域**之后**，是一扇真门。它今天非危险，但唯一理由是"其后再没有任何语句解引用 `this`"——一条此前哪里都没写的隐式不变量。E2 在 `:416` 上方补注释。
+>
+> 另按复签补入两条正面论据：合并的**附加收益**（一帧三游标同链，§11.1）与**维护条件**（需要"detach 也取消"的新现场不得挂这条链表，§11.1）。`removeChild` 免检的理由换成 Leo 那版（§11.4 #11）。
+>
 > 本节只定形状与语义，不含实现。实现是 E2，落点是 E3/E4，枚举表与门覆盖校验是 E5，用例是 E6。
 >
 > **行号基准**：本节所有 `src/`、`include/` 行号取自 **HEAD = `06db811`**（含 E17 的 `e9c283a` / `c53fd66` / `24bbc28`），且已逐条对当前工作树复核过。
@@ -447,26 +454,31 @@ Leo 的 B1/B2 两条都成立，而且它们指向同一个结论。先把判据
 **拆表判据（两条，缺一不可）**
 
 > **判据 1（取消策略）**：两种取消策略 ⇒ 两条链表。`cancelOn` 是按整条链表走的，一条链表做不到两套策略。
-> **判据 2（表外读者）**：链表若有**守卫自身 `alive()` 之外的读者**（任何形如"现在有没有一个 X 帧站在谁身上"的谓词），则混入异类帧会让那个谓词**静默答错** ⇒ 必须独占。
+> **判据 2（决策读者）**：链表若有**返回值参与引擎决策**的读者（任何形如"现在有没有一个 X 帧站在谁身上"、且引擎**据此改变行为**的谓词），则混入异类帧会让那个谓词静默答错，而**那个错误答案会被执行** ⇒ 必须独占。
+> **纯诊断读者不计**：只被人和用例读、不出现在任何库内分支条件里的读者，答错也没有消费者。
 
-**反过来说**：两条链表若**取消策略相同**且**都没有表外读者**，它们就是同一份东西的两个名字——多一条链表 = 多一个 `~Widget` 里要记得写的 `cancelOn` = 多一个下次会忘的地方（`Widget.cpp:74-75` 自己写的那句"a second hand-rolled copy of this pattern is a second place to forget a check"，说的是机制，但同样的道理逐字适用于策略）。
+⚠️ **本版措辞更正（Leo 复签的唯一实质异议）**：第 1 版把判据 2 写成"表外读者为零"，而本节自己又为合并后的链表引入了 `detail::deathWatchDepth()`（Q2 的可测性论证）——**按字面，那就是一个表外读者，文档自相矛盾**。实质上不矛盾，因为杀掉 `g_layouts` 的从来不是"有人读"，而是"**有人读了之后引擎据此改变行为**"：`markLayoutDirty` 因此少跑一次 pass、停车场因此晚排空一轮、`currentLayoutHost()` 因此被断言。所以判据按**读者的返回值参不参与引擎决策**来分，而不是按有没有读者来分。这样 `deathWatchDepth()` 合法（它谁也不指挥），`layoutPassActive()` 依然把 `g_layouts` 排除在外（它指挥 `Layout.cpp:77` 的排空点），两条结论一字不改。
+
+**反过来说**：两条链表若**取消策略相同**且**都没有决策读者**，它们就是同一份东西的两个名字——多一条链表 = 多一个 `~Widget` 里要记得写的 `cancelOn` = 多一个下次会忘的地方（`Widget.cpp:74-75` 自己写的那句"a second hand-rolled copy of this pattern is a second place to forget a check"，说的是机制，但同样的道理逐字适用于策略）。
 
 **完整选项矩阵（五个候选，逐个判）**
 
-| # | 候选 | 取消策略 | 表外读者 | 判决 |
+| # | 候选 | 取消策略 | 决策读者 | 判决 |
 |---|---|---|---|---|
 | A | 新开第五条链表 `g_hints` | 只在 `~Widget` | 无 | **否决**（与 F 逐条相同，纯冗余；这是第 1 版的答案） |
 | B | 复用 `g_geometries` | `announceDetached:282` **取消** + `~Widget:342` | 无 | 否决（判据 1） |
 | C | 给 `LiveCursor` 加 kind 字段，`cancelOn` 按 kind 过滤 | — | — | 否决（见下） |
 | D | 复用 `g_bubbles` | `announceDetached:281` **取消** + `~Widget:339` | 无 | 否决（判据 1；另：`moveTo()` 语义是沿父链行走，与测量帧无关） |
 | E | 复用 `g_layouts` | **只在 `~Widget:343`**，`announceDetached:283-296` 明令不取消 | **有三个** | 否决（判据 2，见下） |
-| **F** | **复用 E17 的 `g_detaches`，按策略改名 `g_deathWatch`** | **只在 `~Widget:347`** | **无** | **采用** |
+| **F** | **复用 E17 的 `g_detaches`，按策略改名 `g_deathWatch`** | **只在 `~Widget:347`** | **无**（`deathWatchDepth()` 是纯诊断，不计） | **采用** |
 
 **为什么不是 B / D（判据 1，决定性）**：`announceDetached:281-282` 对这两条链表都执行 `cancelOn`。而按 Q4 的结论，hint 帧在**仅 detach** 时**必须不取消**。共用 = 一条链表被迫执行两套策略。
 
-**为什么不是 E（这是第 1 版真正漏掉的那个，也是 Leo B2 点名的那个）**：Leo 说得对——`g_layouts` 的**取消策略已经就是 hint 帧要的那一套**（`announceDetached:283-296` 明文写着不取消，`~Widget:343` 取消），所以第 1 版"两种取消策略 ⇒ 两条链表"这条理由**够不着 E**。杀掉 E 的是判据 2，而 `g_layouts` 的表外读者有三个，且三个都会被一个 hint 游标弄错：
+**为什么不是 E（这是第 1 版真正漏掉的那个，也是 Leo B2 点名的那个）**：Leo 说得对——`g_layouts` 的**取消策略已经就是 hint 帧要的那一套**（`announceDetached:283-296` 明文写着不取消，`~Widget:343` 取消），所以第 1 版"两种取消策略 ⇒ 两条链表"这条理由**够不着 E**。杀掉 E 的是判据 2，而 `g_layouts` 的决策读者有三个，且三个都会被一个 hint 游标弄错——注意这三条的共同点不是"被读了"，而是**读到的答案立刻变成一次行为改变**：
 
-* `markLayoutDirty:623` 的 `if (g_layouts) return;`——测量期间挂一个游标，等于告诉全引擎"有 pass 在跑"，**测量自己引发的重排会被这句吞掉**。这就是 `announceDetached:288-296` 已经记过一次的"子树几何永久冻结"，只是从另一个方向到达。
+* `markLayoutDirty:623` 的 `if (g_layouts) return;`——测量期间挂一个游标，等于告诉全引擎"有 pass 在跑"，于是**这一次重排不跑**。
+  ⚠️ **机制的精确说法（第 1 版写错一个字，Leo 复签指出）**：`markLayoutDirty` 是**先**在 `:613-618` 把 `layoutDirty_` 打在从这里到根的每一个 host 上，**才**在 `:623` 遇到 `if (g_layouts) return;`。**脏标记不会丢，丢的是执行。** 在**真实** pass 下这样做是对的：那个 pass 退栈时会在 `runLayoutIfAny:699` 的 `while (layoutDirty_ && ++rounds < 2)` 上回头重读这面旗，还它一趟，然后在 `:715` 清掉。而一个**假的**游标（detach 帧或测量帧）背后**没有 pass 会退栈**，没有人回头读那面旗，于是这次重排要等下一次**不相干的**触发（那时链表恰好是空的）才跑，子树在此期间保持上一帧的几何。
+  第 1 版把这写成"会被这句吞掉"，字面意思是脏标记丢了；将来有人去看 `layoutDirty_` 发现它还在，会据此判定这条否决理由是错的——而它是对的，错的只是那个动词。这就是 `announceDetached:288-296` 已经记过一次的"子树几何冻结"，只是从另一个方向到达（那一段是 `layoutRunning_` 永远为真，这一段是没有人来还债）。
 * `detail::layoutPassActive():722`——`Layout.cpp:77` 的停车场排空点读它（`g_measureDepth == 0 && !layoutPassActive()`），一个测量期的假 pass 会把停车的 `Layout` 对象**多押一轮**才释放。
 * `detail::currentLayoutHost():724-725`——它会返回**被测量的那个 widget**，而 `tests/widget/test_layout_engine.cpp:553` 正在断言这个值。
 
@@ -477,8 +489,8 @@ Leo 的 B1/B2 两条都成立，而且它们指向同一个结论。先把判据
 **为什么是 F（正面论证，两个事实都可 grep 复核）**：
 
 1. **取消策略逐字相同**。`g_detaches` 的注释（`Widget.cpp:132-133`）自己写着 "cancelled by `~Widget` and by nothing else, which is exactly *dead, not merely detached*"。而 Q4 对 hint 帧的结论一字不差就是这句。
-2. **表外读者：零**。全库对 `g_detaches` 的操作只有 `~Widget:347` 的 `cancelOn` 和三处 `DetachGuard` 的 `alive()`（`:301`、`:400`、`:431`）。grep 命令写在这里，E5 可复核：
-   `grep -n "g_detaches\|DetachGuard" -r src include tests`
+2. **决策读者：零**。全库对 `g_detaches` 的操作只有 `~Widget:347` 的 `cancelOn` 和三处 `DetachGuard` 的 `alive()`（`:301`、`:400`、`:431`）——**没有一个出现在库内的分支条件里去指挥引擎干别的事**。合并后新增的 `deathWatchDepth()` 是**纯诊断**（只被用例读），按修订后的判据 2 不计。grep 命令写在这里，E5 可复核：
+   `grep -n "g_detaches\|DetachGuard\|g_deathWatch\|DeathWatch" -r src include tests`
 
 **所以：`g_detaches` 与 `g_hints` 是同一条链表的两个名字。** 保留两条 = 两个 8 字节全局 + `~Widget` 里两行 `cancelOn` + 两个要记住的名字，换来的是零。合并。
 
@@ -491,9 +503,13 @@ Leo 的 B1/B2 两条都成立，而且它们指向同一个结论。先把判据
 | `g_detaches` / `g_hints` | **`detail::g_deathWatch`** | 站在别人身上的在飞帧，**只被真实销毁取消，detach 不取消** |
 | `DetachGuard` / `HintGuard` | **`detail::DeathWatch`** | 上面那条链表的唯一守卫类型 |
 
-`g_bubbles` / `g_geometries` 仍按帧种命名，因为它们的策略是另一套（detach 也取消），名字与策略不冲突。四条链表因此读作：**两条"还在原地吗"（bubbles / geometries），一条"pass 还在跑吗"（layouts，有表外读者所以独占），一条"人还在吗"（deathWatch）**。
+`g_bubbles` / `g_geometries` 仍按帧种命名，因为它们的策略是另一套（detach 也取消），名字与策略不冲突。四条链表因此读作：**两条"还在原地吗"（bubbles / geometries），一条"pass 还在跑吗"（layouts，有决策读者所以独占），一条"人还在吗"（deathWatch）**。
+
+**维护条件（Leo 复签时提的，写进本节以便执行）**：这条链表的正确性**完全建立在"两类帧的取消策略相同"之上**。将来任何新现场若需要「detach 也取消」，**不得**挂到 `g_deathWatch`——它必须回到 `g_bubbles`/`g_geometries` 那一族，或者自开一条。**按策略命名而不是按门命名，正是让这条规则可执行的原因**：一个叫 `g_detaches` 的链表上挂一个测量帧要靠人记住"其实它不是按门分的"，而一个叫 `g_deathWatch` 的链表，只要问"我这帧是不是只怕死、不怕搬家"就能当场判。判错的代价见 §11.1 候选 B/D。
 
 **一个守卫类型，不是两个。** 合并后 `DetachGuard` 与 `HintGuard` 的差别只剩访问形状，而事实是**三处 detach 现场（守卫在 `:301`、`:400`、`:431`）的四次检查（`:305`、`:318`、`:402`、`:437`）也只用 `alive()`**，没有一处用 `node()` / `moveTo()`。所以直接让 `DeathWatch` 采用 Q3 的私有继承形状：**只导出 `alive()`**。Q3 那一手（把"游标只比较、永不解引用"变成编译器强制）因此从 2 个新现场扩大到 **5 个现场**，包括 E17 刚落地的三处。这是本次合并最实在的收益。
+
+**合并的一个附加收益（Leo 复签时提的正面论据，本版补入）**：站在 `this` 上的**一个**游标**不足以**覆盖 `ScrollArea::relayout`。`:158` 那扇门里，应用完全可以只销毁 `content_` 而**根本不碰** ScrollArea——`sa->content()->parent()->removeChild(sa->content())` 一句就够（Q5 的反例之一），此时 `this` 的游标照样是 `alive()`，而 `:165` 依然向已释放的 content 写 16 字节。**合并恰好支持一帧多游标**：`LiveGuard` 是**一个对象一个游标**，`DeathWatch` 是纯栈成员，所以一帧挂三个守卫（`this` / `viewport_` / `content_`）就是同一条链表上前后相连的三个节点，`cancelOn` 一次遍历全覆盖，§11.5 实测的"三个守卫构造合并为 9 条指令"正是这个形状。若按第 1 版每种帧一条链表，这三个守卫要么被迫同链（那就得承认按门命名是假的），要么要三条链表和 `~Widget` 里三行 `cancelOn`。
 
 **合并的代价，写明，不藏**：
 
@@ -644,10 +660,12 @@ class LiveGuard { /* verbatim from Widget.cpp:88-108 */ };
 // g_geometries) are named after their frame kind because for them the two
 // namings agree.
 //
-// This list has NO reader other than alive() on the guards below.  That is a
-// PRECONDITION, not an observation: the day something needs to ask "is a
-// detach in flight on X?", the list splits FIRST -- see REM3-G6 and the three
-// readers of g_layouts that make it the counter-example.
+// NOTHING reads this list to DECIDE anything.  alive() on the guards below is
+// the whole of it; deathWatchDepth() reads the depth, but only a test ever
+// reads THAT, and no branch in the library turns on either.  A PRECONDITION,
+// not an observation: the day something needs to ask "is a detach in flight on
+// X?" in order to do something differently, the list splits FIRST -- see
+// REM3-G6 and the three readers of g_layouts that make it the counter-example.
 extern LiveCursor* g_deathWatch;
 
 class DeathWatch : private LiveGuard<g_deathWatch> {
@@ -721,7 +739,7 @@ void frameDegraded();
 > **REM3-G5（本版重写，Leo B4）**：**E3/E4 的改动只允许"插入"。** 允许插入：守卫的声明、门前捕获的局部量、检查块。**不允许**移动、合并、拆分、重排、新增或删除任何一条原有语句。
 > **为什么这么写**：第 1 版的 G5 是按**动机**表述的（"不得为了让降级答案更好看而把门后的计算上提到门前"）。动机不可复核，下一个人的动机不一样规则就失效；而且它逐字适用于 `GroupBox.cpp:49` 那行门前的 `top`，于是同一个变量被 G1（`frameH` 必须在门前）和 G5（读 `title_` 的计算应该下沉到门后）拉向相反方向——Leo 说他因此不知道 `:49` 该不该动，这是对的。现在的 G5 对 **diff 可判定**：E3 的 patch 里不得出现"删除行"（除非是被同一处插入的重写注释）。`titleW` 不得上提**仍然成立**，但它现在是 G5 的**推论**（上提 = 移动语句），不是一条要靠动机去解释的独立规则。
 
-> **REM3-G6**：`g_deathWatch` 不得增加 `alive()` 之外的读者。任何形如"现在有没有一个 X 帧站在谁身上"的谓词都必须**先拆链表再写**。反例已经在库里：`g_layouts` 有三个表外读者（`markLayoutDirty:623`、`layoutPassActive:722`、`currentLayoutHost:724`），这正是它不能被复用的原因（Q1 候选 E）。
+> **REM3-G6**：`g_deathWatch` 不得增加**决策读者**。任何形如"现在有没有一个 X 帧站在谁身上"、**且库里有分支据此改变行为**的谓词，都必须**先拆链表再写**。纯诊断读者（只被人和用例读，不进任何库内条件）不受此限，`deathWatchDepth()` 就是一个，它存在的理由是可测性（Q2）。反例已经在库里：`g_layouts` 有三个决策读者（`markLayoutDirty:623` 决定这一趟重排跑不跑、`layoutPassActive:722` 决定停车场排不排空、`currentLayoutHost:724` 喂 M2 的断言），这正是它不能被复用的原因（Q1 候选 E）。
 
 > **REM3-G7**：空成员是空检查的事，不是守卫的事（Q7）。
 
@@ -803,6 +821,7 @@ void frameDegraded();
 | 11 | `Widget.cpp:421`（`removeChild`） | P2 `takeChild` | `:422` `doomed.reset()` **不经 `this`**，随后函数结束 | — | — | — | ❌ **看过了，不需要封**（见下） |
 | 12 | `Widget.cpp:302`（`announceDetached`） | P2 `win->widgetDetached` | `:306` 起读 `parent.children()` | `parent` | S1 | — | ✅ **已修**（E17，`e9c283a`；守卫在 `:301`，检查 `:305`/`:318`） |
 | 13 | `Widget.cpp:401`（`takeChild`） | P2 `announceDetached` | `:408` 起读 `children_` | `this` | S1 | — | ✅ **已修**（E17；`:400`/`:402`） |
+| 13b | **`Widget.cpp:416`（`takeChild` 的第二道门）** | P2 `childRemoved(index)` → `Layout::onChildRemoved` + `markLayoutDirty` → `runLayoutIfAny` → `arrange` → `setGeometry` → `onGeometryChanged` | **无**（`:417 return owned;` 只读局部量） | — | — | — | ❌ 非危险，**但理由是隐式的 ⇒ 本轮加注释**（见下） |
 | 14 | `Widget.cpp:436`（`clearChildren`） | P2 `removeChild` | `:437`/`:441` 读 `children_` | `this` | S1 | — | ✅ **已修**（E17；`:431`/`:437`） |
 | 15 | `Widget.cpp:492`（`setGeometry`） | P1 `onGeometryChanged()` | `:495` `visible_` + `update()` | `this` | S1 | — | ✅ **已修**（R2；`GeometryGuard` `:491`/`:493`） |
 | 16 | **`AppWindow.cpp:72/74/75`** | P2 `setGeometry` ×3 | `:73→:74` 读并解引用 `content_`、`:75` 读并解引用 `fill_`、`:77` 读信号成员、`:78` `update()` | `this,content_,fill_`（`header_` **不需要**：`:72` 之后没有任何语句再解引用它） | **S1（本表最高）** | **W2** | ❌ 本轮不改，**已定级** |
@@ -818,7 +837,23 @@ void frameDegraded();
 | 26 | showcase 四页 `return content->sizeHint().preferred;` | P1 | 门后无读 | — | — | — | ❌ 无动作 |
 | 27 | **P3 家族（全库 ~60 处 `.emit(`）** | P3 | **未逐点枚举** | — | S2 | **W2（扫描任务）** | ❌ 见下 |
 
-**#11 为什么"看过了、不需要封"（回答我自己 E17 报告的 §8.3）**：`removeChild:420-423` 只有两条语句——`:421 takeChild(child)`（门，且它自己已经在 `:400` 上了守卫）、`:422 doomed.reset()`。`reset()` 只碰局部 `unique_ptr`，**不经 `this`**；`:422` 之后函数结束。所以判它免检的理由**不是**"`reset()` 不碰 `this` 成员"（那是关于被调函数内部的推理，不可机械复核），而是 **"门之后本帧没有任何经 `this` 或成员到达的读写"**——这是谓词的第二个子句，对 diff 可判定。按 Leo 的标准，本行的存在本身就是"看过了没有"与"没看"的区别。
+**#11 为什么"看过了、不需要封"（回答我自己 E17 报告的 §8.3；理由按 Leo 复签时给的更强版本重写）**：`removeChild:420-423` 只有两条语句——`:421 takeChild(child)`（门，且它自己已经在 `:400` 上了守卫）、`:422 doomed.reset()`。
+
+判它免检的理由**不是**"`reset()` 不碰 `this` 成员"——那是关于被调函数内部的推理，不可机械复核，而且它把结论挂在了一个会变的实现细节上。**正确的理由是：`doomed` 是一个局部量。** 门之后本帧碰到的**唯一**存储就是这个栈上的 `unique_ptr`，`:422` 之后函数结束，`this` 和任何成员都不再出现。于是两条死亡路径**都**安全，且**都不依赖 `takeChild` 返回了什么**：
+
+* 宿主（`this`）死在门里 ⇒ `takeChild` 按契约返回 `nullptr`，`doomed` 是空的，`reset()` 是 no-op，函数结束；
+* 宿主活着、`child` 被门里的槽先摘走 ⇒ 同样返回 `nullptr`，同上；
+* 正常路径 ⇒ `doomed` 持有子树，`reset()` 销毁它，函数结束。
+
+这条推理**只用到"局部量的生命期"和"门后没有成员访问"**两件事，两件都对 diff 可判定。按 Leo 的标准，本行的存在本身就是"看过了没有"与"没看"的区别。
+
+**#13b —— `takeChild` 的第二道门（Leo 独立重走"不泄漏"论证时发现，第 1 版只写了路径 A）**：守卫作用域在 `:403` 就**关掉**了，而 `:416 childRemoved(index)` 在它**之后**，并且它是一扇货真价实的门——`Layout::onChildRemoved` 是应用可重写的虚函数，`markLayoutDirty` 可能当场起一趟 pass，pass 里的 `setGeometry` 会跑 `onGeometryChanged`。所以问一次"宿主死在这里会怎样"是必须的，答案是**不泄漏也不 UAF**，但理由是精确的、而且是**隐式的**：
+
+* 此时 `owned` 已经 `move` 出 `children_`（`:411-412`），`owned->parent_` 已置空（`:413`），所以宿主的析构**不会**带走这棵子树；
+* `owned` 是局部 `unique_ptr`，`:417` 把它 `return` 给调用者，**所有权有归宿**（若宿主真死在 `:416`，调用者拿到的是一棵合法的、已脱离的子树）；
+* 它成立的**唯一**理由是：`childRemoved(index)` 之后**再没有任何语句解引用 `this`**。
+
+第三条是一条**隐式不变量，此前哪里都没写**，而 `:395-399` 的注释读起来像这个函数只有一道门（"this one covers the rest of this function"）。下一个人在 `:416` 后面追加一行成员访问，就把 #13b 从"非危险"变成 S1，而没有任何东西会提醒他。**E2 因此在 `:416` 上方补一条注释**：这是本函数的第二道门，其后不得再出现任何成员访问，否则 `:394-403` 的守卫作用域必须延长到函数末尾。（只加注释，不加检查：按谓词判定它今天确实非危险，加一个恒真的检查是死代码，与 §11.3 对 `ScrollArea:165`/`:174` 的处理同一条规矩。）
 
 **#4 为什么仍然要查**：`viewport_` 是 `ScrollArea` 构造函数里 `add<Widget>()` 出来的**普通 `Widget`**，今天 `onGeometryChanged()` 是基类空实现、且没有 layout，所以 `:164` **今天**不是门。但应用能拿到它：`sa->content()->parent()->setLayout<BoxLayout>()` 一句就让它变成真门。**"今天不是门"不是不变量**——`ScrollArea.hpp:25` 的 `content()` 是 public。
 
@@ -907,26 +942,58 @@ void frameDegraded();
 
 1. `Widget.hpp` 尾部新增 `detail` 块：`LiveCursor`（从 `Widget.cpp:76-79` 原样搬）、`LiveGuard<>`（从 `:88-108` 原样搬）、`extern LiveCursor* g_deathWatch`、`DeathWatch`、`deathWatchDepth()`、`frameDegraded()`。
 2. `Widget.cpp`：
-   a. 删掉搬走的两处定义，加最小适配（`using detail::LiveCursor;` 之类）；
+   a. 删掉搬走的两处定义，加最小适配：匿名 namespace 顶部 `using detail::LiveCursor;` **与 `using detail::LiveGuard;`**，其余各处一字不改。
+      ⚠️ **两条 `using` 都是必需的，第二条容易漏**：`LiveGuard` 在本文件有**三个**使用点，其中 `BubbleGuard`/`GeometryGuard` 两个别名很显眼，而第三个是 `LayoutGuard` 的**成员声明** `LiveGuard<g_layouts> live_;`（HEAD `:191`），它躲在一个类体里。E2 施工时正是漏了它——只加 `using detail::LiveCursor;`、把两个别名逐个改成 `detail::LiveGuard<...>`，于是 `:191` 成了唯一没跟上的那处，编译器报 C7568「缺少参数列表」。用 `using` 而不是逐处加 `detail::` 限定，除了少改两行，更重要的是**让"搬家"在 diff 里读作换地址而不是换含义**，也就不存在"还有第几处没改"这个问题。
    b. `g_detaches` → `detail::g_deathWatch`（**定义**移出匿名 namespace，外部链接）；`using DetachGuard = LiveGuard<g_detaches>;` **整条删除**，三处现场改用 `detail::DeathWatch`（`:301`、`:400`、`:431`）；
-   c. **重写 `:113-134` 那段"第四条链表"注释**——按 §11.1 的判据 1/2 重写，不是替换标识符：新文字要说清"按取消策略命名""表外读者为零是前提不是观察"（REM3-G6）；
+   c. **重写 `:113-134` 那段"第四条链表"注释**——按 §11.1 的判据 1/2 重写，不是替换标识符：新文字要说清"按取消策略命名""**决策读者**为零是前提不是观察"（REM3-G6），并按本版更正把 `markLayoutDirty` 那条的机制写对（脏标记不丢，丢的是执行）；
    d. **改掉 `:264-269` 那段已被本设计作废的理由**：`DeathWatch` 收 `const Widget*`，"非常量引用是为了避免 `const_cast`"不再成立。**只改注释，不改 `announceDetached` 的签名**（签名归 E18）；
    e. `~Widget:347` 改名 `cancelOn(g_deathWatch, this);`；
    f. 定义 `detail::g_deathWatch = nullptr;` 与 `deathWatchDepth()`。
+   g. **（本版新增，Leo 复签必改 3）** `:416 childRemoved(index)` 上方补注释：这是本函数的**第二道门**，其后不得再出现任何成员访问，否则 `:394-403` 的守卫作用域必须延长到函数末尾。见 §11.4 #13b。
 3. `Layout.hpp` / `Layout.cpp`：`LayoutDiagnostics`（`Layout.hpp:273-280`）加 `framesDegraded`，实现 `detail::frameDegraded()`（饱和自增，与 `Layout.cpp:190-206` 的四个同写法）。
-4. **E2 到此为止**——调用点（`GroupBox` / `ScrollArea`）是 E3/E4，不在同一次提交里。
-5. 提交约定：**每文件一个 commit**。
+4. **契约改写（本版新增，取代下面那条"E2 明确不做"）**：`Layout.hpp:168-174` 的适用范围从"**实现 `Layout` 的类**的义务"扩写成"**任何调用 `sizeHint()` / `setGeometry()` 之后仍要读自身的代码**的义务"，点名四类调用者（Layout 实现 / 容器自身的 `sizeHint()` 转发 / 容器自身的 `relayout()` 等几何维护方法 / `protected virtual` 几何钩子的调用者），并写明**死亡后的行为约定**（REM3-G1 的降级形状）。同时在 `Widget.hpp` 的 `sizeHint()` 与 `setGeometry()` 声明处**各留一句反向引用**——下一个踩雷的人读的是 `Widget.hpp`，不是 `Layout.hpp`。**这是 §11.0 定的缺陷根因（契约写错了主语）的正面修复，不是文档整理。**
+5. **一条正向用例**：守卫在**没有人死**时不改变任何行为——几何逐位相同、`Layout::measure` 次数不变、`framesDegraded` 保持 0、`deathWatchDepth()` 退栈回零。
+   落点 `tests/widget/test_layout_engine.cpp`，紧接 `the_host_counter_returns_to_zero` 之后——同一个位置已经放着"引擎的记账回不回零"那一条，本设施的链表是同一类事实。实际落了**三条**，因为一条盖不住三件独立的事：
+   * `a_death_watch_is_reachable_from_a_widget_subclass` —— 出门条件 5。在**库外的 TU** 里，从一个 `Widget` 子类的 **const 成员函数**（`GroupBox::sizeHint()` 的形状）和一个**非 const 私有方法**（`ScrollArea::relayout()` 的形状）各取一个守卫，零 `friend`；顺带钉住链表会嵌套、会退栈回零。**这条不编译就是设计错了**，而它现在编译。
+   * `a_death_watch_survives_a_detach_and_not_a_destruction` —— Q4 的取消策略，也是 E2 唯一动过的那行行为（`~Widget` 的 `cancelOn`）：`takeChild` 之后守卫**仍然 alive**，`unique_ptr` 释放之后**才**翻假；子孙的守卫由子孙自己的 `~Widget` 取消，所以没有任何遍历。另钉一条容易被误读的实现事实：取消是把 `node` 置空，**不是**把节点摘链，所以 `deathWatchDepth()` 不会因为取消而变小。
+   * `a_death_watch_costs_a_healthy_pass_nothing` —— 施工清单第 5 条本身。两棵**结构相同**的树跑同一串 50 个几何，一棵挂三个守卫、一棵不挂；比对每个孩子的 `geometry()` 逐位相同、`onGeometryChanged` 次数相同、`StackLayout::measures`/`arranges` 相同、`framesDegraded` 为 0。**两棵树而不是同一棵树跑两遍**：`naturalSize_` 会锁存、`layoutDirty_` 会沉淀，同一棵树的第二遍根本不是同一个实验。
+6. **E2 到此为止**——调用点（`GroupBox` / `ScrollArea`）是 E3/E4，不在同一次提交里。
+7. 提交约定：**每文件一个 commit**。
 
-**E2 明确不做**：不改 `Layout.hpp:168-174` 的既有契约文字（那条对 `Layout` 实现者仍然正确，只是不完备）；不动 examples；不改 `announceDetached` 的行为或签名；不给 `Widget` 加任何成员。
+**E2 明确不做**：不动 examples；不改 `announceDetached` 的行为或签名；不给 `Widget` 加任何成员；不在 `GroupBox`/`ScrollArea` 里加任何检查点。
+（第 1 版这里写的"不改 `Layout.hpp:168-174` 的契约文字"**已被上面第 4 条取代**：那条文字对 `Layout` 实现者仍然正确、但不完备，而"不完备"正是 §11.0 记的那个缺陷本身，留到 E3/E4 之后再改等于让两个落点先按一份写错主语的契约施工。）
 
 #### E2 的出门条件（**本版新增；Leo 的 E7 实证素材 #2/#3**）
 
 E2 交测前必须逐条给出证据，**"探针通过"不算数**：
 
-1. **从干净目录全量构建**。`Widget.hpp` 一改，依赖它的 **31 个 .cpp 全部要重编**；任何一步用了增量构建，`static_assert` 可能根本没被重新求值就报"通过"。证据形式：**新建构建目录**（不得复用 `build/`、`build-debug/`、`build-asan/`）+ **贴出实际编译的 TU 数量**。
+1. **从干净目录全量构建**。`Widget.hpp` 一改，依赖它的每一个 .cpp 都要重编；任何一步用了增量构建，`static_assert` 可能根本没被重新求值就报"通过"。证据形式：**新建构建目录**（不得复用 `build/`、`build-debug/`、`build-asan/`）+ **贴出实际编译的 TU 数量**。
+   ⚠️ **"31 个 .cpp"这个数字是错的，E2 实测后更正**：31 是 `src/widget/*.cpp` 的个数，而 `Widget.hpp` 的依赖面比 `src/widget/` 大得多。按 ninja 的依赖库（`ninja -t deps`，在干净 Release 树上）实测：**70 个目标文件**依赖 `include/geeyoou/widget/Widget.hpp`，来自 **61 个不同的 .cpp**——库 35 个（`src/widget/` 31 + `src/hmi/` 4）、showcase 14 个、tests 20 个，其中 6 个 showcase 页因为同时进 `showcase` 和 `geeyoou_tests` 两个目标而被编译两次。写下 31 会让下一个人以为看到 31 行 `Building CXX object` 就是全量了。
+   **E2 的实测**：三份全新构建目录（均在仓库外的 scratchpad，`build/` 三兄弟一个都没碰），每份 `Building CXX object` 行数 —— Release **271**（我们 88 + blend2d/asmjit 183）、Debug **271**（同上）、ASan **257**（我们 74 + 183；ASan 腿 `GEEYOOU_BUILD_EXAMPLES=OFF`，少 14 个 showcase TU）。三份里 `src/widget/Widget.cpp.obj` 都在列，所以第 3 条成立。
+   （唯一复用的是 blend2d/asmjit 的**已下载源码目录**，靠 `FETCHCONTENT_SOURCE_DIR_*` 指过去，省的是一次 clone；它们的 183 个 TU 仍然是从零编的，我们的一个 .obj 都没复用。）
 2. **全库 `/W4 /permissive-` 零警告**。这是 **E2 的出门条件，不是 E1 的已验事实**（§11.8 已相应降级）。理由：§11.5/§11.8 的探针是**手写 `cl` 命令行**，缺 `/utf-8` 与 `/Zc:__cplusplus`（项目实际是 `CMakeLists.txt:96` 的 `/W4 /permissive- /utf-8 /Zc:__cplusplus` 外加 CMake 注入的默认 flags），也没走真实 include 链。`Widget.hpp` 是全库最热的头文件，模板搬进去会在**每一个** TU 里实例化。
 3. **`Widget.cpp:36` 的尺寸 `static_assert` 在上述全量构建里被真正求值过**（0 新成员，论证上必然成立，但要编过才算）。
-4. **§11.5 的指令数按新形状重测**（成员重读是推算，不是实测）。
+4. **§11.5 的指令数按新形状重测**（成员重读是推算，不是实测）。**注**：E2 不落任何检查点，所以 CP-S1/CP-S2/CP-C1/CP-C2 的成员重读在 E2 阶段**没有代码可测**——这一条随 E3/E4 一起交，E2 只负责不让它被忘掉。
+5. **设施可被 `GroupBox`（const 成员函数内）与 `ScrollArea`（非 const 私有方法内）直接使用，零 `friend`**（§11.2 的两条可见性论证要在真实 include 链上兑现，不是探针上）。
+6. **零分配**：soak 的 `liveAllocs` 序列证明（`test_layout_soak.cpp` 的四条采样序列，末值不得高于热身后的值）。
+7. **一条正向用例**（施工清单第 5 条）：没有人死时，几何、度量次数、诊断计数**逐个不变**。
+8. **门禁红的位置与形态不变**。E8 的复现器已提交而 E3/E4 未落地，所以 E2 落地后门禁**仍然是红的**——这是设计中的，不是回归。验收标准因此不是"三条腿全绿"，而是：**E2 前 / E2 后两份完整门禁日志逐条对比，红的位置和形态完全一致，没有新增任何红。**
+
+   ⚠️ **E2 实测发现：Release 腿是双峰的，一份日志不足以做这个对比。** 复现器命中的是 UAF，而 Release 下一次 UAF 崩不崩取决于那块内存有没有被拿去复用，所以同一个二进制反复跑会给出两种结果。实测（`GY_SOAK_CYCLES=400`，每档 10 次）：
+
+   | 树 | Release 腿 |
+   |---|---|
+   | HEAD（E2 前） | 9 崩 / 1 过 |
+   | E2 只落设施（测试文件留在 HEAD） | 8 崩 / 2 过 |
+   | E2 完整（含三条正向用例） | 8 崩 / 2 过 |
+
+   三档在统计上分不开，**这不是 E2 引入的，也不是 E2 消除的**。**这条出门条件因此按下面的方式判，而不是按"两份日志逐字相同"**：
+   1. **ASan 腿逐条对比**——它是三条腿里唯一确定性的，报告种类、条数、每条的 use/free 归属帧必须完全一致。这是主判据。
+   2. **Debug 腿对比崩溃点**——落在哪个用例之后（`layout_engine` 套件跑完、`layout_soak` 的复现器开始处）。
+   3. **Release 腿按崩溃率对比**，不按单次结果；同时要求它崩在与 Debug 腿相同的位置。
+   4. 三条腿的**通过用例集合**只允许增加（E2 新增的三条正向用例），不允许减少或由 PASS 变 FAIL。
+
+   **这条要写进后续每一轮**：在 E3/E4 把门关上之前，任何人拿一份"Release 腿是绿的"日志来主张"我没弄坏"或"我修好了"，都可能只是抽到了那 10~20% 的一面。E2 前的第一份基线日志（`Release tests [ok]`）就正是那一面，差点被当成"E2 把 Release 弄红了"。
 
 ---
 
