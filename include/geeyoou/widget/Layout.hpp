@@ -91,8 +91,10 @@ class Layout {
   virtual SizeHint measure(const Widget& host) const = 0;
 
   // Places host's direct children inside `content`, which is in HOST-LOCAL
-  // coordinates and already has the margins taken out.  Returns whatever did
-  // not fit.
+  // coordinates and already has the margins taken out -- and, for a host that
+  // draws decoration of its own, its frame too (Widget::layoutRect; GroupBox
+  // hands back the area inside its border and under its title rule).  It is
+  // therefore NOT always at the origin.  Returns whatever did not fit.
   virtual LayoutOverflow arrange(Widget& host, const Rect& content) = 0;
 
   void setMargins(const Margins& m);

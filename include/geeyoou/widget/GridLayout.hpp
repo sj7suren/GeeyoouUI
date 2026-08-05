@@ -2,7 +2,7 @@
 //
 // GridLayout: rows and columns, with spans.
 //
-// SPANS ARE THE WHOLE DESIGN PROBLEM HERE, and ADR-R2-09 is the ruling that
+// SPANS ARE THE WHOLE DESIGN PROBLEM HERE, and ADR-R2-10 is the ruling that
 // shapes this class.  A cell with colSpan=3 does not tell you how wide any one
 // of the three columns has to be: it states a requirement about their SUM, and
 // how much of any shortfall each column should absorb only becomes answerable
