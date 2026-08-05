@@ -161,7 +161,13 @@ class Widget : public StyleSubject {
   void invalidateSizeHint();
 
   // Runs this widget's layout now.  No-op without one.
-  void relayout();
+  //
+  // NOT called relayout(): AppWindow, ScrollArea and the showcase's Shell each
+  // already have a relayout() of their own, and ScrollArea's is private -- so a
+  // base-class member of that name would be statically hidden by three of the
+  // library's four containers and inaccessible through a fourth.  Renaming the
+  // one method with no call sites is cheaper than renaming a published API.
+  void performLayout();
 
   // What did not fit in the last pass.  All zeroes when there is no layout.
   const LayoutOverflow& lastLayoutOverflow() const;
