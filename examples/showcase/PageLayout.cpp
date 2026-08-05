@@ -148,8 +148,12 @@ Size buildLayoutPage(Widget* content) {
   readout->setAlign(HAlign::Left, VAlign::Middle);
   page->addWidget(readout);
 
+  // Built here so it is next to the readout it drives; added to the layout as
+  // the LAST item, at the bottom of this function.  BoxLayout places its items
+  // in order, so a probe sitting second would fire while the panels below it
+  // still held last frame's geometry -- which is exactly the lagging numbers
+  // this readout was reported for.
   auto* probe = content->add<ResizeProbe>();
-  page->addWidget(probe);  // in the layout, or it never sees a resize
 
   // ------------------------------------------- 1. BoxLayout 的 stretch 权重 ---
   GroupBox* gStretch = panel(content, page, "① BoxLayout —— 余量按 stretch 权重分");
@@ -261,6 +265,12 @@ Size buildLayoutPage(Widget* content) {
     sw->setGeometry({float(i) * 162.0f, 4.0f, 150.0f, 48.0f});
   }
   absCol->addWidget(absHost);
+
+  // LAST, and that is the whole trick: every panel above has been placed by the
+  // time the probe's own rectangle changes, so the readout reports this frame
+  // rather than the previous one.  It takes a full-width, zero-height slot, so
+  // where it sits in the column costs nothing.
+  page->addWidget(probe);
 
   // ------------------------------------------------------------- 读数刷新 ---
   auto refresh = [readout, content, swFixed, swElastic, swCapped] {
