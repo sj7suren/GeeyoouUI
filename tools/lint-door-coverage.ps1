@@ -57,13 +57,30 @@
        generation rooted at Widget.hpp would still miss all three.  Two holes,
        two fixes, and closing one does not close the other.
 
+       AND THAT ROOT IS THE CANDIDATE SIDE'S TOO -- the same hole, a THIRD time,
+       and it stood for three rounds after the other two were closed.  The two
+       fixes above were both applied on the DECLARATION side; the CANDIDATE side
+       kept scanning `src\**\*.cpp`, and this library's code is not all in src.
+       A template in a header is a function body like any other, and two of them
+       were doors with writes after them: AppWindow::setContent and
+       WindowHeader::addTrailingItem.  Whoever narrows a scan root next: the
+       question is never "where are the .cpp files", it is "where is the code".
+
+       (Two mechanical traps came with it, both measured, both recorded at their
+       fix: -Include does nothing next to -LiteralPath -Recurse, and `template`
+       is in NotAFunctionHead so every template body read as "not a function".
+       Widening the root without the second fix buys exactly nothing.)
+
     ----------------------------------------------------------------------------
-    THE ALLOWLIST IS SECTION 11.4'S TABLE.  THERE IS NO SECOND COPY.
+    THE ALLOWLIST AND THE P2 LIST ARE SECTION 11.4'S.  THERE IS NO SECOND COPY.
     ----------------------------------------------------------------------------
     This script parses docs\iterations\02-layout-engine.md section 11.4 and takes
-    its tables as the register of archived candidates.  Writing the list out a
+    its tables as the register of archived candidates, AND its P2 clause as the
+    list of library primitives that reach application code.  Writing either out a
     second time here would be the mistake Widget.cpp:74-75 already names: the
-    second hand-copy is the second place that gets forgotten.
+    second hand-copy is the second place that gets forgotten -- and the P2 copy
+    HAD already drifted (the script had `relayout`, the document did not) with a
+    comment above it saying "when you add one here, add it there too".
 
     THE KEY IS (FILE, FUNCTION), NOT (FILE, LINE).  The table's own words:
     "the statement is what the table is about, the line number is not" -- line
@@ -127,7 +144,23 @@ param(
     # exiting.  Only tools\test-lint-door-coverage.ps1 uses this, so that the
     # self-test can run its whole table in ONE powershell process -- see the
     # budget note in that file.
-    [switch] $DefineOnly
+    [switch] $DefineOnly,
+
+    # Run ONLY Test-GateStillCallsItsCheckers and exit 0/1.
+    #
+    # ⚠ THIS EXISTS TO BREAK A SELF-REFERENCE, and the self-reference is the
+    # whole reason the wiring check was worth writing.  This lint is invoked by
+    # verify.bat's :lint_doors, so it CANNOT catch the deletion of `call
+    # :lint_doors` -- it is not running.  It catches the deletion of `call
+    # :classify_asan`; the other direction has to be checked by something that
+    # still runs, which is the ASan leg.  So tools\test-classify-asan.ps1
+    # spawns this switch, and the two checkers watch each other's power cord.
+    #
+    # A SPAWN AND NOT A DOT-SOURCE, deliberately: both scripts keep their own
+    # $script:Emitted and their own Write-* helper, and dot-sourcing one into
+    # the other silently shares them.  0.6s of cold start is a cheap price for
+    # the two files not being able to break each other by accident.
+    [switch] $GateWiringOnly
 )
 
 Set-StrictMode -Version 1.0
@@ -228,6 +261,33 @@ function Get-CleanText {
     $v = Clear-CppNoise ([System.IO.File]::ReadAllText($Path))
     $script:CleanCache[$key] = $v
     return $v
+}
+
+# Every translation-unit-shaped file under a scan root.
+#
+# ⚠ NOT `Get-ChildItem -LiteralPath ... -Recurse -Include *.cpp`, which is what
+# this script used and which DOES NOT FILTER.  Measured on this machine,
+# PowerShell 5.1.19041:
+#
+#     Get-ChildItem -LiteralPath <include> -Recurse -File -Include *.cpp  -> 59
+#     Get-ChildItem -Path        <include> -Recurse -File -Include *.cpp  ->  0
+#
+# -Include is matched against the LiteralPath and silently ignored for the
+# recursion, so the "only .cpp" in the old scan was not a filter at all -- it
+# was `src` happening to contain almost nothing else.  It contains one thing
+# else (src\render\VectorPathImpl.hpp), which was therefore being scanned by
+# accident, and the day somebody drops a .md or a .natvis in there it would
+# have been read as C++ and reported as an unbalanced body.  A filter that does
+# not filter is the same defect as a lint that does not lint.
+#
+# -Filter is not the fix either: the FileSystem provider's wildcard still
+# carries 8.3 semantics, so `*.cpp` matches `foo.cppm`.  The extension is
+# tested directly instead; this tree is 106 files and the walk is not the cost.
+function Get-SourceFiles {
+    param([string] $Dir)
+    return @(Get-ChildItem -LiteralPath $Dir -Recurse -File |
+             Where-Object { $_.Extension -eq '.cpp' -or $_.Extension -eq '.hpp' } |
+             Sort-Object FullName)
 }
 
 # Offset -> 1-based line number.  Built once per file.
@@ -333,6 +393,33 @@ function Test-FunctionHeader {
 
     $s = $Snippet.Trim()
     if (-not $s) { return $null }
+
+    # A `template <...>` prefix, STRIPPED BEFORE the NotAFunctionHead test.
+    #
+    # This is the second half of the candidate-side scan-root hole, and without
+    # it widening the root buys nothing.  `template` is in NotAFunctionHead, so
+    # every template body read as "not a function": the splitter descended into
+    # it looking for functions INSIDE, found none, and the whole body -- doors
+    # and all -- was never scanned.  Measured on AppWindow.hpp: the splitter
+    # reported header/content/isBorderVisible and NOT setContent, whose body is
+    # `add<T>()` (a P2 door) followed by two writes through `this`.
+    #
+    # Brace-counting the angle brackets rather than a lazy `.*?>`: `template
+    # <class T, std::vector<int> V>` has a nested pair, and the lazy form stops
+    # at the first `>` and leaves `V>` in front of the name.
+    while ($s -match '^template\s*<') {
+        $k = $s.IndexOf('<')
+        $d = 0
+        $end = -1
+        for ($q = $k; $q -lt $s.Length; $q++) {
+            if ($s[$q] -eq '<') { $d++ }
+            elseif ($s[$q] -eq '>') { $d--; if ($d -eq 0) { $end = $q; break } }
+        }
+        if ($end -lt 0) { return $null }
+        $s = $s.Substring($end + 1).Trim()
+        if (-not $s) { return $null }
+    }
+
     # `} else {`, `namespace detail {`, `class Foo : public Bar {` ...
     if ($s -match $script:NotAFunctionHead) { return $null }
     # An initialiser, not a definition.  `==` / `!=` / `<=` / `>=` are not
@@ -421,18 +508,83 @@ function Split-CppFunctions {
 }
 
 # ---------------------------------------------------------------------------
-# The door primitives, section 11.4.
+# The P2 door primitives.  PARSED FROM SECTION 11.4, NOT WRITTEN HERE.
 #
-# P2's list is the one in the document, verbatim, INCLUDING the transitivity
-# clause: a library function found to contain a door gets added to this list and
-# the scan is re-run.  When you add one here, add it there too -- the list in
-# the document is the one a human reads.
+# This used to be a literal array with a comment saying "when you add one here,
+# add it there too", and by the time the fourth security review read it the two
+# copies had already drifted: `relayout` was in the script and not in the
+# document.  That drift happened to be in the RED direction, which is the only
+# reason nothing was missed -- the same accident the other way deletes a whole
+# class of candidate and turns the gate green while doing it.
+#
+# Section 11.9 property 2 already settled this for the allowlist -- "allowlist
+# 就是 §11.4 的表，两者不得各写一份" -- and the P2 list is the same kind of
+# object: a register a human maintains and a machine consumes.  So it obeys the
+# same rule, and Widget.cpp:74-75's rule with it: the second hand-copy is the
+# second place that gets forgotten.
+#
+# Filled in by Invoke-LintDoorCoverage from the document under test.  Empty here
+# on purpose: an empty list builds the never-matching pattern in New-DoorMatcher
+# rather than an all-matching one, so a code path that somehow skipped the parse
+# under-reports loudly instead of matching every parenthesis in the tree.
 # ---------------------------------------------------------------------------
-$script:P2Names = @(
-    'setGeometry', 'setVisible', 'setLayout', 'invalidateSizeHint', 'add',
-    'takeChild', 'removeChild', 'clearChildren', 'openPopup', 'closePopup',
-    'performLayout', 'arrange', 'measure', 'measureFor', 'relayout'
-)
+$script:P2Names = @()
+
+# The P2 clause of section 11.4, reduced to bare identifiers.
+#
+# The clause is prose a person reads, so the reduction is spelled out and it is
+# STRICT: `add<T>` -> add, `Window::openPopup` -> openPopup.  A backticked token
+# on that line that does not reduce to an identifier is exit 3, not a skip.  A
+# skip would mean a typo in the document silently drops a primitive, and a
+# dropped primitive is a silently deleted class of candidate -- the failure this
+# whole parse exists to prevent.  Keep prose references out of backticks on that
+# one line.
+function Read-DoorPrimitivesP2 {
+    param([string] $DocPath)
+
+    $result = @{ Names = @(); Error = '' }
+
+    if (-not (Test-Path -LiteralPath $DocPath)) {
+        $result.Error = 'design document not found: ' + $DocPath
+        return $result
+    }
+
+    $lines = [System.IO.File]::ReadAllLines($DocPath, [System.Text.Encoding]::UTF8)
+    $inSection = $false
+    $clause = $null
+    foreach ($line in $lines) {
+        if ($line -match '^###\s+11\.4(\s|$)')  { $inSection = $true;  continue }
+        if ($inSection -and $line -match '^###\s+11\.5(\s|$)') { break }
+        if (-not $inSection) { continue }
+        if ($line -match '\*\*P2\*\*') { $clause = $line; break }
+    }
+    if ($null -eq $clause) {
+        $result.Error = 'no P2 primitive clause in section 11.4 of ' + $DocPath
+        return $result
+    }
+
+    $names = @()
+    foreach ($m in [regex]::Matches($clause, '`([^`]+)`')) {
+        $tok = $m.Groups[1].Value
+        $t = [regex]::Replace($tok, '<[^<>]*>', '')
+        $k = $t.LastIndexOf('::')
+        if ($k -ge 0) { $t = $t.Substring($k + 2) }
+        $t = $t.Trim()
+        if ($t -notmatch '^[A-Za-z_]\w*$') {
+            $result.Error = 'the P2 clause of section 11.4 has a backticked token this script ' +
+                            'cannot reduce to one identifier: `' + $tok + '`'
+            return $result
+        }
+        if (-not ($names -contains $t)) { $names += $t }
+    }
+    if ($names.Count -eq 0) {
+        $result.Error = 'the P2 clause of section 11.4 names no primitives'
+        return $result
+    }
+
+    $result.Names = $names
+    return $result
+}
 
 # ONE compiled alternation per primitive class, not one regex per name.
 #
@@ -466,9 +618,23 @@ function New-DoorMatcher {
               (($VirtualNames.Keys | Sort-Object | ForEach-Object { [regex]::Escape($_) }) -join '|') +
               ')\s*\('
     }
+    # ⚠ P2 CARRIES NO `(?<!::)`, AND P1 DOES.  The lookbehind's warrant is
+    # section 11.4's sentence "a qualified call is not P1", and that sentence is
+    # about VIRTUAL DISPATCH: `PushButton::sizeHint()` is statically bound, so it
+    # cannot land in an application override.  P2 is not dispatch.  P2 is a list
+    # of library functions known to reach application code, and
+    # `Widget::setGeometry(r)` or `Base::relayout()` reaches it just as well
+    # written qualified -- the qualification picks the implementation, it does
+    # not stop the implementation running an application's onGeometryChanged.
+    #
+    # Copying the lookbehind onto P2 was therefore a category error, and the
+    # direction it errs in is UNDER-REPORTING, which is this defect family
+    # itself.  It is not a live defect today -- every qualified call in the tree
+    # is a P1-family name -- which is exactly why it had to be fixed on the
+    # argument rather than on a red light.
     $p2 = $never
     if ($script:P2Names.Count -gt 0) {
-        $p2 = '(?<!::)\b(?<n>' +
+        $p2 = '\b(?<n>' +
               (($script:P2Names | Sort-Object | ForEach-Object { [regex]::Escape($_) }) -join '|') +
               ')\s*[<(]'
     }
@@ -655,7 +821,14 @@ function Test-NoPlatformInstallPoint {
     foreach ($dir in @('include', 'src')) {
         $d = Join-Path $Root $dir
         if (-not (Test-Path -LiteralPath $d)) { continue }
-        foreach ($f in Get-ChildItem -LiteralPath $d -Recurse -File -Include *.hpp, *.cpp, *.h, *.cc) {
+        # Extension tested rather than -Include, for the reason recorded on
+        # Get-SourceFiles: -Include does nothing next to -LiteralPath -Recurse,
+        # so this loop has been reading every file under include\ and src\,
+        # comment-stripping .md and .natvis as if they were C++.  Harmless for
+        # THIS predicate -- a wider net cannot make it miss an install point --
+        # but a filter that does not filter is not a thing to leave lying about.
+        foreach ($f in (Get-ChildItem -LiteralPath $d -Recurse -File |
+                        Where-Object { $_.Extension -in @('.hpp', '.cpp', '.h', '.cc') })) {
             $clean = Get-CleanText $f.FullName
             if ($clean -match '\b(setPlatform|installPlatform)\b') {
                 [void] $hits.Add($f.FullName.Substring($Root.Length).TrimStart('\'))
@@ -700,6 +873,72 @@ function Test-NoPlatformInstallPoint {
 # mis-execute the file long before reaching this step.  It protects the NEXT
 # run, by failing the gate the moment a non-ASCII byte lands in any .bat.  That
 # is why it tests the PRECONDITION and not the symptom.
+# ---------------------------------------------------------------------------
+# IS THE GATE STILL PLUGGED IN?
+#
+# The two machine checkers in this tree -- this lint and tools\classify-asan.ps1
+# -- are the only things standing between, respectively, an unguarded door and a
+# release, and a use-after-free and a release.  Both of them prove themselves
+# against fixtures before they speak.  NEITHER OF THEM WAS WATCHING WHETHER THE
+# GATE STILL CALLS THEM.
+#
+# Measured, and it is worse than it sounds: delete `call :lint_doors` from
+# verify.bat:55, or `call :classify_asan` from :146, and verify.bat still runs
+# all six steps, still prints its six-row summary, and still prints
+#
+#     [ok] gate is GREEN
+#
+# because both checkers redden the gate by SETTING A VARIABLE FROM INSIDE a
+# subroutine that is no longer called.  A checker that is not invoked fails
+# open, silently, and the run that dropped it looks exactly like a clean one.
+#
+# So this is the third named machine predicate, and it is deliberately the
+# stupidest one in the file: strip the batch comments, then look for the two
+# calls and the two labels they land on.  A `call` to a label that does not
+# exist is not a call either -- cmd prints "cannot find the batch label" and
+# carries on to the next line with the rest of the run untouched.
+#
+# THE COMMENTS ARE STRIPPED FIRST for the same reason Clear-CppNoise exists:
+# verify.bat's `rem` blocks are longer than its code and they QUOTE THESE VERY
+# LINES ("...prints its own [ ok ] / [FAIL] line", "inside step [1/6]").  A raw
+# match would be satisfied by a comment describing the call that somebody just
+# deleted, which is the most specific way this check could be useless.
+#
+# AND THE FILE MUST EXIST.  A missing verify.bat is red, not skipped: "the gate
+# is not there" is not a green condition.
+function Test-GateStillCallsItsCheckers {
+    param([string] $Root)
+
+    $missing = New-Object System.Collections.ArrayList
+    $bat = Join-Path $Root 'verify.bat'
+    if (-not (Test-Path -LiteralPath $bat)) {
+        [void] $missing.Add('verify.bat is not there at all')
+        return $missing
+    }
+
+    $text = [System.IO.File]::ReadAllText($bat)
+    $kept = New-Object System.Collections.ArrayList
+    foreach ($line in ($text -split "`r`n|`n|`r")) {
+        $t = $line.Trim()
+        if ($t -match '^(?i)rem(\s|$)') { continue }
+        if ($t -match '^::') { continue }
+        [void] $kept.Add($line)
+    }
+    $code = ($kept -join "`n")
+
+    foreach ($pair in @(
+        @{ Label = 'lint_doors';   What = 'the door-coverage lint (this script)' },
+        @{ Label = 'classify_asan'; What = 'the ASan report classifier' })) {
+        if ($code -notmatch ('(?im)^\s*call\s+:' + $pair.Label + '\s*$')) {
+            [void] $missing.Add(('verify.bat never calls :{0} -- {1} is not run' -f $pair.Label, $pair.What))
+        }
+        elseif ($code -notmatch ('(?im)^\s*:' + $pair.Label + '\s*$')) {
+            [void] $missing.Add(('verify.bat calls :{0} but has no such label -- cmd skips it' -f $pair.Label))
+        }
+    }
+    return $missing
+}
+
 function Test-BatchFileHygiene {
     param([string] $Root)
     $bad = New-Object System.Collections.ArrayList
@@ -744,7 +983,18 @@ function Invoke-LintDoorCoverage {
         if (-not $RepoRoot) { $RepoRoot = Split-Path -Parent $script:LintDir }
         if (-not $DocPath)  { $DocPath = Join-Path $RepoRoot 'docs\iterations\02-layout-engine.md' }
         if (-not $IncludeDir) { $IncludeDir = Join-Path $RepoRoot 'include\geeyoou' }
-        if ($SrcDirs.Count -eq 0) { $SrcDirs = @((Join-Path $RepoRoot 'src')) }
+        # THE CANDIDATE SIDE HAS THE SAME SCAN ROOT AS THE DECLARATION SIDE, and
+        # it did not until the fourth security review found this.  Property 4's
+        # second paragraph -- "the scan root is the whole of include\geeyoou, not
+        # Widget.hpp" -- was fixed on the DECLARATION side only; the CANDIDATE
+        # side was rooted at `src`, and the library's code is not all in `src`.
+        # Same hole, second appearance, on the other side of the same script.
+        # Measured cost of the omission: AppWindow::setContent and
+        # WindowHeader::addTrailingItem, a P2 door each with writes through
+        # `this` after it, structurally invisible.
+        if ($SrcDirs.Count -eq 0) {
+            $SrcDirs = @((Join-Path $RepoRoot 'src'), (Join-Path $RepoRoot 'include'))
+        }
 
         # -- property 4: the P1 name table, generated from the declaration side --
         if (-not (Test-Path -LiteralPath $IncludeDir)) {
@@ -760,7 +1010,16 @@ function Invoke-LintDoorCoverage {
         # The Platform exemption, gated below by Test-NoPlatformInstallPoint.
         $virtuals = Remove-PlatformOnlyNames -Names $virtualsAll
         $exempted = $virtualsAll.Count - $virtuals.Count
-        $matcher  = New-DoorMatcher -VirtualNames $virtuals
+
+        # -- the P2 half of the predicate, also from the document ------------
+        $p2 = Read-DoorPrimitivesP2 -DocPath $DocPath
+        if ($p2.Error) {
+            Write-LintLine ('  [lint-doors] ' + $p2.Error)
+            return $EXIT_INTERNAL
+        }
+        $script:P2Names = $p2.Names
+
+        $matcher = New-DoorMatcher -VirtualNames $virtuals
 
         # -- the allowlist --------------------------------------------------
         $allow = Read-DoorAllowlist -DocPath $DocPath
@@ -777,7 +1036,7 @@ function Invoke-LintDoorCoverage {
 
         foreach ($dir in $SrcDirs) {
             if (-not (Test-Path -LiteralPath $dir)) { continue }
-            foreach ($f in (Get-ChildItem -LiteralPath $dir -Recurse -File -Include *.cpp | Sort-Object FullName)) {
+            foreach ($f in (Get-SourceFiles -Dir $dir)) {
                 $scanned++
                 $clean = Get-CleanText $f.FullName
                 $idx   = New-LineIndex $clean
@@ -826,10 +1085,17 @@ function Invoke-LintDoorCoverage {
         # -- the two named machine predicates ---------------------------------
         $platformHits = @(Test-NoPlatformInstallPoint -Root $RepoRoot)
         $batBad       = @(Test-BatchFileHygiene -Root $RepoRoot)
+        $gateUnwired  = @(Test-GateStillCallsItsCheckers -Root $RepoRoot)
 
         # -- report -----------------------------------------------------------
-        Write-LintLine ('  [lint-doors] {0} virtual name(s) from {1} header(s) ({2} Platform-only, exempt); {3} source file(s); section 11.4 archived {4} row(s)' -f `
-            $virtuals.Count, $headers.Count, $exempted, $scanned, $allow.Rows)
+        # The P2 COUNT is printed, not just the archived-row count, and the
+        # reason is the direction each one can drift in.  Losing an allowlist
+        # row makes the gate redder; losing a P2 primitive makes it GREENER, by
+        # deleting a class of candidate, and nothing else in this script can see
+        # that happen.  A number in the gate log is what makes the shrink show
+        # up in a diff of two runs.
+        Write-LintLine ('  [lint-doors] {0} virtual name(s) from {1} header(s) ({2} Platform-only, exempt) + {3} P2 primitive(s) from section 11.4; {4} source file(s); section 11.4 archived {5} row(s)' -f `
+            $virtuals.Count, $headers.Count, $exempted, $script:P2Names.Count, $scanned, $allow.Rows)
         Write-LintLine ('  [lint-doors] candidates: {0} guarded (DeathWatch), {1} archived, {2} UNARCHIVED' -f `
             $guarded, $archived.Count, $unarchived.Count)
 
@@ -865,6 +1131,14 @@ function Invoke-LintDoorCoverage {
             foreach ($h in $platformHits) { Write-LintLine ('      ' + $h) }
         }
 
+        if ($gateUnwired.Count -gt 0) {
+            $red = $true
+            Write-LintLine '  [lint-doors] FAIL: the gate no longer invokes one of its own checkers, so that'
+            Write-LintLine '               checker fails OPEN -- verify.bat runs all six steps and prints'
+            Write-LintLine '               "gate is GREEN" with nothing watching. Put the call back:'
+            foreach ($g in $gateUnwired) { Write-LintLine ('      ' + $g) }
+        }
+
         if ($batBad.Count -gt 0) {
             $red = $true
             Write-LintLine '  [lint-doors] FAIL: a batch file is no longer pure ASCII. cmd.exe mis-executes a'
@@ -898,5 +1172,14 @@ function Invoke-LintDoorCoverage {
 # Script body.  The only `exit` in the file.
 # ---------------------------------------------------------------------------
 if ($DefineOnly) { return }
+
+if ($GateWiringOnly) {
+    $root = $RepoRoot
+    if (-not $root) { $root = Split-Path -Parent $script:LintDir }
+    $bad = @(Test-GateStillCallsItsCheckers -Root $root)
+    if ($bad.Count -eq 0) { exit $EXIT_COVERED }
+    foreach ($b in $bad) { [Console]::Out.WriteLine('  [gate-wiring] ' + $b) }
+    exit $EXIT_UNCOVERED
+}
 
 exit (Invoke-LintDoorCoverage -RepoRoot $RepoRoot -DocPath $DocPath -MaxList $MaxList -Quiet:$Quiet)
