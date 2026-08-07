@@ -557,6 +557,45 @@ class DeathWatch : private LiveGuard<g_deathWatch> {
     assert(w && "a null here means the caller's own null check is missing");
   }
 
+  // Tag for the constructor below.  A TYPE rather than a bool, so a call site
+  // cannot say `true` and leave the next reader working out what is true.
+  struct MayBeNull {};
+
+  // The same guard for an OPTIONAL member -- one whose null is a legitimate
+  // state of the object rather than a missing null check.
+  //
+  // WHY THE ASSERT ABOVE DOES NOT COVER EVERY SITE.  Its premise (section 11.1,
+  // Q7) is "every site that guards a pointer is about to dereference it, so a
+  // null must already have been dereferenced before the guard was reached".
+  // That premise is exactly right for a member the frame dereferences
+  // UNCONDITIONALLY -- ScrollArea::content_ behind hasParts(), AppWindow::
+  // content_ behind relayout()'s first line -- and it is simply false for one
+  // the frame dereferences CONDITIONALLY:
+  //
+  //   * AppWindow::fill_ is null until setContent<T> runs, and relayout() lays
+  //     it out under `if (fill_)`;
+  //   * Layout::host_ is null for a parked layout, and invalidate() calls
+  //     performLayout() under `if (host_)`;
+  //   * Window::focus_ is null whenever nothing has the focus, and
+  //     setFocusWidget(nullptr) is how clearFocus() is written.
+  //
+  // Those frames still have to ask the question for the non-null case, and they
+  // may not ask it by constructing something the contract calls a caller bug.
+  // The alternative -- an early return in front of the guard, REM3-G7's literal
+  // prescription -- works only where the site can decline the whole frame, and
+  // none of the three above can: a window with no content still has a header to
+  // place, and a layout with no host still has to run onInvalidated().
+  //
+  // SEMANTICS ARE UNCHANGED, and that is the point of reusing the class rather
+  // than writing a second one: same list, same cancellation, same alive(), and
+  // a null still reads as dead from construction on.  What the site owes in
+  // return is that its check must not consult alive() for a member that was
+  // ALREADY null in front of the door -- there is nothing there to die, and a
+  // frame that gave up over it would be recording a degradation that did not
+  // happen.  The shape is `(p0 && !pw.alive())`, with p0 the pre-door capture.
+  DeathWatch(const Widget* w, MayBeNull)
+      : LiveGuard<g_deathWatch>(const_cast<Widget*>(w)) {}
+
   using LiveGuard<g_deathWatch>::alive;
 };
 
