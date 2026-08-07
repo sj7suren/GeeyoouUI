@@ -834,31 +834,31 @@ void frameDegraded();
 
 | # | 位置（HEAD） | 门原语 | 门后经 `this`/成员的读写 | 需守卫 | 级 | 轮 | 动作 |
 |---|---|---|---|---|---|---|---|
-| 1 | `GroupBox.cpp:53` | P1 `Widget::sizeHint()` | `:54` `layout_`、`:62` `title_`、`:65` 虚调用 | `this` | S2 | **W1** | ✅ CP-G1 |
+| 1 | `GroupBox.cpp:53`（`sizeHint`） | P1 `Widget::sizeHint()` | `:54` `layout_`、`:62` `title_`、`:65` 虚调用 | `this` | S2 | **W1** | ✅ CP-G1 |
 | 2 | `GroupBox.cpp:98-103`（`sizeHint` 的 `titleW`） | P1 `styleState()` | **同一条语句内、门之后**：`style(...)` 读 `styleCache_`/`styleCacheGen_` 并走 parent 链；随后 `measureText(title_, ...)` 读 `title_` | `this` | **S3** | **W3** | ❌ **判词已更正**，见下；并入 #23 的族（REM3-RES-2，走契约不走守卫） |
-| 3 | `ScrollArea.cpp:158` | P1 `content_->sizeHint()` | `:159` `geometry_`；`:164` **写** viewport；`:165` **写** content | `this,viewport_,content_` | S1 | **W1** | ✅ CP-S1 |
-| 4 | `ScrollArea.cpp:164` | P2 `setGeometry`（条件性，见下） | `:165` 读 `this->content_` 并写 content | `this,content_` | S1 | **W1** | ✅ CP-S2 |
-| 5 | `ScrollArea.cpp:165` | P2 `setGeometry` | **无**（下一句 `return`） | — | — | — | ❌ 死代码；**加注释** |
-| 6 | `ScrollArea.cpp:174` | P2 `setGeometry` | **无**（函数末） | — | — | — | ❌ 死代码；**加注释** |
+| 3 | `ScrollArea.cpp:158`（`relayout`） | P1 `content_->sizeHint()` | `:159` `geometry_`；`:164` **写** viewport；`:165` **写** content | `this,viewport_,content_` | S1 | **W1** | ✅ CP-S1 |
+| 4 | `ScrollArea.cpp:164`（`relayout`） | P2 `setGeometry`（条件性，见下） | `:165` 读 `this->content_` 并写 content | `this,content_` | S1 | **W1** | ✅ CP-S2 |
+| 5 | `ScrollArea.cpp:165`（`relayout`） | P2 `setGeometry` | **无**（下一句 `return`） | — | — | — | ❌ 死代码；**加注释** |
+| 6 | `ScrollArea.cpp:174`（`relayout`） | P2 `setGeometry` | **无**（函数末） | — | — | — | ❌ 死代码；**加注释** |
 | 7 | `ScrollArea.cpp:22`（`setContentSize`） | P2 `content_->setGeometry` | `:24` `relayout()`、`:26` `scrollTo(scrollOffset())`、`:27` `update()` | `this,viewport_,content_` | S1 | **W1** | ✅ CP-C1 |
-| 8 | `ScrollArea.cpp:24` | P2 `relayout()`（含 #3/#4/#5） | `:26` 经 `this`→`viewport_`/`content_`；`:27` `this` | `this,viewport_,content_` | S1 | **W1** | ✅ CP-C2 |
-| 9 | `ScrollArea.cpp:26` | P3 `scrolled.emit`（`scrollTo:65`） | `:27` `update()` 只读 `this` | — | — | — | ❌ **D7 豁免**；宿主是 `this` |
-| 10 | `Widget.cpp:548` | P2 `layout_->measureFor` | **无**（`return` 该调用的结果） | — | — | — | ❌ 登记备查 |
+| 8 | `ScrollArea.cpp:24`（`setContentSize`） | P2 `relayout()`（含 #3/#4/#5） | `:26` 经 `this`→`viewport_`/`content_`；`:27` `this` | `this,viewport_,content_` | S1 | **W1** | ✅ CP-C2 |
+| 9 | `ScrollArea.cpp:26`（`setContentSize`） | P3 `scrolled.emit`（`scrollTo:65`） | `:27` `update()` 只读 `this` | — | — | — | ❌ **D7 豁免**；宿主是 `this` |
+| 10 | `Widget.cpp:548`（`sizeHint`） | P2 `layout_->measureFor` | **无**（`return` 该调用的结果） | — | — | — | ❌ 登记备查 |
 | 11 | `Widget.cpp:421`（`removeChild`） | P2 `takeChild` | `:422` `doomed.reset()` **不经 `this`**，随后函数结束 | — | — | — | ❌ **看过了，不需要封**（见下） |
 | 12 | `Widget.cpp:302`（`announceDetached`） | P2 `win->widgetDetached` | `:306` 起读 `parent.children()` | `parent` | S1 | — | ✅ **已修**（E17，`e9c283a`；守卫在 `:301`，检查 `:305`/`:318`） |
 | 13 | `Widget.cpp:401`（`takeChild`） | P2 `announceDetached` | `:408` 起读 `children_` | `this` | S1 | — | ✅ **已修**（E17；`:400`/`:402`） |
 | 13b | **`Widget.cpp:416`（`takeChild` 的第二道门）** | P2 `childRemoved(index)` → `Layout::onChildRemoved` + `markLayoutDirty` → `runLayoutIfAny` → `arrange` → `setGeometry` → `onGeometryChanged` | **无**（`:417 return owned;` 只读局部量） | — | — | — | ❌ 非危险，**但理由是隐式的 ⇒ 本轮加注释**（见下） |
 | 14 | `Widget.cpp:436`（`clearChildren`） | P2 `removeChild` | `:437`/`:441` 读 `children_` | `this` | S1 | — | ✅ **已修**（E17；`:431`/`:437`） |
 | 15 | `Widget.cpp:492`（`setGeometry`） | P1 `onGeometryChanged()` | `:495` `visible_` + `update()` | `this` | S1 | — | ✅ **已修**（R2；`GeometryGuard` `:491`/`:493`） |
-| 16 | **`AppWindow.cpp:72/74/75`** | P2 `setGeometry` ×3 | `:73→:74` 读并解引用 `content_`、`:75` 读并解引用 `fill_`、`:77` 读信号成员、`:78` `update()` | `this,content_`（`header_` **不需要**：`:72` 之后没有任何语句再解引用它；`fill_` 见 §11.14 —— 它取 `MayBeNull` 游标） | **S1（本表最高）** | W2 | ✅ **已封**（E19；CP-A1 / CP-A2 / CP-A3，§11.14） |
-| 17 | `AppWindow.cpp:77` | P3 `contentResized.emit` | `:78` `update()` 只读 `this` | — | — | — | ❌ D7 豁免 |
+| 16 | **`AppWindow.cpp:72/74/75`**（`relayout`） | P2 `setGeometry` ×3 | `:73→:74` 读并解引用 `content_`、`:75` 读并解引用 `fill_`、`:77` 读信号成员、`:78` `update()` | `this,content_`（`header_` **不需要**：`:72` 之后没有任何语句再解引用它；`fill_` 见 §11.14 —— 它取 `MayBeNull` 游标） | **S1（本表最高）** | W2 | ✅ **已封**（E19；CP-A1 / CP-A2 / CP-A3，§11.14） |
+| 17 | `AppWindow.cpp:77`（`relayout`） | P3 `contentResized.emit` | `:78` `update()` 只读 `this` | — | — | — | ❌ D7 豁免 |
 | 18 | `AppWindow.cpp:85`（`setHeaderVisible`） | P2 `setVisible` | `:86` `relayout()` 经 `this` | `this` | S2 | W2 | ❌ 本轮不改 |
 | 19 | `WindowHeader.cpp:218`（`relayoutItems`） | P2 `setGeometry`（**在 range-for 里**） | `:219-221` 继续用 `slots_` 的迭代器、`:222` `update()` | `this` + 迭代器失效 | S1 | **W2** | ❌ 本轮不改；与 BoxLayout scratch 越界同形 |
 | 20 | `Cascader.cpp:143`（`relayoutColumns`） | P2 `setVisible`（循环内，按下标读 `columns_`） | `:150` 起继续按下标读（`:142` 的循环自己也按下标） | `this` + 下标 | S2 | W2 | ❌ 本轮不改 |
 | 21 | `Cascader.cpp:152/159/161` | P2 `setGeometry` | `:153-155` 局部量、`:156-159` 按下标读 `columns_`、`:161` 读 `popupBox_` | `this,popupBox_` + 下标 | S2 | **W2** | ❌ 本轮不改；下标防重分配、**防不了缩短** |
 | 22 | `SelectBase.cpp:60`（`showCustomPopup`） | P2 `Window::openPopup`（内含 `closePopup`→`popupClosed.emit`） | `:61` `update()`、`:62` 读 `openStateChanged`（都经 `this`） | `this` | S2 | W2 | ❌ 本轮不改；**P3 家族的样本**（宿主是 `Window` 不是 `this`，D7 不豁免） |
 | 23 | `PushButton.cpp:88`（`sizeHint`） | P1 `styleState()` | `:90/:91/:92` 读 `text_`/`loadingText_`、`:93-94` 读 `icon_` | `this` | S3 | **W3** | ❌ 见 REM3-RES-2（应走契约而非守卫） |
-| 24 | `IconButton.cpp:29` | 限定名 `PushButton::sizeHint()`（内含 #23） | 门后 `:30-33` **只读局部量** | — | — | — | ❌ 非危险 |
+| 24 | `IconButton.cpp:29`（`sizeHint`） | 限定名 `PushButton::sizeHint()`（内含 #23） | 门后 `:30-33` **只读局部量** | — | — | — | ❌ 非危险 |
 | 25 | `examples/showcase/PageIcons.cpp:633` | P1 `content->sizeHint()`，门后动 `sa` | 库外 | （库外） | S2 | W3 | ❌ R3 不改 examples；**"契约主语是调用者"的活样本** |
 | 26 | showcase 四页 `return content->sizeHint().preferred;` | P1 | 门后无读 | — | — | — | ❌ 无动作 |
 | 27 | **P3 家族（全库 ~60 处 `.emit(`）** | P3 | **未逐点枚举** | — | S2 | **W2（扫描任务）** | ❌ 见下 |
@@ -956,6 +956,117 @@ const float titleW =
 * **`render/StyleSheet.hpp` 的 5 条（`StyleSubject`）**：主语已按 P1 新定义纳入，但库内调用点（`style()` / `styleState()` / `styleType()`）已由 #2 / #23 覆盖，无第三处。
 
 **本轮 ✅ 的规模变化（必须让架构团队知道）**：第 1 版是 2 个检查点 / 2 个函数 / 2 个文件；本版是 **5 个检查点 / 3 个函数 / 2 个文件**（新增 `ScrollArea::setContentSize` 的 CP-C1/CP-C2，以及 CP-S2 的检查项从 3 变 2）。多出来的那个函数在**同一个文件**、**同一种形状**、上方 130 行处；不带上它，E5 复核时会立刻问"为什么隔壁那个一模一样的没改"。
+
+---
+
+#### 【E20】lint 首扫产出的候选登记（`tools/lint-door-coverage.ps1`，机器生成）
+
+> 状态：**登记，不是判定。** 本小节的每一行都是 §11.9 那条 lint 用 §11.4 的谓词**扫出来**的，不是人挑出来的；**逐点危险性（门后有没有经 `this`/成员的读写）一条都没有判**。定级与轮次是**家族级**的，与 #27 对 P3 家族的处理方式同一条规矩（"逐点判定要读 60 个函数体，那是一次独立的扫描任务"）。
+> **它存在的唯一理由**：让每一个候选**有归宿**（§11.9 性质 2），从而让**第 76 个**候选——下一扇没人注意到的新门——能把门禁打红。**任何人把某一行的定级往下改、或把行删掉来让 lint 变绿，就是把 lint 关掉。**
+
+**这张表是怎么来的，以及它证明了什么。** §11.4 上面那张表是**人**按调用点扫出来的，N1–N9 是**人**按声明侧重扫出来的。lint 第一次跑，在**同一份代码**上，扫出 **76** 个候选，其中 **13** 个能在上面两张表里找到归宿（`Widget.cpp` 的 `childAppended`/`childRemoved`/`paintTree`/`animationTickTree`/`window`/`removeChild`、`WindowHeader::relayoutItems`、`PushButton::sizeHint`、`MenuButton::onMouse`、`AppWindow::setHeaderVisible`、`SelectBase` 的 `open`/`refreshRows`/`showCustomPopup`），**11** 个已经带着游标（`DeathWatch` / `BubbleGuard` / `GeometryGuard` / `LayoutGuard`），**其余 75 个此前哪张表里都没有**（`Widget::sizeHint` 补上行号侧的函数名后归入 #10）。
+
+**"这 75 个都是真门吗？" 不是这张表要回答的问题，也不该由这张表回答。** 谓词是**保守多报**的（§11.9 白纸黑字），多报的方向是"逼一个人做决定并留档"。但**其中有几条不需要等到 W2 就该被读一遍**：
+
+* **L75-X `Window::widgetDetached`**——**这是本次扫描最该被带走的一条**。它的门是 `closePopup()`（→ `popupClosed.emit` → 应用槽），门后紧跟着 `if (focus_ == w) focus_ = nullptr;` 等**三次经 `this` 的写**，而**一个游标都没有**。函数自己的注释甚至写着"Re-tested after that emit, which can move the focus or open another popup"——**想到了信号会动状态，没想到信号会把 `this` 拆掉**。
+  ⚠️ 而 §11.14 里 N4 的整条论证（"`widgetDetached` 的记账没有洞"）**正是站在这个函数身上**。记账没有洞是对的；**记账的那一帧自己没有游标**，是另一件事。定级 **S1**，与 N1/N4/#16 同级。
+* **家族 F（6 条）**是平台事件入口：`Win32Platform::handle` / `paint` 与 `Window::handleMouse` / `handleKey` / `handlePaint` / `handleResize`。这些是**每一次输入事件的最外层帧**，门后继续读成员。它们与 N5（`animationTickTree`，S1）是同一形状，只是站在树的更外面。
+* **家族 A（21 条）**是 #2 / #23 的族（`styleState()` 之后接着读自己的成员），**REM3-RES-2 已裁定走契约不走守卫**，所以整族 S3/W3。**它的规模是新信息**：表里原本只有 2 个站点，实际是 **21** 个，遍布每一个控件的 `onPaint` / `sizeHint`。"收紧 `styleState()` 覆写的契约"这个处方的**收益面**因此比表里看起来大一个数量级。
+* **家族 G（2 条）是谓词的名字碰撞误报**，登记而不掩盖：`Painter::fillArcRing` 与 `VectorPath::fromSvg` 里的 `close()` 是 `VectorPath` / `BLPath` 的路径闭合，不是 `SelectBase::close()`。**虚调用按名字扫就是会这样**，这正是 §11.9 承认的"近似"的代价；把它写进表里，比在脚本里加一条"忽略 `Painter.cpp`"的暗规则可复核。
+
+**家族与定级对照：**
+
+| 族 | 是什么 | 级 | 轮 | 依据 |
+|---|---|---|---|---|
+| **A**（21） | `styleState()` / `displayText()` / `arrowWidth()` 等只读渲染与度量帧里的虚调用 | S3 | W3 | 并入 #2 / #23 的族，REM3-RES-2：处方是收紧契约 |
+| **B**（19） | P3 `.emit(` | S2 | W2 | 就是 #27 登记的那个家族，本表把它逐点展开 |
+| **C**（15） | popup / 菜单的生命周期帧（`openPopup` / `closePopup` / `ensurePopup` / `open` / `close` …） | S2 | W2 | 与 #22 同形，宿主不是 `this`，D7 不豁免 |
+| **D**（5） | 布局与度量帧（`arrange` / `gather` / `measureAxis` / `measureFor`） | S2 | W2 | R2 的停车场 + `hostAlive()` 覆盖了其中一部分，覆盖到哪未逐点核对 |
+| **E**（3） | 构造函数帧（`AppWindow` / `ScrollArea` / `Window`） | S3 | W3 | 对象尚未交给应用，门是 `add<T>()`；无已知触发路径 |
+| **F**（6） | 平台与窗口的事件入口 | S2 | W2 | 与 N5 同形，见上 |
+| **G**（2） | **谓词误报**（名字碰撞） | S3 | W3 | 不是门；登记以免下一个人重新发现一次 |
+| **H**（3） | 其余单点（`invalidateSizeHint` / `onExpanderToggled` 之后） | S2 | W2 | 无家族，逐点判定归 W2 |
+| **X**（1） | `Window::widgetDetached` | **S1** | W2 | 见上 |
+
+⚠️ **顺带扫出来的一条表内不一致，只报不改**：#20 / #21 两行的主语写作 `Cascader.cpp` 的 `relayoutColumns`，而**今天的 `Cascader.cpp` 里没有这个函数**——对应的代码在 `rebuildColumns()`（本表 L36-C）里。是改过名没同步，还是这两行本来指别处，**由架构团队裁定**；lint 因此把 `rebuildColumns` 当作未归档候选登记，而 #20 / #21 归档不到任何东西。**这正是"表不是扫出来的"的第三个实例，只是这次是机器发现的。**
+
+| # | 位置（文件 :: 函数） | 首个门原语 | 门数 | 级 | 轮 |
+|---|---|---|---|---|---|
+| L01-A | `CheckBox.cpp`（`onPaint`） | P1 styleState | 1 | S3 | W3 |
+| L02-A | `CheckBox.cpp`（`sizeHint`） | P1 styleState | 1 | S3 | W3 |
+| L03-A | `GroupBox.cpp`（`onPaint`） | P1 styleState | 1 | S3 | W3 |
+| L04-A | `Label.cpp`（`color`） | P1 styleState | 1 | S3 | W3 |
+| L05-A | `Label.cpp`（`pixelSize`） | P1 styleState | 1 | S3 | W3 |
+| L06-A | `LineEdit.cpp`（`onPaint`） | P1 styleState | 1 | S3 | W3 |
+| L07-A | `MenuButton.cpp`（`onKey`） | P1 arrowWidth | 1 | S3 | W3 |
+| L08-A | `MenuButton.cpp`（`onPaint`） | P1 arrowWidth | 1 | S3 | W3 |
+| L09-A | `ProgressBar.cpp`（`onPaint`） | P1 styleState | 1 | S3 | W3 |
+| L10-A | `PushButton.cpp`（`onPaint`） | P1 styleState | 1 | S3 | W3 |
+| L11-A | `PushButton.cpp`（`palette`） | P1 styleState | 1 | S3 | W3 |
+| L12-A | `RadioButton.cpp`（`onPaint`） | P1 styleState | 1 | S3 | W3 |
+| L13-A | `RadioButton.cpp`（`sizeHint`） | P1 styleState | 1 | S3 | W3 |
+| L14-A | `SelectBase.cpp`（`onPaint`） | P1 displayText | 4 | S3 | W3 |
+| L15-A | `Separator.cpp`（`onPaint`） | P1 styleState | 1 | S3 | W3 |
+| L16-A | `Separator.cpp`（`sizeHint`） | P1 styleState | 1 | S3 | W3 |
+| L17-A | `Slider.cpp`（`onPaint`） | P1 styleState | 1 | S3 | W3 |
+| L18-A | `SpinBox.cpp`（`onPaint`） | P1 displayText | 1 | S3 | W3 |
+| L19-A | `StyleSheet.cpp`（`resolve`） | P1 styleMatchesType | 6 | S3 | W3 |
+| L20-A | `ToggleSwitch.cpp`（`onPaint`） | P1 styleState | 1 | S3 | W3 |
+| L21-A | `WindowHeader.cpp`（`onPaint`） | P1 styleState | 1 | S3 | W3 |
+| L22-B | `AlarmList.cpp`（`acknowledge`） | P3 emit | 1 | S2 | W2 |
+| L23-B | `AlarmList.cpp`（`acknowledgeAll`） | P3 emit | 1 | S2 | W2 |
+| L24-B | `AlarmList.cpp`（`add`） | P3 emit | 1 | S2 | W2 |
+| L25-B | `Cascader.cpp`（`chooseAt`） | P3 emit | 1 | S2 | W2 |
+| L26-B | `ComboBox.cpp`（`setCurrentIndex`） | P3 emit | 1 | S2 | W2 |
+| L27-B | `DataHub.cpp`（`drain`） | P3 emit | 1 | S2 | W2 |
+| L28-B | `DatePicker.cpp`（`onMouse`） | P3 emit | 1 | S2 | W2 |
+| L29-B | `Gauge.cpp`（`setValue`） | P3 emit | 1 | S2 | W2 |
+| L30-B | `LineEdit.cpp`（`onFocusChanged`） | P3 emit | 1 | S2 | W2 |
+| L31-B | `LineEdit.cpp`（`onKey`） | P3 emit | 2 | S2 | W2 |
+| L32-B | `ListView.cpp`（`onKey`） | P3 emit | 2 | S2 | W2 |
+| L33-B | `ListView.cpp`（`onMouse`） | P3 emit | 2 | S2 | W2 |
+| L34-B | `MenuButton.cpp`（`trigger`） | P3 emit | 1 | S2 | W2 |
+| L35-B | `PopupList.cpp`（`onMouse`） | P3 emit | 3 | S2 | W2 |
+| L36-B | `PushButton.cpp`（`activate`） | P3 emit | 1 | S2 | W2 |
+| L37-B | `SearchableSelect.cpp`（`setQuery`） | P3 emit | 1 | S2 | W2 |
+| L38-B | `Skin.cpp`（`apply`） | P3 emit | 1 | S2 | W2 |
+| L39-B | `TextArea.cpp`（`onFocusChanged`） | P3 emit | 1 | S2 | W2 |
+| L40-B | `WindowHeader.cpp`（`onMouse`） | P3 emit | 3 | S2 | W2 |
+| L41-C | `Cascader.cpp`（`open`） | P2 add | 2 | S2 | W2 |
+| L42-C | `Cascader.cpp`（`rebuildColumns`） | P2 add | 7 | S2 | W2 |
+| L43-C | `DatePicker.cpp`（`open`） | P2 add | 3 | S2 | W2 |
+| L44-C | `MenuButton.cpp`（`closeMenu`） | P2 closePopup | 1 | S2 | W2 |
+| L45-C | `MenuButton.cpp`（`ensureMenu`） | P2 add | 1 | S2 | W2 |
+| L46-C | `MenuButton.cpp`（`openMenu`） | P2 setGeometry | 2 | S2 | W2 |
+| L47-C | `SelectBase.cpp`（`close`） | P2 closePopup | 2 | S2 | W2 |
+| L48-C | `SelectBase.cpp`（`ensurePopup`） | P2 add | 6 | S2 | W2 |
+| L49-C | `SelectBase.cpp`（`hideCustomPopup`） | P2 closePopup | 1 | S2 | W2 |
+| L50-C | `SelectBase.cpp`（`onEnabledChanged`） | P1 close | 1 | S2 | W2 |
+| L51-C | `SelectBase.cpp`（`onFocusChanged`） | P1 close | 1 | S2 | W2 |
+| L52-C | `SelectBase.cpp`（`onKey`） | P1 open | 10 | S2 | W2 |
+| L53-C | `SelectBase.cpp`（`onMouse`） | P1 close | 2 | S2 | W2 |
+| L54-C | `Window.cpp`（`closePopup`） | P2 setVisible | 1 | S2 | W2 |
+| L55-C | `Window.cpp`（`openPopup`） | P2 closePopup | 3 | S2 | W2 |
+| L56-D | `BoxLayout.cpp`（`arrange`） | P2 setGeometry | 1 | S2 | W2 |
+| L57-D | `BoxLayout.cpp`（`gather`） | P1 sizeHint | 1 | S2 | W2 |
+| L58-D | `GridLayout.cpp`（`arrange`） | P2 setGeometry | 1 | S2 | W2 |
+| L59-D | `GridLayout.cpp`（`measureAxis`） | P1 sizeHint | 1 | S2 | W2 |
+| L60-D | `Layout.cpp`（`measureFor`） | P2 measure | 3 | S2 | W2 |
+| L61-E | `AppWindow.cpp`（`AppWindow`） | P2 add | 5 | S3 | W3 |
+| L62-E | `ScrollArea.cpp`（`ScrollArea`） | P2 add | 2 | S3 | W3 |
+| L63-E | `Window.cpp`（`Window`） | P2 setGeometry | 4 | S3 | W3 |
+| L64-F | `Win32Platform.cpp`（`handle`） | P1 onMouse | 3 | S2 | W2 |
+| L65-F | `Win32Platform.cpp`（`paint`） | P1 onPaint | 1 | S2 | W2 |
+| L66-F | `Window.cpp`（`handleKey`） | P2 closePopup | 1 | S2 | W2 |
+| L67-F | `Window.cpp`（`handleMouse`） | P2 closePopup | 1 | S2 | W2 |
+| L68-F | `Window.cpp`（`handlePaint`） | P1 onPaint | 1 | S2 | W2 |
+| L69-F | `Window.cpp`（`handleResize`） | P2 setGeometry | 3 | S2 | W2 |
+| L70-G | `Painter.cpp`（`fillArcRing`） | P1 close | 1 | S3 | W3 |
+| L71-G | `VectorPath.cpp`（`fromSvg`） | P1 close | 1 | S3 | W3 |
+| L72-H | `LineEdit.cpp`（`emitChanged`） | P2 invalidateSizeHint | 1 | S2 | W2 |
+| L73-H | `LineEdit.cpp`（`setText`） | P2 invalidateSizeHint | 1 | S2 | W2 |
+| L74-H | `TreeSelect.cpp`（`onRowActivated`） | P1 onExpanderToggled | 1 | S2 | W2 |
+| L75-X | `Window.cpp`（`widgetDetached`） | P2 closePopup | 1 | S1 | W2 |
 
 ---
 
@@ -1189,6 +1300,37 @@ grep -n "setGeometry(\|sizeHint()\|\.emit(\|setVisible(\|setLayout\|invalidateSi
 **成本与风险，写明**：脚本要做的是**近似**的 C++ 函数体切分（花括号配平 + 函数头正则），不是解析。首轮会多报若干条（估计 20~40 条，主要来自 P3 家族），**这些多报的分诊本身就是表 #27 那个 W2 扫描任务**——也就是说这个 lint 不是额外工作，它是把已经必须做的那次扫描变成一个**不会退化**的产物。E5 若判定脚本形状不合适（例如决定改用 clang 的 AST 工具），**三条性质不变**即可。
 
 ---
+
+#### 【E20】落地记录：`tools/lint-door-coverage.ps1`
+
+> 状态：**已实现、已自检（22 例）、三条腿门禁全绿、双向证明实测。** 结论由测试团队下。
+
+**四条不可议性质逐条对照：**
+
+| 性质 | 落地形态 | 怎么验的 |
+|---|---|---|
+| 1 谓词生成候选，不是名字表 | 括号配平切函数体 → 逐体找 P1/P2/P3 门 → "有门 ∧ 门不是本体最后一条语句 ∧ 体内无游标" ⇒ 候选 | 自检 `a_door_that_is_the_last_statement_is_not_a_candidate`、`a_guarded_frame_is_not_a_candidate` |
+| 2 每条候选带理由 + 定级 + 轮次 | allowlist 的行**必须**有非空的「级」「轮」两列，且位置格必须点出**函数名**；缺一样 ⇒ 归档不到 | 自检三例：`a_row_with_no_grade_…` / `…no_round_…` / `…naming_only_a_file_…` |
+| 3 未归档 ⇒ `verify.bat` 红 | 步骤 [1/6] 内 `call :lint_doors`；退出码 1 或任何非 0 ⇒ `GY_RED=1` | 自检 `deleting_a_real_row_names_the_frame_that_lost_its_home`（**在真文档的副本上删一行，差分比对**）+ `spawned_unarchived_returns_1`（退出码穿过进程边界）+ 一次**整门禁实跑变红** |
+| 4 P1 从**声明侧**生成，根是 `include/geeyoou/**` | 扫 59 个头文件收 58 个虚成员名（含只写 `override` 的），减去 20 个 `Platform.hpp` 独有的 ⇒ 38 个 | 自检 `a_virtual_declared_outside_the_widget_base_is_still_found`（**第二个洞**：根写成 `Widget.hpp` 就漏 `Layout` 三个钩子） |
+
+**allowlist 就是 §11.4，一份。** 脚本解析本文档 `### 11.4` 到 `### 11.5` 之间的**全部**表格行，键是 **(文件, 函数)** 而不是 (文件, 行号)——理由是本节自己写过的那句话："**语句是表要说的东西，行号不是**"。E14 之后表里的行号已经整体偏了一百行；键在行号上的 lint 会在每一次无关编辑上变红，而那正是 §11.9 否决运行时计数器时用的理由（**常亮的红灯**）。自检 `doc-full.md` 里在 §11.4 **之前和之后**各放了一张能解析的表，两张都必须归档不到东西。
+
+**首扫的三处实测更正，写下来给下一个人：**
+
+1. **`~Foo() override` 不带 `virtual`。** 只过滤 `virtual ~` 会让 `AppWindow` / `Widget` / `Window` / `MenuButton` / `SelectBase` **五个类名变成门名**，于是每一个 `new Widget(` 都是门。自检 `a_destructor_written_as_override_is_not_a_door_name`。
+2. **`Platform.hpp` 的免检必须落到名字集合上，而不只是写在文档里。** `PlatformWindow` 声明了 `restore()` / `show()` / `invalidate()` / `close()`，把它们留在 P1 集合里，`painter.restore()` 和 `Layout::invalidate()` 就都成了门。**免检是有闸门的**：`setPlatform` / `installPlatform` 的 grep（§11.4 点名要求进 lint 的那两行）每次都跑，一旦出现安装点，免检当场失效、门禁变红。自检两例，一正一反。
+3. **空的名字集合会让正则退化成"匹配一切"。** `(?<n>)` 是空的交替分支，`\b(?<n>)\s*\(` 匹配每一个左括号。是 `Platform.hpp` 免检那个夹具**把 P1 集合合法地清空**之后暴露的——输出是 `first: P1 ` 后面什么都没有。**方向是红的，但内容是无意义的**，而无意义的红灯和常亮的红灯是同一个下场。现用 `(?!)` 兜底。
+
+**一处放宽，以及它的代价（**这是本节最需要复签的一条**）**：§11.9 的原文是"本体内没有 `DeathWatch`"，实现读作"本体内没有 **REM3 游标**"，即 `DeathWatch` / `BubbleGuard` / `GeometryGuard` / `LayoutGuard` 四个 `LiveGuard` 实例中的任意一个。**理由是实测而不是口味**：字面读法把 `Widget::dispatchMouse` 与 `dispatchKey` 判成缺陷，而这两个帧在门后**重测了自己的游标**（`if (bubble.node() != w) return;`）——REM3-G2/G3 要的形状，写在 REM3 之前。**把正确的帧报成缺陷，是 lint 被静音的第一步**，而被静音的 lint 正是 §11.9 否决运行时计数器时说的那个下场。**代价登记在 §12.4 A′**：本检查分不清"持有游标"与"检查游标"。
+
+**性能，因为它决定这条 lint 会不会被删掉。** 第一版按名字逐个扫（38 + 15 = 53 遍全树），实测 **14.9 秒**；折成每类一条编译后的交替正则 + 注释剥离结果按「路径 + 修改时间」记忆化后，**2.0 秒**（冷）/ **0.95 秒**（热）。自检 22 例 **6.4 秒**（含 3 次真进程 spawn 覆盖退出码路径、2 次真仓库全扫）。**门禁里合计约 8.5 秒。**
+
+**顺带兑现的第二条机器判据（§11.4 免检清单点名要求的）**：`setPlatform|installPlatform` 的 grep 现在每次门禁都跑，剥掉注释之后再匹配——否则一句提到这两个名字的注释就能让门禁红，那是把一条判据换成一个笑话。
+
+**顺带兑现的第三条（本轮 D4b 的连带产物，见任务 B）**：所有 `*.bat` 必须是**纯 ASCII**。`cmd.exe` 按**字节偏移**定位、按**字符**计消耗量，实测真值表——`CRLF+UTF-8` 对、`CRLF+GBK` 对、`LF+纯 ASCII` 对、**`LF+多字节` 错**（解析器从 160 行之上的行中间续跑，把 `ine` 当命令执行）。**要两个条件同时成立**；本树四个 `.bat` 全是 LF，所以 ASCII 是唯一撑着的那一半，也就是值得机器守的那一半。**⚠️ 这条检查保护不了 `verify.bat` 自己**——它由 `verify.bat` 调起，而漂移的 `verify.bat` 在跑到这一步之前就已经错行执行了。它保护的是**下一次**运行。
+
+**这条 lint 不做什么，写清楚免得下一个人以为它做了：** 它**不判危险性**。§11.4 的 hazard 条款（"门 S 对 P 危险，当且仅当 S 之后本帧还有一次经 P 到达的读或写"）要求知道一个名字指的是什么，那需要编译器。它回答的是便宜的那个问题——**有没有一扇门，后面还有代码，而这一帧没有游标**——然后逼一个人在表里回答贵的那个，并留档。
 
 ### 11.10 【E5 · E6】两条护栏的落地记录
 
@@ -1890,6 +2032,29 @@ heap-use-after-free  READ 8   #0 geeyoou::Signal<Size>::emit      include\geeyoo
 | **N8** | `MenuButton::onMouse` | S3 | W3 | |
 | **N9** | `Widget::window()` | S3 | W3 | |
 | **#25** | `examples/showcase/PageIcons.cpp:633` 的调用者义务 | S2 | W3 | **"契约主语是调用者"的活样本**；R3 不改 examples |
+
+#### A′. 【E20】门覆盖的机器校验上线，以及它第一次扫出来的东西
+
+> §11.9 那条 lint 已实现（`tools/lint-door-coverage.ps1`，`verify.bat` 步骤 [1/6] 内调用），四条不可议性质逐条兑现，双向证明实测。**本小节只登记它带来的新事实**；逐点候选表在 §11.4 末尾的「E20 lint 首扫产出的候选登记」。
+
+**一句话结论：上面 A 组这张表，是同一份代码上人扫出来的那一半。** lint 在**同一个 HEAD** 上扫出 **100 个**候选（`src/**` 全部 47 个 TU），其中 **11 个**已带游标、**13 个**能在 A 组或 §11.4 主表里找到归宿、**其余 76 个此前哪张表里都没有**（`Widget::sizeHint` 补上主语后归 #10，余 75 条逐点登记在 §11.4 末尾）。**A 组不是"下一轮唯一的输入"的全部，它是其中被人看见的那一部分。**
+
+| 项 | 位置 | 级 | 轮 | 备注 |
+|---|---|---|---|---|
+| **L75-X** | **`Window::widgetDetached`**，门是 `closePopup()`（→ `popupClosed.emit` → 应用槽），门后 `focus_` / `hovered_` / `pressGrab_` **三次经 `this` 的写**，一个游标都没有 | **S1** | **W2** | ⚠️ **本次扫描最该被带走的一条。** §11.14 里 N4 的整条论证（"`widgetDetached` 的记账没有洞"）**正是站在这个函数身上**——记账没有洞是对的，**记账的那一帧自己没有游标**是另一件事。函数自己的注释写着"Re-tested after that emit, which can move the focus or open another popup"：**想到了信号会动状态，没想到信号会把 `this` 拆掉** |
+| **L-F 组（6）** | `Win32Platform::handle` / `paint`，`Window::handleMouse` / `handleKey` / `handlePaint` / `handleResize` | S2 | W2 | 每一次输入事件的**最外层帧**，门后继续读成员；与 **N5** 同形，只是站在树的更外面 |
+| **L-C 组（15）** | popup / 菜单生命周期帧（`Window::openPopup` / `closePopup`、`SelectBase` 的 `ensurePopup` / `close` / `onKey` / `onMouse` …、`MenuButton::openMenu` / `closeMenu`、`Cascader::open` / `rebuildColumns`、`DatePicker::open`） | S2 | W2 | 与 **#22** 同形：宿主不是 `this`，**D7 不豁免**。#22 是这一族里唯一被人点过名的一个 |
+| **L-A 组（21）** | `styleState()` / `displayText()` 之后接着读自己成员的只读渲染与度量帧 | S3 | W3 | **就是 #2 / #23 的族，但规模是新信息**：表里 2 个站点，实际 **21** 个，遍布每一个控件的 `onPaint` / `sizeHint`。**"收紧 `styleState()` 覆写契约"这个处方的收益面因此大一个数量级**——请架构团队在裁 #23 时按 21 个站点而不是 2 个站点算 |
+| **L-B 组（19）** | P3 `.emit(` | S2 | W2 | **#27 那个"扫描任务"的产出物，现在有了**：不是"全库约 60 处"这个估数，而是 19 个**门后确有后续代码**的具体帧 |
+| **L-D / E / G / H（14）** | 布局度量帧 5、构造函数帧 3、谓词名字碰撞误报 2、其余单点 4 | S2/S3 | W2/W3 | 见 §11.4 末尾 |
+
+**同时扫出的一条表内不一致（只报不改）**：#20 / #21 两行的主语写作 `Cascader.cpp` 的 **`relayoutColumns`**，而今天的 `Cascader.cpp` 里**没有这个函数**——对应代码在 `rebuildColumns()`。是改过名没同步，还是这两行本来指别处，**请架构团队裁定**。在裁定之前，lint 把 `rebuildColumns` 当未归档候选登记（L36-C），而 #20 / #21 归档不到任何东西。**这是"表不是扫出来的"第三个实例，只是这次是机器发现的。**
+
+**lint 自身的三条残留，登记不掩盖：**
+
+1. **它分不清"持有游标"与"检查游标"。** §11.9 的原文是"本体内没有 `DeathWatch`"；实现把它读作"本体内没有 REM3 游标"（四个 `LiveGuard` 实例：`DeathWatch` / `BubbleGuard` / `GeometryGuard` / `LayoutGuard`）。**这是一次放宽，理由是实测**：字面读法把 `Widget::dispatchMouse` 与 `dispatchKey` 判成缺陷，而这两个帧都在门后**重测了自己的游标**（`if (bubble.node() != w) return;`）——比 REM3 早，形状一样。**代价是**：一个因为别的原因构造了 `LayoutGuard`、然后不问 `alive()` 就跨门的帧，在这里读作"已守卫"。**S2 / W2。** 闭合它要把"检查"绑到"门"上，那需要知道门对哪个指针危险（§11.4 的 hazard 条款）⇒ 需要一个编译器。
+2. **带游标的函数整体豁免。** 谓词按 §11.9 的原文是函数级的，所以 `AppWindow::relayout` 这种**已经封好**的帧从此不再是候选——**往它里面加第四扇门而不加检查，lint 看不见**。**S2 / W2。**
+3. **P1 是按名字匹配的**，所以 `VectorPath::close()` 撞上 `SelectBase::close()`（L71-G / L72-G 两条误报），反过来一个虚函数若被 `std::function` / 指针间接调用也扫不到（§11.9 末尾登记的第四类原语 `PlatformWindow` 的 7 个公有 `std::function` 成员仍未覆盖）。**S2 / W2，与 P4 谓词那条同批。**
 
 #### B. 状态修复（RES-1 家族）
 
