@@ -623,11 +623,21 @@ soak 的 `liveAllocs` 序列（`test_layout_soak.cpp` 里 `s.liveAllocs = allocC
 **定义为「视同已死」，且 Debug 期 `assert`。三条，缺一不可：**
 
 1. **不是 UB，不是崩溃**：构造函数接受 `nullptr`，游标 `node` 为空 ⇒ `alive()` **自构造起恒为 false** ⇒ 该帧立刻走降级路径。
-2. **Debug 期 `assert(w != nullptr)`**：因为**这是调用方的 bug，不是正常状态**。理由可判定：任何一个上守卫的现场，都是因为它**马上要解引用那个指针**；指针为空时该现场**在到达守卫之前就已经解引用过它了**（`ScrollArea::relayout:157` 的 `content_->layout()` 就在门与守卫之前）。所以「空成员」必须由现场的**空检查**处理，而不是由守卫**冒充**成一次死亡。
+2. **Debug 期 `assert(w != nullptr)`**：因为**在这个构造函数上**，空是调用方的 bug 而不是正常状态。理由可判定：任何一个**无条件**解引用的现场，上守卫都是因为它**马上要解引用那个指针**；指针为空时该现场**在到达守卫之前就已经解引用过它了**（`ScrollArea::relayout:157` 的 `content_->layout()` 就在门与守卫之前）。所以在这类现场，「空成员」必须由现场的**空检查**处理，而不是由守卫**冒充**成一次死亡。
 3. **Release 期不静默**：`alive()` 为 false 会让现场走降级分支，而降级分支**必然记一次 `detail::frameDegraded()`**（§11.3 表里逐点写死）。所以 Release 下 `nullptr` 表现为「诊断计数 +1」，不是 ADR-R2-04 意义上的无痕迹。
+
+> **⚠️【E19 更正，Leo 复签通过】第 2 条的主语必须是"无条件解引用的现场"。** 上面原本写的是"任何一个上守卫的现场"，那对**有条件**解引用的**可选成员**为假，三条门就是证据：
+> * **`AppWindow::fill_`** 在 `setContent<T>()` 跑之前**恒空**，而 `relayout()` 把它摆在 `if (fill_)` 之内；
+> * **`Layout::host_`** 在 park 之后**恒空**，而 `invalidate()` 把 `performLayout()` 摆在 `if (host_)` 之内；
+> * **`Window::focus_`** 在没有焦点时就是空，而 `clearFocus()` **就是** `setFocusWidget(nullptr)`——空是这个 API 的正常入参，不是漏检。
+>
+> 这三处仍然要为**非空那一支**问同一个问题，而它们**不能**靠构造一个"契约说这是调用方 bug"的东西去问。
+> **REM3-G7 的处方（现场自己先做一次空检查、然后早退）在这三处用不上**，因为它要求现场**能整帧放弃**：没有内容的窗口仍要摆标题栏，park 掉的 layout 仍要跑 `onInvalidated()`，没有焦点的窗口仍要把焦点交出去。
+> ⇒ 扩展的是**构造方式**，不是语义：`DeathWatch(p, MayBeNull{})` 走**同一条链表、同一套取消、同一个 `alive()`**，空**仍然**读作已死（第 1、3 条逐字照旧）。差别只有一处——**它不 `assert`**，因为在这些现场空不是 bug。作为交换，现场欠一句 `(p0 && !pw.alive())`（`p0` 是门前捕获值）：**门前就是空的成员不得查 `alive()`**，否则一个**健康**帧会被判成降级并跳过它本该做的事，那才是真的行为改变。见 §11.2 的 API 形状与 §11.14。
 
 > **REM3-G7：空成员是空检查的事，不是守卫的事。**
 > 守卫回答的问题是「我记下的这个对象死了没有」；它**不**回答「这个成员现在还指着东西没有」。E14/E15 的 `onDescendantDetached` 把 `content_` 置空之后，`ScrollArea::relayout` 的入口必须先有 `if (!content_ || !viewport_) return;`，然后才轮到守卫。
+> **适用边界（E19 补）**：本条的"早退"形态只在**现场能整帧放弃**时可用；放弃不了的可选成员走 `MayBeNull` 游标 + `(p0 && !pw.alive())`，那**不是**本条的例外，而是本条在"不能整帧放弃"时的另一种落法——空**仍然**没有被守卫冒充成死亡，只是这一帧不为它降级。
 
 **为什么不新增一个 `nullGuards` 计数器**：区分不出额外信息。Debug（测试全量跑 Debug + ASan）会在 `assert` 上直接变红并指出现场；Release 只需要"不静默、不崩"。多一个字段要多一条 E6 断言去维护它，收益为零。**这一条如果 Leo 不同意，是可以单独翻的**——加字段是纯增量改动，不影响其它任何决定。
 
@@ -636,6 +646,7 @@ soak 的 `liveAllocs` 序列（`test_layout_soak.cpp` 里 `s.liveAllocs = allocC
 ### 11.2 API 形状（唯一权威；E2 照此实现，不得增删）
 
 > 本版取代评审前的版本。与第 1 版的差异：`g_hints`→`g_deathWatch`（且它是 E17 `g_detaches` 的改名而非新建）、`HintGuard`→`DeathWatch`（合并 `DetachGuard`）、`hintCursorDepth()`→`deathWatchDepth()`、`hintFrameCancelled()`→`frameDegraded()`、`hintFramesCancelled`→`framesDegraded`、新增 `nullptr` 语义。
+> **【E19 增补，Leo 复签通过】** 本节增列 `explicit DeathWatch(const Widget*, MayBeNull)` 与 tag 类型 `MayBeNull`——**纯新增，不改任何既有成员**。本节自称"唯一权威"，所以实现里有而这里没有的东西，本身就是一次违约；这一条补的正是那个洞。
 
 落点：`include/geeyoou/widget/Widget.hpp` **尾部**，`class Widget` 定义之后，`namespace geeyoou::detail` 内——与 `Layout.hpp` 尾部放 `detail::g_layoutHosts` / `detail::layoutDiagnostics()` 的位置对齐。**不新建头文件**（本仓库没有 `detail/` 头文件目录，取消点又全在 `Widget.cpp`）。
 
@@ -686,6 +697,26 @@ class DeathWatch : private LiveGuard<g_deathWatch> {
     assert(w && "a null here means the caller's own null check is missing");
   }
 
+  // Tag for the constructor below.  A TYPE rather than a bool, so a call site
+  // cannot say `true` and leave the next reader working out what is true.
+  struct MayBeNull {};
+
+  // The same guard for an OPTIONAL member -- one whose null is a legitimate
+  // state of the object rather than a missing null check (AppWindow::fill_,
+  // Layout::host_, Window::focus_).  The assert above is right for a member the
+  // frame dereferences UNCONDITIONALLY and simply false for one it dereferences
+  // CONDITIONALLY; see Q7.
+  //
+  // SEMANTICS ARE UNCHANGED, which is the point of reusing the class instead of
+  // writing a second one: same list, same cancellation, same alive(), and a
+  // null still reads as dead from construction on.  What the site owes in
+  // return is that its check must NOT consult alive() for a member that was
+  // ALREADY null in front of the door -- there is nothing there to die, and a
+  // frame that gave up over it would record a degradation that did not happen.
+  // The shape is `(p0 && !pw.alive())`, with p0 the pre-door capture.
+  explicit DeathWatch(const Widget* w, MayBeNull)
+      : LiveGuard<g_deathWatch>(const_cast<Widget*>(w)) {}
+
   using LiveGuard<g_deathWatch>::alive;
 };
 
@@ -706,13 +737,16 @@ void frameDegraded();
 }  // namespace detail
 ```
 
-**三个成员**：
+**四个成员**（第 4 个由 **E19 扩展**，见 §11.14；**语义、尺寸、取消策略均未变**）：
 
 | 成员 | 可见性 | 作用 |
 |---|---|---|
 | `explicit DeathWatch(const Widget*)` | public，inline | 构造：把栈上游标压入 `g_deathWatch`（Release 5 条指令，见 §11.5；Debug 多一条 `assert`） |
+| `explicit DeathWatch(const Widget*, MayBeNull)` | public，inline | 同上，但**给可选成员用**：接受空、**不 `assert`**。空仍读作已死；现场欠一句 `(p0 && !pw.alive())`（`p0` 是门前捕获值），**不得**对门前就是空的成员查 `alive()`。理由见 Q7，落点见 §11.14 的 CP-A1/CP-A2 与 N1/N4。指令数与上一行相同（Release 5 条，Debug 少一条 `assert`） |
 | `~DeathWatch()` | public，隐式（继承自 `LiveGuard`，非虚） | 析构：弹出游标（2 条）。非虚是对的——私有基类，永不通过基类指针 delete |
 | `bool alive() const` | public，`using` 导出，inline | 查询：`cursor_.node != nullptr` |
+
+**`struct MayBeNull {}`**：空的 tag 类型，嵌在 `DeathWatch` 内（调用形态 `detail::DeathWatch::MayBeNull{}`）。**是类型而不是 `bool`**——`DeathWatch(p, true)` 会让下一个读者去猜"什么为真"。两个构造函数**都是 `explicit`**：双参构造没有隐式转换风险，标它只为与上一行一致。`sizeof(DeathWatch)` 不变（空基类之外没有新成员）。
 
 拷贝/移动：**四个全部删除**（`LiveGuard` 已删，私有继承后派生类隐式删除）。
 
@@ -744,7 +778,7 @@ void frameDegraded();
 
 > **REM3-G6**：`g_deathWatch` 不得增加**决策读者**。任何形如"现在有没有一个 X 帧站在谁身上"、**且库里有分支据此改变行为**的谓词，都必须**先拆链表再写**。纯诊断读者（只被人和用例读，不进任何库内条件）不受此限，`deathWatchDepth()` 就是一个，它存在的理由是可测性（Q2）。反例已经在库里：`g_layouts` 有三个决策读者（`markLayoutDirty:623` 决定这一趟重排跑不跑、`layoutPassActive:722` 决定停车场排不排空、`currentLayoutHost:724` 喂 M2 的断言），这正是它不能被复用的原因（Q1 候选 E）。
 
-> **REM3-G7**：空成员是空检查的事，不是守卫的事（Q7）。
+> **REM3-G7**：空成员是空检查的事，不是守卫的事（Q7）。**【E19 补】** 早退这个形态要求现场**能整帧放弃**；放弃不了的**可选**成员（`AppWindow::fill_` / `Layout::host_` / `Window::focus_`）走 `DeathWatch(p, MayBeNull{})` 加 `(p0 && !pw.alive())`——空仍不被冒充成死亡，只是这一帧不为它降级。
 
 > **REM3-G8**：`detail::frameDegraded()` **每帧最多记一次**。计数器数的是"帧"，不是"检查"；每个降级分支写一次、随即 `return`，天然满足。
 
@@ -854,8 +888,8 @@ void frameDegraded();
 | 17 | `AppWindow.cpp:77`（`relayout`） | P3 `contentResized.emit` | `:78` `update()` 只读 `this` | — | — | — | ❌ D7 豁免 |
 | 18 | `AppWindow.cpp:85`（`setHeaderVisible`） | P2 `setVisible` | `:86` `relayout()` 经 `this` | `this` | S2 | W2 | ❌ 本轮不改 |
 | 19 | `WindowHeader.cpp:218`（`relayoutItems`） | P2 `setGeometry`（**在 range-for 里**） | `:219-221` 继续用 `slots_` 的迭代器、`:222` `update()` | `this` + 迭代器失效 | S1 | **W2** | ❌ 本轮不改；与 BoxLayout scratch 越界同形 |
-| 20 | `Cascader.cpp:143`（`relayoutColumns`） | P2 `setVisible`（循环内，按下标读 `columns_`） | `:150` 起继续按下标读（`:142` 的循环自己也按下标） | `this` + 下标 | S2 | W2 | ❌ 本轮不改 |
-| 21 | `Cascader.cpp:152/159/161` | P2 `setGeometry` | `:153-155` 局部量、`:156-159` 按下标读 `columns_`、`:161` 读 `popupBox_` | `this,popupBox_` + 下标 | S2 | **W2** | ❌ 本轮不改；下标防重分配、**防不了缩短** |
+| 20 | `Cascader.cpp:143`（`rebuildColumns`） | P2 `setVisible`（循环内，按下标读 `columns_`） | `:150` 起继续按下标读（`:142` 的循环自己也按下标） | `this` + 下标 | S2 | W2 | ❌ 本轮不改；**主语已更正**（原写作 `relayoutColumns`，见下） |
+| 21 | `Cascader.cpp:152/159/161`（`rebuildColumns`） | P2 `setGeometry` | `:153-155` 局部量、`:156-159` 按下标读 `columns_`、`:161` 读 `popupBox_` | `this,popupBox_` + 下标 | S2 | **W2** | ❌ 本轮不改；下标防重分配、**防不了缩短**；**主语已补上**（原行只有文件名，归档不到任何东西） |
 | 22 | `SelectBase.cpp:60`（`showCustomPopup`） | P2 `Window::openPopup`（内含 `closePopup`→`popupClosed.emit`） | `:61` `update()`、`:62` 读 `openStateChanged`（都经 `this`） | `this` | S2 | W2 | ❌ 本轮不改；**P3 家族的样本**（宿主是 `Window` 不是 `this`，D7 不豁免） |
 | 23 | `PushButton.cpp:88`（`sizeHint`） | P1 `styleState()` | `:90/:91/:92` 读 `text_`/`loadingText_`、`:93-94` 读 `icon_` | `this` | S3 | **W3** | ❌ 见 REM3-RES-2（应走契约而非守卫） |
 | 24 | `IconButton.cpp:29`（`sizeHint`） | 限定名 `PushButton::sizeHint()`（内含 #23） | 门后 `:30-33` **只读局部量** | — | — | — | ❌ 非危险 |
@@ -988,7 +1022,18 @@ const float titleW =
 | **H**（3） | 其余单点（`invalidateSizeHint` / `onExpanderToggled` 之后） | S2 | W2 | 无家族，逐点判定归 W2 |
 | **X**（1） | `Window::widgetDetached` | **S1** | W2 | 见上 |
 
-⚠️ **顺带扫出来的一条表内不一致，只报不改**：#20 / #21 两行的主语写作 `Cascader.cpp` 的 `relayoutColumns`，而**今天的 `Cascader.cpp` 里没有这个函数**——对应的代码在 `rebuildColumns()`（本表 L36-C）里。是改过名没同步，还是这两行本来指别处，**由架构团队裁定**；lint 因此把 `rebuildColumns` 当作未归档候选登记，而 #20 / #21 归档不到任何东西。**这正是"表不是扫出来的"的第三个实例，只是这次是机器发现的。**
+⚠️ **顺带扫出来的一条表内不一致（已核实并更正）**：#20 / #21 两行的主语原本写作 `Cascader.cpp` 的 `relayoutColumns`，而**今天的 `Cascader.cpp` 里没有这个函数**。
+
+**核实结论：是主语写错了，不是指别处。** 两条依据，都对 diff 可判定：
+
+1. **行号自己指认了函数**——`:143`（`columns_[i]->setVisible(false)`）、`:152` / `:159`（`col->setGeometry` / `columns_[level]->setGeometry`）、`:161`（`popupBox_->setGeometry`）**全部落在 `Cascader::rebuildColumns()` 的函数体内**（`Cascader.cpp:90-164`），而且表里描述的"循环内按下标读 `columns_`"逐字对得上 `:142` 与 `:149/:156` 那三个循环。
+2. **`relayoutColumns` 在本仓库的历史里从未存在过**——`git log -S relayoutColumns` 只命中文档提交，一次源码提交都没有。它不是"改过名没同步"，是**从来就没有过这个名字**：写表的人按 `WindowHeader::relayoutItems`（#19，紧挨着的上一行）的形状顺手编了一个。
+
+⇒ **#20 / #21 的主语已改为 `rebuildColumns`**（#21 原来连函数名都没有，一并补上）。**只改文档，`Cascader.cpp` 一个字未动**——本轮的判定是"表错了"，不是"代码该改名"。改完之后这两行与本表 **L42-C**（`Cascader.cpp`（`rebuildColumns`），P2 add ×7）归档同一个 (文件, 函数) 键；**L42-C 保留**，它记的是 lint 独立扫出来的门数，与 #20/#21 手工记的两处不是同一份事实。
+
+⚠️ **顺带更正首扫记录自己的一处措辞**：当时写的是"lint 因此把 `rebuildColumns` 当作未归档候选登记"——**这半句不对**。实测（`0 UNARCHIVED`）它一直是**已归档**的，归宿是 L42-C；真正成立的只有另外半句——**#20 / #21 归档不到任何东西**。所以这次不一致不是被"红灯"抓到的，是被**归宿表**抓到的：一个编造出来的函数名不会让门禁变红，它只会让两行手工登记**静悄悄地什么都不管**。
+
+**这正是"表不是扫出来的"的第三个实例，只是这次是机器发现的**——而它能被发现，恰恰是因为 lint 的键是 (文件, **函数**) 而不是 (文件, 行号)：一个编造出来的函数名归档不到任何东西，一个偏了一百行的行号却看不出来。
 
 | # | 位置（文件 :: 函数） | 首个门原语 | 门数 | 级 | 轮 |
 |---|---|---|---|---|---|
@@ -1277,7 +1322,8 @@ E1 只出设计不写实现，但设计里有几条"编译器说了算"的断言
 
 **契约（E5 按此实现，形状可议、三条性质不可议）**：
 
-1. **候选集由谓词生成**：脚本按 §11.4 的 P1/P2/P3 原语清单扫 `src/widget/*.cpp`（以及 `src/**` 其余目录），对每个函数体判定"含门 且 门不是本体最后一条语句 且 本体内没有 `DeathWatch`"⇒ 进候选集。允许**保守多报**（例如门后只碰局部量的），因为多报的方向是"逼一个人做决定并留档"，漏报的方向是本缺陷族本身。
+1. **候选集由谓词生成**：脚本按 §11.4 的 P1/P2/P3 原语清单扫 `src/widget/*.cpp`（以及 `src/**` 其余目录），对每个函数体判定"含门 且 门不是本体最后一条语句 且 **本体内没有 REM3 游标**"⇒ 进候选集。
+   **⚠️「REM3 游标」= `DeathWatch` / `BubbleGuard` / `GeometryGuard` / `LayoutGuard` 四个 `LiveGuard` 实例中的任意一个（E20 实测后放宽，编排者裁定采纳；本条原文只写 `DeathWatch`）。理由是实测而不是口味**：只认 `DeathWatch` 会把 `Widget::dispatchMouse` 与 `dispatchKey` 判成缺陷，而这两帧在门后**重测了自己的游标**（`if (bubble.node() != w) return;`）——那正是 REM3-G2/G3 要的形状，只是写在 REM3 之前。**把正确的帧报成缺陷，是 lint 被静音的第一步**，而被静音的 lint 就是本节下面否决运行时计数器时说的那个下场。**代价原样登记在 §12.4 A′ 第 1 条**：本检查分不清"持有游标"与"检查游标"（S2/W2）。允许**保守多报**（例如门后只碰局部量的），因为多报的方向是"逼一个人做决定并留档"，漏报的方向是本缺陷族本身。
 2. **每个候选必须有归宿**：要么已被守卫，要么出现在 allowlist 里，且 allowlist 的每一条**必须带**：理由（对应谓词的哪个子句）、定级（S1/S2/S3）、轮次（W1/W2/W3）。**allowlist 就是 §11.4 的表**，两者不得各写一份（`Widget.cpp:74-75` 那条规矩：第二份手抄就是第二个会忘的地方）。
 3. **未归档的候选让 `verify.bat` 变红**。这就是"第 9 扇门忘了加守卫"的检出点：新写的门若既没守卫也没进 allowlist，构建就红。
 
@@ -1322,7 +1368,7 @@ grep -n "setGeometry(\|sizeHint()\|\.emit(\|setVisible(\|setLayout\|invalidateSi
 2. **`Platform.hpp` 的免检必须落到名字集合上，而不只是写在文档里。** `PlatformWindow` 声明了 `restore()` / `show()` / `invalidate()` / `close()`，把它们留在 P1 集合里，`painter.restore()` 和 `Layout::invalidate()` 就都成了门。**免检是有闸门的**：`setPlatform` / `installPlatform` 的 grep（§11.4 点名要求进 lint 的那两行）每次都跑，一旦出现安装点，免检当场失效、门禁变红。自检两例，一正一反。
 3. **空的名字集合会让正则退化成"匹配一切"。** `(?<n>)` 是空的交替分支，`\b(?<n>)\s*\(` 匹配每一个左括号。是 `Platform.hpp` 免检那个夹具**把 P1 集合合法地清空**之后暴露的——输出是 `first: P1 ` 后面什么都没有。**方向是红的，但内容是无意义的**，而无意义的红灯和常亮的红灯是同一个下场。现用 `(?!)` 兜底。
 
-**一处放宽，以及它的代价（**这是本节最需要复签的一条**）**：§11.9 的原文是"本体内没有 `DeathWatch`"，实现读作"本体内没有 **REM3 游标**"，即 `DeathWatch` / `BubbleGuard` / `GeometryGuard` / `LayoutGuard` 四个 `LiveGuard` 实例中的任意一个。**理由是实测而不是口味**：字面读法把 `Widget::dispatchMouse` 与 `dispatchKey` 判成缺陷，而这两个帧在门后**重测了自己的游标**（`if (bubble.node() != w) return;`）——REM3-G2/G3 要的形状，写在 REM3 之前。**把正确的帧报成缺陷，是 lint 被静音的第一步**，而被静音的 lint 正是 §11.9 否决运行时计数器时说的那个下场。**代价登记在 §12.4 A′**：本检查分不清"持有游标"与"检查游标"。
+**一处放宽，以及它的代价（**编排者已裁定采纳；契约正文已按此改写，见本节上面的第 1 条**）**：§11.9 的原文是"本体内没有 `DeathWatch`"，实现读作"本体内没有 **REM3 游标**"，即 `DeathWatch` / `BubbleGuard` / `GeometryGuard` / `LayoutGuard` 四个 `LiveGuard` 实例中的任意一个。**理由是实测而不是口味**：字面读法把 `Widget::dispatchMouse` 与 `dispatchKey` 判成缺陷，而这两个帧在门后**重测了自己的游标**（`if (bubble.node() != w) return;`）——REM3-G2/G3 要的形状，写在 REM3 之前。**把正确的帧报成缺陷，是 lint 被静音的第一步**，而被静音的 lint 正是 §11.9 否决运行时计数器时说的那个下场。**代价登记在 §12.4 A′**：本检查分不清"持有游标"与"检查游标"。
 
 **性能，因为它决定这条 lint 会不会被删掉。** 第一版按名字逐个扫（38 + 15 = 53 遍全树），实测 **14.9 秒**；折成每类一条编译后的交替正则 + 注释剥离结果按「路径 + 修改时间」记忆化后，**2.0 秒**（冷）/ **0.95 秒**（热）。自检 22 例 **6.4 秒**（含 3 次真进程 spawn 覆盖退出码路径、2 次真仓库全扫）。**门禁里合计约 8.5 秒。**
 
@@ -1830,7 +1876,7 @@ freed by thread T0 here:
 
 REM3-G7 给的处方（现场自己先做空检查）只在"现场可以整帧放弃"时可用，而这三处**都不能**：没有内容的窗口仍要摆标题栏，没有宿主的 layout 仍要跑 `onInvalidated()`。所以扩展的是构造方式而不是语义——**同一条链表、同一套取消、同一个 `alive()`，空仍然读作已死**；现场欠的是一句 `(p0 && !pw.alive())`，用门前捕获的局部量做短路，而不是让守卫去冒充一次死亡。
 
-**代价**：`Widget.hpp` 纯新增 39 行（一个 tag 类型 + 一个构造函数 + 理由），`sizeof(Widget)` 与 `sizeof(DeathWatch)` 均不变，原来那个带 `assert` 的构造函数一个字未改。**这一条请架构团队复签**：它动的是 §11.2「唯一权威」的 API 形状。
+**代价**：`Widget.hpp` 纯新增 39 行（一个 tag 类型 + 一个构造函数 + 理由），`sizeof(Widget)` 与 `sizeof(DeathWatch)` 均不变，原来那个带 `assert` 的构造函数一个字未改。**已由架构团队复签通过**（四条理由：语义零变更、tag 类型优于 `bool`、它偿还的是 Q7 判词里的**真实错误**而非加一个便利、纯新增回滚代价为零）。⇒ **§11.2 的 API 形状表与 §11.1 Q7 的判词已随之改到位**——本条动的是那节自称的"唯一权威"，**正文与实现不一致，本身就是那节存在的理由被违反**。双参构造已补 `explicit`（无隐式转换风险，只为与单参构造一致）。
 
 #### 红态先行（四条，全部在封门**之前**实跑并留档）
 
@@ -1933,11 +1979,12 @@ heap-use-after-free  READ 8   #0 geeyoou::Signal<Size>::emit      include\geeyoo
 
 #### 未验证 / 留给下一轮
 
-1. **`DeathWatch` 的 `MayBeNull` 构造函数是对 §11.2「唯一权威」API 形状的扩展**，需要架构团队复签。它不改语义、不改尺寸、不改取消策略，但 Q7 的判词要跟着改一句。
+1. ~~**`DeathWatch` 的 `MayBeNull` 构造函数是对 §11.2「唯一权威」API 形状的扩展**，需要架构团队复签。~~ **【已复签通过】** 它不改语义、不改尺寸、不改取消策略；**§11.2 的 API 形状表与 Q7 的判词已随之改到位**（构造函数与 tag 类型进表，Q7 第 2 条的主语收窄为"无条件解引用的现场"）。复签同时提的一处小瑕疵——双参构造未标 `explicit`——**已补**：无隐式转换风险，标它是为了与紧邻其上的单参构造一致。
 2. **RES-N1a / RES-N1b**（见上）：`Layout::invalidate` 的另外两条删除路径没关，两条都要一条以 `Layout*` 为键的游标链表。**S2 / S3，均排 W2。**
 3. **RES-N4a**：`focus_` 在降级后仍是悬垂成员。守卫是帧作用域的，这是 REM3-RES-1 在 `Window` 上的又一个实例。**S2 / W2。**
 4. **N4 的第一块（`widgetDetached` 覆盖的那条路径）现在多记一次 `framesDegraded`**：`focus_` 被清空 ⇒ 成员重读为假 ⇒ 帧降级。**行为逐位不变**（原本 `if (focus_)` 也不成立），变的只有诊断计数。按 REM3-G8 记录是对的（这一帧确实没把 `onFocusChanged(true)` 送出去，而放弃在返回值里不可见），但它是本轮唯一一处让既有路径**多记一次**的地方。既有门禁未受影响（Release stdout 逐字节相同证明了这一点），但**下一个改 soak 断言的人要知道有这条**。
-5. **`setFocusWidget` 的重入语义有一处收紧**：门里若有人重入 `setFocusWidget(other)`，本帧的 `focus_ != w` 会为真而降级，于是外层**不再**对 `other` 第二次调用 `onFocusChanged(true)`。原行为是通知两次。**这更像修复而不是回归，但它是一次行为改变**，今天全库没有任何路径这么做（整份 Release/Debug stdout 逐字节相同即证），**登记备查**。
+5. **`setFocusWidget` 的重入语义有一处收紧**：门里若有人重入 `setFocusWidget(other)`，本帧的 `focus_ != w` 会为真而降级，于是外层**不再**对 `other` 第二次调用 `onFocusChanged(true)`。原行为是通知两次。**这更像修复而不是回归，但它是一次行为改变。**
+   **今天不可达，两条独立依据**：(i) 整份 Release/Debug stdout 与基线逐字节相同；(ii) **静态复核**——库内 `onFocusChanged` 的覆写共 **4 个**，逐个看过，**没有一个重入 `setFocusWidget`**。(ii) 比 (i) 强，因为 (i) 只说明用例没踩到。⇒ **登记备查足够，不需要为它写用例**；哪天有人在 `onFocusChanged` 里改焦点，这条就是他要读的那一段。
 6. **`Layout::onInvalidated()` 在库、examples、tests 里的覆写数是 0**（本轮的用例是进程史上第一个）。所以 N1 的门此前从未真正跨越过——这解释了为什么它能活到第九次复扫才被发现，也意味着**这条门的红态完全依赖那条新用例存在**。
 7. **`/FAsc` 只取了 `AppWindow.cpp`。** N1 与 N4 的成本按 §11.5 的单价推算（各一到两个守卫 + 一次检查，冷路径），**未实测**——按 §11.5 自己的教训，这一条就是推算，标注在此。
 
@@ -2020,10 +2067,10 @@ heap-use-after-free  READ 8   #0 geeyoou::Signal<Size>::emit      include\geeyoo
 | 项 | 位置 | 级 | 轮 | 备注 |
 |---|---|---|---|---|
 | **#19** | `WindowHeader::relayoutItems`，range-for 里的 `setGeometry` | **S1** | **W2** | 门后继续用 `slots_` 的迭代器 ⇒ **迭代器失效**，与 BoxLayout scratch 越界同形。⚠️ **E19 之后它是本组最高的一条**，而且 §11.14 的 #16 用例正是从一个 header 尾部项的 `onGeometryChanged` 里发起的——**那条用例每跑一次就从这扇门里过一次** |
-| **#20** | `Cascader::relayoutColumns` 的 `setVisible`（循环内按下标读 `columns_`） | S2 | W2 | |
-| **#21** | `Cascader.cpp` 三处 `setGeometry` | S2 | **W2** | 下标能防重分配，**防不了缩短** |
+| **#20** | `Cascader::rebuildColumns` 的 `setVisible`（循环内按下标读 `columns_`） | S2 | W2 | **主语已更正**（原写作 `relayoutColumns`，全库无此函数），见 §11.4 |
+| **#21** | `Cascader::rebuildColumns` 三处 `setGeometry`（`:152/159/161`） | S2 | **W2** | 下标能防重分配，**防不了缩短**。主语同上 |
 | **#22** | `SelectBase::showCustomPopup` 的 `Window::openPopup` | S2 | W2 | **P3 家族的已确认样本**：宿主是 `Window` 不是 `this`，**D7 不豁免** |
-| **#23 / #2** | `PushButton::sizeHint` / `GroupBox::sizeHint` 的 `styleState()` 族 | **S3** | **W3** | **REM3-RES-2**：处理方向是**收紧契约**（`styleState()` / `onPaint()` 的覆写不得修改控件树），不是逐点加守卫——这一族在库里几十处。需要一次架构裁定（会不会有应用在 `onPaint` 里改树？） |
+| **#23 / #2** | `PushButton::sizeHint` / `GroupBox::sizeHint` 的 `styleState()` 族 | **S3** | **W3** | **REM3-RES-2**：处理方向是**收紧契约**（`styleState()` / `onPaint()` 的覆写不得修改控件树），不是逐点加守卫——这一族在库里几十处。需要一次架构裁定（会不会有应用在 `onPaint` 里改树？）。⚠️ **裁定时按 21 个站点算收益，不是 2 个**：本表只点了 `PushButton::sizeHint` / `GroupBox::sizeHint` 两处，E20 的 lint 在同一个 HEAD 上扫出**这一族共 21 个站点**（L-A 组，逐点表在 §11.4 末尾 L01-A…L21-A），遍布**每一个控件**的 `onPaint` / `sizeHint`。**收益面差一个数量级，而这正是"逐点加守卫 vs 收紧契约"这道选择题的分母** |
 | **#27** | **P3 家族，全库约 60 处 `.emit(`** | S2 | **W2（扫描任务）** | D7 豁免砍掉大半；剩下的是"发别人的信号 / 经别的对象绕一圈回来"那一类。产出物就是 §11.9 lint 的 allowlist |
 | **N2 / N3** | `Widget::childAppended()` / `childRemoved()`，门后 `markLayoutDirty()` | S2 | W2 | **外帧看着干净不等于内帧干净**：#13b 证明的是 `takeChild` 那一帧安全，它停在了 `childRemoved()` 的门口 |
 | **N5** | `Widget::animationTickTree()`，门后 `for (children_)` | **S1** | **W2** | |
@@ -2048,11 +2095,11 @@ heap-use-after-free  READ 8   #0 geeyoou::Signal<Size>::emit      include\geeyoo
 | **L-B 组（19）** | P3 `.emit(` | S2 | W2 | **#27 那个"扫描任务"的产出物，现在有了**：不是"全库约 60 处"这个估数，而是 19 个**门后确有后续代码**的具体帧 |
 | **L-D / E / G / H（14）** | 布局度量帧 5、构造函数帧 3、谓词名字碰撞误报 2、其余单点 4 | S2/S3 | W2/W3 | 见 §11.4 末尾 |
 
-**同时扫出的一条表内不一致（只报不改）**：#20 / #21 两行的主语写作 `Cascader.cpp` 的 **`relayoutColumns`**，而今天的 `Cascader.cpp` 里**没有这个函数**——对应代码在 `rebuildColumns()`。是改过名没同步，还是这两行本来指别处，**请架构团队裁定**。在裁定之前，lint 把 `rebuildColumns` 当未归档候选登记（L36-C），而 #20 / #21 归档不到任何东西。**这是"表不是扫出来的"第三个实例，只是这次是机器发现的。**
+**同时扫出的一条表内不一致（已裁定并落笔，本条从"只报不改"关闭）**：#20 / #21 两行的主语原写作 `Cascader.cpp` 的 **`relayoutColumns`**，而今天的 `Cascader.cpp` 里**没有这个函数**。核实结论是**主语写错了**：那几个行号（`:143` / `:152` / `:159` / `:161`）全部落在 `rebuildColumns()`（`Cascader.cpp:90-164`）体内，而 `relayoutColumns` 在本仓库历史里**从未存在过**（`git log -S` 只命中文档提交）——它是照着紧邻上一行的 `WindowHeader::relayoutItems` 编出来的名字。⇒ **两行的主语已改为 `rebuildColumns`（#21 一并补上函数名），`Cascader.cpp` 未动一字**；逐条依据见 §11.4 候选表上面那一段。**这是"表不是扫出来的"第三个实例，只是这次是机器发现的**——而它能被发现，是因为 lint 的键是 (文件, **函数**)：编造的函数名归档不到东西，偏了一百行的行号却看不出来。
 
 **lint 自身的三条残留，登记不掩盖：**
 
-1. **它分不清"持有游标"与"检查游标"。** §11.9 的原文是"本体内没有 `DeathWatch`"；实现把它读作"本体内没有 REM3 游标"（四个 `LiveGuard` 实例：`DeathWatch` / `BubbleGuard` / `GeometryGuard` / `LayoutGuard`）。**这是一次放宽，理由是实测**：字面读法把 `Widget::dispatchMouse` 与 `dispatchKey` 判成缺陷，而这两个帧都在门后**重测了自己的游标**（`if (bubble.node() != w) return;`）——比 REM3 早，形状一样。**代价是**：一个因为别的原因构造了 `LayoutGuard`、然后不问 `alive()` 就跨门的帧，在这里读作"已守卫"。**S2 / W2。** 闭合它要把"检查"绑到"门"上，那需要知道门对哪个指针危险（§11.4 的 hazard 条款）⇒ 需要一个编译器。
+1. **它分不清"持有游标"与"检查游标"。**（**编排者已裁定采纳这次放宽**，§11.9 第 1 条的契约正文已按此改写；**代价不因裁定而消失，原样登记在这里**。）§11.9 的原文是"本体内没有 `DeathWatch`"；实现把它读作"本体内没有 REM3 游标"（四个 `LiveGuard` 实例：`DeathWatch` / `BubbleGuard` / `GeometryGuard` / `LayoutGuard`）。**这是一次放宽，理由是实测**：字面读法把 `Widget::dispatchMouse` 与 `dispatchKey` 判成缺陷，而这两个帧都在门后**重测了自己的游标**（`if (bubble.node() != w) return;`）——比 REM3 早，形状一样。**代价是**：一个因为别的原因构造了 `LayoutGuard`、然后不问 `alive()` 就跨门的帧，在这里读作"已守卫"。**S2 / W2。** 闭合它要把"检查"绑到"门"上，那需要知道门对哪个指针危险（§11.4 的 hazard 条款）⇒ 需要一个编译器。
 2. **带游标的函数整体豁免。** 谓词按 §11.9 的原文是函数级的，所以 `AppWindow::relayout` 这种**已经封好**的帧从此不再是候选——**往它里面加第四扇门而不加检查，lint 看不见**。**S2 / W2。**
 3. **P1 是按名字匹配的**，所以 `VectorPath::close()` 撞上 `SelectBase::close()`（L71-G / L72-G 两条误报），反过来一个虚函数若被 `std::function` / 指针间接调用也扫不到（§11.9 末尾登记的第四类原语 `PlatformWindow` 的 7 个公有 `std::function` 成员仍未覆盖）。**S2 / W2，与 P4 谓词那条同批。**
 
@@ -2075,7 +2122,8 @@ heap-use-after-free  READ 8   #0 geeyoou::Signal<Size>::emit      include\geeyoo
 | 项 | 级 | 轮 | 备注 |
 |---|---|---|---|
 | **`PlatformWindow` 的 7 个公有 `std::function` 成员** | **S2** | **W2** | **第四类原语**：`onPaint` / `onMouse` / `onKey` / `onResize` / `onClose` / `onHitTest` / `onWindowStateChanged` 应用可直接赋值，调用它们能到达应用代码，但 **P1/P2/P3 一条都不覆盖**。**谓词漏的是整整一类，不是一个站点**。处理形态：加一条 P4（调用一个公有可赋值的可调用成员），或把这 7 个逐一登记进 P2。**判定归架构团队** |
-| **§11.9 的 lint 脚本** | **S1（按后果定级）** | **W2** | 契约已定、四条性质不可议，**脚本未实现**。它是"第 9 扇门忘了加守卫"的唯一机器检出点，而本族五次复发全部是人工复核漏掉的 |
+| **§11.9 的 lint 脚本** | **S1（按后果定级）** | — | **【E20】已实现**（`tools/lint-door-coverage.ps1`，`verify.bat` 步骤 [1/6] 内调用，四条性质逐条兑现）。它是"第 9 扇门忘了加守卫"的唯一机器检出点，而本族五次复发全部是人工复核漏掉的。**它自身的三条残留见 A′**，仍是 W2 |
+| **`.bat` 的行尾没有钉死（CRLF）** | S2 | **需架构裁定** | **本轮不做，登记。** §11.9 末尾那条真值表要**两个**条件同时成立（行尾 + 编码），今天撑着的只有 **ASCII 那一半**，它已经做成机器判据（`Test-BatchFileHygiene`）；**另一半（CRLF）本轮落不了地**。实测：本仓库 `core.autocrlf=true` 且**无 `.gitattributes`**，把 `.bat` 转成 CRLF 之后 `git status` 显示已修改而 `git diff --stat` **显示 0 行**——**这不是"diff 太大"，是根本不构成一个 diff**：评审不了、提交不了、下一次 checkout 就没了。唯一能落地的形态是一行 `.gitattributes`（`*.bat text eol=crlf`），但它会在**所有人下一次 checkout 时静默重写每一个 `.bat`**，那是**仓库级行为变更**，不是一次文件修改 ⇒ **归架构团队裁定**。⚠️ 连带事实（§11.9 已写，此处复述以免裁定时漏掉）：**ASCII 那条检查保护不了 `verify.bat` 自己**——它由 `verify.bat` 调起，而一个已经漂移的 `verify.bat` 在跑到这一步之前就已经错行执行了；**它保护的是下一次运行** |
 | **`Platform.hpp` 的 21 条虚函数免检** | — | — | 免检**理由是结构性质**（库里没有任何实现安装点，`setPlatform` / `installPlatform` 两个名字全库零命中），不是"今天没人这么用"。⚠️ **触发条件已写进表**：哪天出现任何形式的实现安装点（setter / 构造注入 / 工厂注册 / 测试替身），这 21 条一起进表 |
 
 #### E. 已登记的整洁性与行为项
@@ -2098,7 +2146,7 @@ heap-use-after-free  READ 8   #0 geeyoou::Signal<Size>::emit      include\geeyoo
 | **RES-N1a**：`onInvalidated()` 里换掉宿主的 layout | **S2** | **W2** | 宿主活着、`this` 被 `setLayout<Other>()` 释放，`host_` 的游标仍读真。`host()` 与 `setLayout` 都是 public。**廉价替代（比较 `host_->layout()` 与 `this`）已被明确否决**：它比的是一个已释放的指针值，两次 `setLayout` 就能让新对象落在旧地址上 ⇒ 静默答对 |
 | **RES-N1b**：进 `invalidate()` 时已 park 的 layout | S3 | **W2** | 没有宿主就没有游标，钩子里任何退栈到深度零的布局趟都会排空停车场并释放 `this`，`if (host_)` 就是那次读 |
 | **RES-N4a**：`focus_` 在降级后仍悬垂 | **S2** | **W2** | 守卫是帧作用域的，不修复对象状态——REM3-RES-1 在 `Window` 上的实例。**修法不是在守卫里置空**（那是 REM3-G1 禁止的、经 `this` 的写），而是给"不经 `takeChild` 的死亡"补一条通知路径，那是 ADR-R2-11 / REM3-G7 的题目 |
-| **`DeathWatch(const Widget*, MayBeNull)`** | — | **W2（复签）** | §11.2 的 API 形状扩展，**需要架构团队复签**。Q7 的 `assert` 前提（"上守卫就是马上要解引用"）对**有条件解引用的可选成员**不成立，三条门都是证据。语义、尺寸、取消策略均未变 |
+| **`DeathWatch(const Widget*, MayBeNull)`** | — | **已关闭（复签通过）** | §11.2 的 API 形状扩展，**架构团队已复签通过**。Q7 的 `assert` 前提（"上守卫就是马上要解引用"）对**有条件解引用的可选成员**不成立，三条门都是证据。语义、尺寸、取消策略均未变。**§11.2 的形状表与 Q7 判词已同步改到位，双参构造已补 `explicit`** |
 | **RES-N1c**：以 `Layout*` 为键的游标链表 | — | **W2（裁定）** | RES-N1a / RES-N1b **两条都只能靠它关**。要一条第五链表 + 一个会取消它的 `~Layout`（今天是头文件里的 `= default`）。按 §11.1 判据 1/2 先判它的取消策略与决策读者，再决定是新开还是复用 |
 
 ---
