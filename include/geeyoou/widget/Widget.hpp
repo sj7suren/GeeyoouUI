@@ -593,7 +593,7 @@ class DeathWatch : private LiveGuard<g_deathWatch> {
   // ALREADY null in front of the door -- there is nothing there to die, and a
   // frame that gave up over it would be recording a degradation that did not
   // happen.  The shape is `(p0 && !pw.alive())`, with p0 the pre-door capture.
-  DeathWatch(const Widget* w, MayBeNull)
+  explicit DeathWatch(const Widget* w, MayBeNull)
       : LiveGuard<g_deathWatch>(const_cast<Widget*>(w)) {}
 
   using LiveGuard<g_deathWatch>::alive;
