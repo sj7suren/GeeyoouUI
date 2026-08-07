@@ -1,0 +1,58 @@
+THE RESIDUAL HOLE, AS A FIXTURE.  Currently expected 2; the point is the third
+line of the classifier's output, not the exit code.
+
+    SetWindowTextW(hwnd, alreadyFreedString)
+
+Use site: user32, because the OS is the thing dereferencing the pointer.  Free
+site: the IME, because it is the thing that ran the free.  Both third-party, so
+the two RESPONSIBILITY stacks both say "not ours" and the report is filed
+[known] -- while the string itself came out of OUR operator new, in our Label
+constructor.  Memory we allocated, that something dangles into, is our defect
+to fix no matter whose finger was on the trigger.
+
+That is what the OWNERSHIP judgment is for, and what this fixture pins.  In
+phase A the classifier must print
+
+    alloc: ... geeyoou::Label::Label  [Ours]  ...\src\widget\Label.cpp
+    ^ SHADOW: phase B would call this report OURS (allocation-site owner).
+
+and must STILL exit 2.  If the exit code here ever becomes 1 without the phase
+B evidence in the header of classify-asan.ps1 having been collected first,
+somebody promoted a shadow judgment on a hunch.
+
+Note the allocation stack has exactly the same plumbing in front of it as the
+free stack does -- gyAllocate / operator new, both in tests\framework\Test.cpp.
+If the plumbing skip were not applied to the allocation stack too, EVERY report
+in the binary would show alloc: Test.cpp [Ours] and this judgment would carry
+no information at all.  Compare third-party-sogou-uaf.log, where the identical
+plumbing is crossed and the answer comes out SogouPY.ime: that is the proof the
+ownership rule discriminates rather than just always saying "ours".
+
+style.the_cascade_is_decided_per_property  PASS
+header.retitle_replaces_the_caption  PASS
+
+208 个用例，0 个失败
+=================================================================
+==20337==ERROR: AddressSanitizer: heap-use-after-free on address 0x000c4b118220 at pc 0x7ffbb1a6d210 bp 0x00e2a97fd110 sp 0x00e2a97fd118
+READ of size 2 at 0x000c4b118220 thread T0
+    #0 0x7ffbb1a6d210 in SetWindowTextW (C:\Windows\System32\user32.dll+0x18009d210)
+    #1 0x7ffbb1a6c880 (C:\Windows\System32\user32.dll+0x18009c880)
+    #2 0x7ffb2c4d1e90 (C:\Windows\System32\IME\SogouPY.ime+0x180041e90)
+
+0x000c4b118220 is located 0 bytes inside of 48-byte region [0x000c4b118220,0x000c4b118250)
+freed by thread T0 here:
+    #0 0x7ffecd54ec38 in _asan_wrap__CrtIsValidHeapPointer+0xb58 (E:\Develop\tools\GeeyoouUI\build-asan\bin\clang_rt.asan_dynamic-x86_64.dll+0x18004ec38)
+    #1 0x7ff64c7702f8 in `anonymous namespace'::gyFree E:\Develop\tools\GeeyoouUI\tests\framework\Test.cpp:52
+    #2 0x7ff64c76dea8 in operator delete E:\Develop\tools\GeeyoouUI\tests\framework\Test.cpp:80
+    #3 0x7ffb2c4c1330 (C:\Windows\System32\IME\SogouPY.ime+0x180031330)
+    #4 0x7ffb2c4bf880 (C:\Windows\System32\IME\SogouPY.ime+0x18002f880)
+
+previously allocated by thread T0 here:
+    #0 0x7ffecd54d0f0 in _asan_wrap__CrtIsValidHeapPointer+0x9f0 (E:\Develop\tools\GeeyoouUI\build-asan\bin\clang_rt.asan_dynamic-x86_64.dll+0x18004d0f0)
+    #1 0x7ff64c770100 in `anonymous namespace'::gyAllocate E:\Develop\tools\GeeyoouUI\tests\framework\Test.cpp:33
+    #2 0x7ff64c76dc10 in operator new E:\Develop\tools\GeeyoouUI\tests\framework\Test.cpp:65
+    #3 0x7ff64c8b4420 in geeyoou::Label::Label E:\Develop\tools\GeeyoouUI\src\widget\Label.cpp:44
+    #4 0x7ff64c8b3010 in geeyoou::WindowHeader::build E:\Develop\tools\GeeyoouUI\src\widget\WindowHeader.cpp:41
+
+SUMMARY: AddressSanitizer: heap-use-after-free (C:\Windows\System32\user32.dll+0x18009d210)
+==20337==ABORTING

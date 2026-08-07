@@ -1,0 +1,40 @@
+THE FAIL-OPEN THE INTEGRITY SENTINEL CLOSES.  Expected verdict: 3, gate RED.
+
+This is what the ASan leg produces the day ASAN_OPTIONS=continue_on_error=1
+stops working.  That option is a VENDOR EXTENSION of MSVC's AddressSanitizer,
+not an upstream ASan option, so a toolchain upgrade can withdraw it without
+anything in this repository changing.  When it goes, ASan reverts to aborting
+at the first report -- and on a machine with the IME installed the first report
+is the IME's, fired while the OS tears a window down, i.e. before the suite has
+finished.  The process dies mid-run.
+
+Look at what is in the file and, more importantly, what is not:
+
+  * some PASS lines, then nothing.  The suite stops in the middle of the
+    alphabet -- 'g' here -- because the run was killed, not because it ended.
+  * NO "ERROR: AddressSanitizer" text.  ASan's own report went to stderr in a
+    different buffer, or the redirect lost it, or the abort beat the flush.
+  * NO test-suite summary line, because Test.cpp never reached the printf.
+
+Before the sentinel, the classifier read this file, found zero reports, and
+answered EXIT_CLEAN = 0.  verify.bat maps 0 to "leg unchanged" and the gate
+went GREEN -- for a run that did not happen.  A silent pass is the worst
+possible answer here: it is indistinguishable, in the summary table, from a
+run where every test passed and ASan found nothing.
+
+The sentinel is the cheapest possible fix and it goes FIRST, before parsing,
+before counting reports, before anything that can return 0: no summary line, no
+verdict.  It costs one linear scan and it converts an invisible failure into a
+red gate that names the option to check.
+
+Yes, this makes the classifier depend on the exact shape of one printf in
+tests\framework\Test.cpp.  That coupling is one line on each side and it is
+written down at both ends.  The alternative is a memory-safety gate that cannot
+distinguish a clean run from a corpse.
+
+box.an_item_never_grows_past_its_maximum  PASS
+box.hiding_and_removing_close_the_gap_they_leave  PASS
+box.items_get_their_preferred_size_with_spacing_between_widgets  PASS
+d7.destroying_the_signal_owner_is_caught_in_debug_contained_in_release  PASS
+detach_notify.destruction_announces_nothing  PASS
+geom_baseline.appwindow_border_width_decides_the_inset  PASS

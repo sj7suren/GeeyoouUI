@@ -1,6 +1,7 @@
 Two reports in one run.  The first is the injected IME, the second is real.
 One ours is enough to turn the gate red -- a third-party report can never
 cancel out one of ours.
+208 个用例，0 个失败
 =================================================================
 ==24777==ERROR: AddressSanitizer: heap-use-after-free on address 0x000ffd3c1a10 at pc 0x7ffb2c4d1e90 bp 0x0093f7bfe010 sp 0x0093f7bfe018
 READ of size 8 at 0x000ffd3c1a10 thread T0

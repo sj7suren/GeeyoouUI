@@ -2,6 +2,7 @@ Both blame stacks are unsymbolised.  We cannot tell whose defect this is, so
 the fail-closed rule applies and the gate must go red.  Do not "fix" this by
 calling unknown frames third-party: that is precisely how a classifier starts
 waving real defects through.
+208 个用例，0 个失败
 =================================================================
 ==22510==ERROR: AddressSanitizer: heap-use-after-free on address 0x0009cc41f770 at pc 0x7ffb44112200 bp 0x00551a3fd880 sp 0x00551a3fd888
 WRITE of size 4 at 0x0009cc41f770 thread T0

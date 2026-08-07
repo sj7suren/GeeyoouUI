@@ -11,6 +11,7 @@ one direction or the other.
 
 Also the case a "BOTH sites must be ours" rule would ship: we freed it, they
 read it.  One blame stack is enough.
+208 个用例，0 个失败
 =================================================================
 ==21044==ERROR: AddressSanitizer: heap-use-after-free on address 0x000c4b118220 at pc 0x7ffbb1a6d210 bp 0x00e2a97fd110 sp 0x00e2a97fd118
 READ of size 2 at 0x000c4b118220 thread T0

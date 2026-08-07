@@ -1,5 +1,28 @@
-A report whose stacks never made it to disk -- the process died, or the log was
-cut.  Nothing to attribute, therefore ours.
+A COMPLETE RUN CONTAINING ONE INCOMPLETE REPORT.  Expected verdict: 1.
+
+Read this one against no-suite-summary.log; they are the two halves of the same
+question and they must not be confused.
+
+  * HERE, the run finished -- the suite's summary line is present -- but one
+    report inside it lost its stacks.  With continue_on_error=1 the reports are
+    written from a signal-ish context while the suite keeps printing to the same
+    handle, so an interleaved write can land in the middle of a stack dump and
+    the frames simply are not there.  There is a report and nothing to
+    attribute it to, so it is OURS: exit 1, gate red.
+
+  * IN no-suite-summary.log, the run itself died.  There is no summary line, so
+    there is nothing to attribute anything to -- not this report, not the
+    reports that would have come later, not the tests that never ran.  That is
+    exit 3, and it is a different failure with a different fix.
+
+Do not "simplify" these two into one case.  The distinction is exactly the one
+the integrity sentinel adds, and a fixture set that cannot tell a damaged
+report from a dead run cannot tell whether the sentinel still works.
+
+layout.a_stretch_child_takes_the_slack  PASS
+tree.add_builds_parent_and_child_links  PASS
+
+208 个用例，0 个失败
 =================================================================
 ==24102==ERROR: AddressSanitizer: heap-use-after-free on address 0x000f0e0d0c0b at pc 0x7ff64c800000 bp 0x0000000000 sp 0x0000000000
 READ of size 8 at 0x000f0e0d0c0b thread T0

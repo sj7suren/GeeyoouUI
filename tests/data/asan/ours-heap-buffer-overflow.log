@@ -1,6 +1,7 @@
 Not the use-after-free family, so the BROAD rule applies: any GeeyoouUI frame
 anywhere in the report is ours.  Same semantics the gate had before
 tools/classify-asan.ps1 existed.
+208 个用例，0 个失败
 =================================================================
 ==23301==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x000d5a90b234 at pc 0x7ff64c8c4d90 bp 0x00c19dbfd200 sp 0x00c19dbfd208
 WRITE of size 4 at 0x000d5a90b234 thread T0

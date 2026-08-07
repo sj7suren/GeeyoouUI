@@ -11,7 +11,7 @@ Our Window::~Window is also on the use stack, five frames out, because it is
 what called DestroyWindow.  The old any-occurrence findstr matched on that.
 tree.style_classes_split_on_whitespace  PASS
 
-181 cases, 0 failures
+208 个用例，0 个失败
 =================================================================
 ==17432==ERROR: AddressSanitizer: heap-use-after-free on address 0x000ffd3c1a10 at pc 0x7ffb2c4d1e90 bp 0x0093f7bfe010 sp 0x0093f7bfe018
 READ of size 8 at 0x000ffd3c1a10 thread T0

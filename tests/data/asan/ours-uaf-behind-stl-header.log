@@ -1,6 +1,7 @@
 The innermost frame is inside Microsoft's basic_string, inlined from a VC
 header.  The MSVC STL is not the culprit; our dangling std::string is.  The
 classifier must walk THROUGH toolchain frames and land on Geeyoou::ListView.
+208 个用例，0 个失败
 =================================================================
 ==21987==ERROR: AddressSanitizer: heap-use-after-free on address 0x000a77d2c118 at pc 0x7ff64c9120e0 bp 0x0071b4bfe420 sp 0x0071b4bfe428
 READ of size 8 at 0x000a77d2c118 thread T0

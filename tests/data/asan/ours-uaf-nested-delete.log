@@ -1,0 +1,53 @@
+THE FALSE GREEN THAT KILLED THE 8-FRAME WINDOW.  Read the "freed by" stack.
+
+The classifier used to scan the first 8 frames of a stack for the OUTERMOST
+operator new / operator delete frame and start assigning blame after it.  A
+nested destructor puts a SECOND operator delete on the stack -- the parent
+object being deleted, which is what ran our destructor in the first place --
+and "outermost within 8" walks straight past the real free site (#3, ours) to
+land on the third-party smart pointer at #5.  Verdict: third-party.  A
+use-after-free of ours, filed as somebody else's, silently, on a green gate.
+
+Nothing in the fixture set had two operator frames in one stack, so the bug was
+invisible to the suite that was supposed to be guarding this file.  The magic
+number was the tell: 8 is not a property of anything, it was slack chosen
+because the structure had not been worked out.
+
+The anchored skip gets this right by construction.  The plumbing is the
+CONTIGUOUS run of frames sharing one origin (tests\framework\Test.cpp) that
+contains an operator frame -- #1 and #2.  #3 is a different file, so the run
+ends there and #3 gets the blame.  #4 is never reached, so it cannot matter how
+many operator frames sit behind it.
+
+Keep both this and third-party-sogou-uaf.log.  They have the SAME first three
+frames; only what follows the plumbing differs, and that is exactly the
+distinction the classifier is paid to make.
+
+box.items_get_their_preferred_size_with_spacing_between_widgets  PASS
+removal.a_removed_child_is_not_laid_out_again  PASS
+
+208 个用例，0 个失败
+=================================================================
+==19771==ERROR: AddressSanitizer: heap-use-after-free on address 0x000b71f4e0c0 at pc 0x7ffb2c4d1e90 bp 0x0093f7bfe010 sp 0x0093f7bfe018
+READ of size 8 at 0x000b71f4e0c0 thread T0
+    #0 0x7ffb2c4d1e90 (C:\Windows\System32\IME\SogouPY.ime+0x180041e90)
+    #1 0x7ffbb1a23c40 (C:\Windows\System32\user32.dll+0x180053c40)
+
+0x000b71f4e0c0 is located 8 bytes inside of 72-byte region [0x000b71f4e0b8,0x000b71f4e100)
+freed by thread T0 here:
+    #0 0x7ffecd54ec38 in _asan_wrap__CrtIsValidHeapPointer+0xb58 (E:\Develop\tools\GeeyoouUI\build-asan\bin\clang_rt.asan_dynamic-x86_64.dll+0x18004ec38)
+    #1 0x7ff64c7702f8 in `anonymous namespace'::gyFree E:\Develop\tools\GeeyoouUI\tests\framework\Test.cpp:52
+    #2 0x7ff64c76dea8 in operator delete E:\Develop\tools\GeeyoouUI\tests\framework\Test.cpp:80
+    #3 0x7ff64c8a0f10 in geeyoou::Widget::~Widget E:\Develop\tools\GeeyoouUI\src\widget\Widget.cpp:96
+    #4 0x7ff64c76dea8 in operator delete E:\Develop\tools\GeeyoouUI\tests\framework\Test.cpp:80
+    #5 0x7ffb2c4c1330 (C:\Windows\System32\IME\SogouPY.ime+0x180031330)
+    #6 0x7ffbb1a55110 in DestroyWindow (C:\Windows\System32\user32.dll+0x180085110)
+
+previously allocated by thread T0 here:
+    #0 0x7ffecd54d0f0 in _asan_wrap__CrtIsValidHeapPointer+0x9f0 (E:\Develop\tools\GeeyoouUI\build-asan\bin\clang_rt.asan_dynamic-x86_64.dll+0x18004d0f0)
+    #1 0x7ff64c770100 in `anonymous namespace'::gyAllocate E:\Develop\tools\GeeyoouUI\tests\framework\Test.cpp:33
+    #2 0x7ff64c76dc10 in operator new E:\Develop\tools\GeeyoouUI\tests\framework\Test.cpp:65
+    #3 0x7ff64c8a0880 in geeyoou::Widget::addChild E:\Develop\tools\GeeyoouUI\src\widget\Widget.cpp:288
+
+SUMMARY: AddressSanitizer: heap-use-after-free (C:\Windows\System32\IME\SogouPY.ime+0x180041e90)
+==19771==ABORTING

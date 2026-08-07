@@ -1,4 +1,5 @@
 Broad rule, and nothing of ours appears in the report at all.  Third-party.
+208 个用例，0 个失败
 =================================================================
 ==23788==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x000b3311c904 at pc 0x7ffb2c4e0110 bp 0x0044f6bfd600 sp 0x0044f6bfd608
 READ of size 1 at 0x000b3311c904 thread T0

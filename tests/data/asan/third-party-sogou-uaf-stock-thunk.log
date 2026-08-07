@@ -6,6 +6,16 @@ Kept as a separate case so the allocator-plumbing skip is proved to work in
 both worlds: the day tests\framework\Test.cpp stops overriding the global
 operator, or somebody points this classifier at a log from a different binary,
 the answer must not change.
+
+SECOND JOB, AND DO NOT "FIX" IT: the suite summary line below is encoded in
+GBK, while every other fixture here has it in UTF-8.  That is deliberate.  The
+integrity sentinel in classify-asan.ps1 must match the SHAPE of that line, not
+its bytes -- the suite is compiled /utf-8 today, but the day somebody drops
+that flag the same words reach the log as GBK, and a sentinel that had been
+pinned to UTF-8 bytes would fail the gate on every run for no reason.  One
+fixture in the other encoding is what keeps that claim honest.  If you
+normalise this file's encoding, the sentinel is untested in that direction.
+208 ¸öÓÃÀý£¬0 ¸öÊ§°Ü
 =================================================================
 ==18855==ERROR: AddressSanitizer: heap-use-after-free on address 0x000ffd3c1a10 at pc 0x7ffb2c4d1e90 bp 0x0093f7bfe010 sp 0x0093f7bfe018
 READ of size 8 at 0x000ffd3c1a10 thread T0
