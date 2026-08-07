@@ -154,15 +154,65 @@ void Window::widgetDetached(Widget* w) {
 }
 
 // ------------------------------------------------------------------ focus ---
+// N4 (section 11.4 of docs/iterations/02-layout-engine.md).
+//
+// onFocusChanged is a protected virtual: a P1 door, and one the library itself
+// walks straight through -- SelectBase::onFocusChanged(false) closes its popup,
+// which emits openStateChanged, and a slot on that signal is application code.
+// The two statements below therefore straddle a door, and the second one reads
+// focus_ OUT OF `this` and makes a virtual call THROUGH it.
+//
+// WHAT widgetDetached ALREADY COVERS, because the answer changes what this
+// checkpoint has to be.  Window::widgetDetached has cleared focus_ since R1,
+// per node of the departing subtree, and it runs from announceDetached -- which
+// is reached from Widget::takeChild, the one door a subtree leaves a living
+// tree by (ADR-R2-11 section 3).  So every removal-shaped death, including the
+// grandchild case and including the SelectBase path section 12.4 sketched, is
+// ALREADY handled: focus_ goes null and the `if` below simply does not fire.
+// That bookkeeping has no hole in it.
+//
+// WHAT IS LEFT is the two shapes it was never about:
+//
+//   * A widget destroyed WITHOUT a takeChild.  ~Widget announces nothing to a
+//     Window -- deliberately, see ADR-R2-11 section 3 -- so an orphan, or a
+//     subtree the application detached earlier and drops now, leaves focus_
+//     pointing at freed memory with nothing to notice.  setFocusWidget does not
+//     require its argument to be in the tree, and neither did it ever.
+//   * THIS WINDOW dying in its own door.  Closing a window from a focus-out
+//     handler is an ordinary thing to write, and no amount of widgetDetached
+//     bookkeeping can help a frame whose `this` is gone.
+//
+// Hence the two cursors and the re-read, in the order REM3-G3 fixes: `this`
+// first, because the re-read below dereferences it; then the member, because
+// focus_ moving means this frame is looking at an object it has no cursor on
+// (a re-entrant setFocusWidget from inside the door is the live way to get
+// there, and widgetDetached nulling focus_ is the common one); then the
+// incoming widget's own cursor, which catches what the re-read cannot -- the
+// member still names it and the object is gone.  MayBeNull because
+// setFocusWidget(nullptr) is how Widget::clearFocus is written, and `w &&`
+// below is this site's own null test (REM3-G7).
+//
+// NOT REPAIRED, and registered: a guard is frame-scoped.  When the incoming
+// widget dies here, focus_ is left naming it.  Nulling it would be a write
+// through `this` from a degraded frame, which is precisely what REM3-G1
+// forbids, and the state repair for cached pointers is ADR-R2-11's job -- for
+// which this pointer has a notification path already, just not for a death that
+// skips takeChild.
 void Window::setFocusWidget(Widget* w) {
   if (w == focus_) return;
   if (w && !w->isFocusable()) return;
 
   Widget* old = focus_;
   focus_ = w;
+  const detail::DeathWatch self(this);
+  const detail::DeathWatch incoming(w, detail::DeathWatch::MayBeNull{});
   // Notify AFTER focus_ has moved, so a handler that queries hasFocus() during
   // the callback sees the new, settled state rather than a transient one.
   if (old) old->onFocusChanged(false);
+  if (!self.alive() || focus_ != w || (w && !incoming.alive())) {
+    detail::frameDegraded();  // REM3-G8: once per frame, and the frame ends here
+    return;
+  }
   if (focus_) focus_->onFocusChanged(true);
 }
 
