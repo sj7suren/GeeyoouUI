@@ -74,6 +74,45 @@ float AppWindow::borderWidth() const {
   return 1.0f;
 }
 
+// Row #16 of section 11.4's table, the highest-graded one in it, and the
+// function the comment above GeometryGuard in Widget.cpp has been holding up as
+// the example all along: "onGeometryChanged runs APPLICATION code:
+// AppWindow::relayout emits contentResized from inside one, and a slot is
+// entitled to destroy widgets -- this one included."  That comment bought
+// setGeometry's OWN frame a cursor.  This frame sits underneath it and had
+// none, on a path that runs on every resize.
+//
+// THREE DOORS AND THREE CHECKPOINTS.  Each setGeometry below can reach
+// application code, and what follows each one decides what its check contains:
+//
+//   * header_->setGeometry -- WindowHeader::onGeometryChanged relayouts its
+//     trailing items, and any of those is an application widget.  Everything
+//     after it is reached through `this`, content_ or fill_.
+//   * content_->setGeometry -- a plain Widget today, which is NOT an invariant:
+//     content() is public and one setLayout<> on it makes this a door for real.
+//     After it, fill_ and `this`.
+//   * fill_->setGeometry -- the application's own content widget, so this one
+//     is application code by construction.  After it, only `this`.
+//
+// The emit is a door too and is NOT dangerous: contentResized belongs to this
+// window, so contract D7 forbids a slot from destroying it, and update() on the
+// next line touches nothing else.  Section 11.4 #17, and it is the one place in
+// this file where D7 does real work.
+//
+// WHICH POINTERS GET CURSORS.  header_ does not, correcting the guard list in
+// the table's #16 row: it is dereferenced at the door and never again, so a
+// cursor on it would answer a question with no consumer.  content_ does -- it
+// is non-null by this function's first line, so the plain constructor applies.
+// fill_ takes the MayBeNull form, because a window with no content widget yet
+// is an ordinary window and the frame lays it out under `if (fill_)`.
+//
+// WHY THE MEMBER RE-READS ARE THE LOAD-BEARING HALF HERE, unlike everywhere
+// else in this family: since E15 this class OWNS a onDescendantDetached that
+// nulls all three members, and the broadcast runs BEFORE anything is freed.  So
+// the reachable failure is a NULL dereference rather than a dangling one -- the
+// reproducer reddens on all three legs, not just the ASan one.  The cursors are
+// defence in depth and are worth their five instructions anyway, because they
+// are the half that does not depend on that hook being correct.
 void AppWindow::relayout() {
   if (!header_ || !content_) return;
 
@@ -81,10 +120,42 @@ void AppWindow::relayout() {
   const Rect r = localRect().deflated(b);
   const float hh = header_->isVisible() ? header_->height() : 0.0f;
 
+  // Pre-door captures and cursors.  In front of the FIRST door, not in front of
+  // the statement that uses them: a cursor registered after the object died
+  // would read alive() forever, which is the mistake registered against
+  // announceDetached in section 11.11.
+  Widget* const ct0 = content_;
+  Widget* const fl0 = fill_;
+  const detail::DeathWatch self(this);
+  const detail::DeathWatch ctw(content_);
+  const detail::DeathWatch flw(fill_, detail::DeathWatch::MayBeNull{});
+
   header_->setGeometry({r.x(), r.y(), std::max(0.0f, r.width()), hh});
+  // REM3-G3, immediately after door one.  `this` first because the two re-reads
+  // dereference it; then the members, because a member that moved makes its own
+  // cursor answer a question about the wrong object; then the cursors.
+  if (!self.alive() || content_ != ct0 || fill_ != fl0 || !ctw.alive() ||
+      (fl0 && !flw.alive())) {
+    detail::frameDegraded();  // REM3-G8: once per frame, and the frame ends here
+    return;
+  }
   const Size cs{std::max(0.0f, r.width()), std::max(0.0f, r.height() - hh)};
   content_->setGeometry({r.x(), r.y() + hh, cs.width, cs.height});
+  // Door two.  THREE checks, not five: content_ is never touched again after
+  // this line, so it keeps neither its re-read nor its cursor -- the same
+  // reasoning CP-S2 is written under in ScrollArea::relayout.
+  if (!self.alive() || fill_ != fl0 || (fl0 && !flw.alive())) {
+    detail::frameDegraded();
+    return;
+  }
   if (fill_) fill_->setGeometry({0.0f, 0.0f, cs.width, cs.height});
+  // Door three.  Only `this` is left: the emit reads a member of this window
+  // and update() walks its parent chain, and neither content_ nor fill_ is
+  // named again.
+  if (!self.alive()) {
+    detail::frameDegraded();
+    return;
+  }
 
   contentResized.emit(cs);
   update();
