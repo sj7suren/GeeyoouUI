@@ -120,6 +120,8 @@ $plat      = Join-Path $fixtures 'platform'
 $platIn    = Join-Path $fixtures 'platform-installed'
 $batOk     = Join-Path $fixtures 'bat-ascii'
 $batBad    = Join-Path $fixtures 'bat-nonascii'
+$gateNone  = Join-Path $fixtures 'gate-no-lint-call'
+$gateRem   = Join-Path $fixtures 'gate-call-in-a-comment'
 
 # ---------------------------------------------------------------------------
 # 1-2  the two directions, on fixtures
@@ -200,6 +202,84 @@ Test-Case -Name 'a_virtual_declared_outside_the_widget_base_is_still_found' `
     -Why 'the two holes are different. Declaration-side generation rooted at Widget.hpp still misses every Layout hook' `
     -Root $scanroot -Doc (Join-Path $scanroot 'doc-empty-table.md') -Expect 1 `
     -MustSay @('Layouty.cpp', 'invalidate')
+
+# ---------------------------------------------------------------------------
+# 13b-13c  property 4's scan root, ON THE CANDIDATE SIDE.
+#
+# Two cases and not one, because they are TWO HOLES, and the tree has now been
+# taught that lesson three times: `layoutRect()` was missed because a virtual
+# call has no name to grep, the Layout hooks were missed because the scan root
+# was written too narrowly, and closing either did nothing for the other.  Here
+# it is again, one level down: widening the candidate root to include\ finds
+# NOTHING unless the splitter also stops reading `template <...>` as
+# not-a-function, and teaching the splitter about templates finds nothing while
+# the root is still `src`.  So each fixture must be able to redden alone.
+# ---------------------------------------------------------------------------
+Test-Case -Name 'a_plain_inline_in_a_header_is_a_candidate' `
+    -Why 'the candidate side was rooted at src while the librarys code is not all in src' `
+    -Root $basic -Doc (Join-Path $basic 'doc-header-inline-not-archived.md') -Expect 1 `
+    -MustSay @('Thing.hpp', 'reseat')
+
+Test-Case -Name 'a_template_body_in_a_header_is_a_candidate' `
+    -Why '`template` is in NotAFunctionHead, so every template body read as not-a-function and its doors were never scanned' `
+    -Root $basic -Doc (Join-Path $basic 'doc-header-template-not-archived.md') -Expect 1 `
+    -MustSay @('Thing.hpp', 'adopt')
+
+# ---------------------------------------------------------------------------
+# 13d  P2 is not P1: a QUALIFIED P2 call is still a door
+#
+# `Base::relayout()` picks the implementation; it does not stop the
+# implementation running application code.  The lookbehind that expresses "a
+# qualified call is statically bound" belongs to P1, and copying it onto P2 was
+# a category error whose direction is UNDER-REPORTING.
+# ---------------------------------------------------------------------------
+Test-Case -Name 'a_qualified_p2_call_is_still_a_door' `
+    -Why 'the qualified-call exclusion is about virtual dispatch, and P2 is not dispatch' `
+    -Root $basic -Doc (Join-Path $basic 'doc-qualified-p2-not-archived.md') -Expect 1 `
+    -MustSay @('qualifiedP2CallIsStillADoor') `
+    -MustNotSay @('qualifiedCallIsNotADoor')
+
+# ---------------------------------------------------------------------------
+# 13e-13g  THE P2 LIST IS THE DOCUMENT'S, and there is no second copy
+#
+# It used to be an array in the lint with a comment saying "when you add one
+# here, add it there too", and the two copies had already drifted.  These three
+# cases are the machine check that the script now READS the document: narrow the
+# document's clause and the candidate it named disappears; break the clause and
+# the run fails closed rather than falling back on anything.
+# ---------------------------------------------------------------------------
+Test-Case -Name 'the_p2_primitive_list_comes_from_the_document' `
+    -Why 'the differential proof: drop setGeometry from the documents P2 clause and its candidate must vanish' `
+    -Root $basic -Doc (Join-Path $basic 'doc-p2-clause-narrowed.md') -Expect 0 `
+    -MustNotSay @('qualifiedP2CallIsStillADoor')
+
+Test-Case -Name 'a_document_with_no_p2_clause_is_exit_3' `
+    -Why 'no P2 list means half the predicate is missing; silently scanning with none would be a green run' `
+    -Root $basic -Doc (Join-Path $basic 'doc-no-p2-clause.md') -Expect 3 `
+    -MustSay @('P2 primitive clause')
+
+Test-Case -Name 'a_p2_token_that_is_not_an_identifier_is_exit_3' `
+    -Why 'skipping the token instead would let one typo in the document silently delete a primitive' `
+    -Root $basic -Doc (Join-Path $basic 'doc-p2-token-not-an-identifier.md') -Expect 3 `
+    -MustSay @('cannot reduce')
+
+# ---------------------------------------------------------------------------
+# 13h-13i  IS THE GATE STILL PLUGGED IN?
+#
+# Measured before it was written: delete `call :lint_doors` from verify.bat and
+# the gate runs all six steps and prints "gate is GREEN".  Both checkers redden
+# the gate by setting a variable from inside a subroutine, so an uncalled
+# subroutine is a checker that fails open and looks like a clean run.
+# ---------------------------------------------------------------------------
+Test-Case -Name 'a_gate_that_stopped_calling_the_lint_reddens' `
+    -Why 'a checker nobody invokes fails open, silently, and the run looks exactly like a clean one' `
+    -Root $gateNone -Doc (Join-Path $gateNone 'doc-empty-table.md') -Expect 1 `
+    -MustSay @('never calls :lint_doors')
+
+Test-Case -Name 'a_call_that_survives_only_as_a_comment_does_not_count' `
+    -Why 'verify.bat has more rem than code and its comments quote these very lines; a raw match would pass' `
+    -Root $gateRem -Doc (Join-Path $gateRem 'doc-empty-table.md') -Expect 1 `
+    -MustSay @('never calls :lint_doors')
 
 # ---------------------------------------------------------------------------
 # 14-15  the Platform exemption, and the condition that ends it

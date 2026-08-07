@@ -302,6 +302,51 @@ else {
 }
 
 # ---------------------------------------------------------------------------
+# IS THE OTHER CHECKER STILL PLUGGED IN?
+#
+# This case does not test the classifier.  It is here because of a
+# self-reference that cannot be closed from the other side:
+#
+#   * the door-coverage lint checks that verify.bat still contains
+#     `call :classify_asan` -- it can, because it is running;
+#   * it CANNOT check that verify.bat still contains `call :lint_doors`,
+#     because if that call is gone the lint is not running to notice.
+#
+# Delete `call :lint_doors` from verify.bat:55 and, before this case existed,
+# the gate ran all six steps and printed "[ok] gate is GREEN" with the only
+# machine check for unguarded doors silently switched off.  The ASan leg is the
+# thing that still runs in that scenario, so the ASan leg is where that half of
+# the check has to live.  The two checkers now watch each other's power cord.
+#
+# ONE IMPLEMENTATION, TWO CALLERS: the predicate itself is
+# Test-GateStillCallsItsCheckers in tools\lint-door-coverage.ps1, reached here
+# through its -GateWiringOnly switch.  A second hand-written copy of it in this
+# file would be the mistake Widget.cpp:74-75 names and section 11.9 property 2
+# forbids for the allowlist -- and the P2 list had already drifted that way once
+# in this very tree.
+#
+# SPAWNED, not dot-sourced: both scripts keep a $script:Emitted and a Write-*
+# helper of their own, and sharing a scope between them is a defect waiting for
+# a quiet afternoon.
+# ---------------------------------------------------------------------------
+$ran++
+$lintScript = Join-Path $here 'lint-door-coverage.ps1'
+$wiringOut  = & $pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $lintScript `
+                  -GateWiringOnly 2>&1
+$wiringRc = $LASTEXITCODE
+if ($wiringRc -eq 0) {
+    Add-Line ("[ ok ] {0}  -> {1}" -f '<verify.bat still calls both>'.PadRight(38), $wiringRc)
+}
+else {
+    $failures++
+    Add-Line ("[FAIL] {0}  -> {1}, expected 0" -f '<verify.bat still calls both>'.PadRight(38), $wiringRc)
+    Add-Line '       verify.bat no longer invokes one of its own two machine checkers,'
+    Add-Line '       so that checker fails OPEN: the gate runs, prints GREEN, and'
+    Add-Line '       nothing is watching. Put the call back.'
+    foreach ($l in $wiringOut) { Add-Line ('       | ' + $l) }
+}
+
+# ---------------------------------------------------------------------------
 # The exit-code plumbing, through the real interpreter and the real -File path.
 # ---------------------------------------------------------------------------
 foreach ($c in $exitCodePlumbing) {

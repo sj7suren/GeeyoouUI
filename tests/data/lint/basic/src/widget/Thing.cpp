@@ -36,6 +36,26 @@ void Thing::qualifiedCallIsNotADoor() {
   count_ = count_ + 1;
 }
 
+// CANDIDATE, and the one above it is not -- that is the whole case.
+//
+// A qualified P2 call IS a door.  The rule "a qualified call is not a door"
+// belongs to P1 and to P1 only, and its warrant is STATIC BINDING: no
+// application override can be reached through `Thing::onDecorated()`.  P2 is
+// not dispatch.  P2 is a list of library functions known to reach application
+// code, and `Thing::setGeometry()` reaches it exactly as well as
+// `setGeometry()` does -- the qualification chooses the implementation, it does
+// not stop that implementation running an application's onGeometryChanged.
+//
+// Copying P1's lookbehind onto the P2 pattern was a category error that
+// survived four rounds.  It was never a live defect (every qualified call in
+// the real tree happens to be a P1-family name), so nothing could have caught
+// it except reading the argument -- which is exactly why the fixture is here
+// now.  Under-reporting is the defect family itself.
+void Thing::qualifiedP2CallIsStillADoor() {
+  Thing::setGeometry();
+  count_ = count_ + 1;
+}
+
 // NOT A CANDIDATE.  The door name appears only in a comment, and this file is
 // full of them: onDecorated(); sizeHint(); layoutRect(); emit(x).  The comments
 // in the real tree are longer than the code and they quote the door names in

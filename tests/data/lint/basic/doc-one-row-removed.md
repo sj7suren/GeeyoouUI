@@ -12,9 +12,12 @@ go green for a reason nobody wrote down.
 
 ### 11.4 门的定义、谓词、枚举表
 
+> * **P2**: library functions known to reach application code -- `setGeometry` / `add<T>`.
+
 | # | 位置 | 门原语 | 门后经 `this`/成员的读写 | 级 | 轮 |
 |---|---|---|---|---|---|
 | F1 | `Thing.cpp`（`unguardedDoorThenMemberRead`） | P1 `onDecorated()` | `count_` | S2 | W2 |
+| F3 | `Thing.cpp`（`qualifiedP2CallIsStillADoor`） | P2 `setGeometry()` | `count_` | S3 | W3 |
 
 ### 11.5 开销量化
 

@@ -23,6 +23,43 @@ class Thing {
   // the real tree: it produced five phantom door names.
   ~Thing() override;
 
+  // Shape 5: NOT virtual at all, and named after a P2 primitive.  The P2 half
+  // of the predicate does not come from this header -- it comes from the P2
+  // clause of the document's section 11.4 -- so this declaration is here to
+  // keep the fixture readable, not to feed the scan.  What it must not do is
+  // become a P1 name: no `virtual`, no `override`, therefore no P1.
+  void setGeometry();
+
+  // Shape 6: a PLAIN INLINE DEFINITION IN A HEADER, with a door in it.
+  //
+  // This header is not just declarations to be harvested for P1 names -- it is
+  // CODE, and the candidate side has to scan it.  It did not, for three rounds:
+  // property 4's "the scan root is the whole of include\geeyoou" was applied to
+  // the declaration side only, while the candidate side stayed rooted at src\.
+  //
+  // This case falls to the SCAN ROOT alone.  Keep it separate from shape 7
+  // below, which falls to a second and independent thing, so that removing
+  // either fix reddens exactly one case.
+  void reseat() {
+    setGeometry();
+    count_ = count_ + 1;
+  }
+
+  // Shape 7: a TEMPLATE inline definition in a header, with a door in it.
+  //
+  // Widening the scan root buys NOTHING without this one.  `template` is in the
+  // splitter's not-a-function-head list, so a template body read as "not a
+  // function": the splitter descended into it looking for functions inside,
+  // found none, and the body -- doors and all -- was never scanned.  Measured
+  // on the real tree: AppWindow.hpp split into header/content/isBorderVisible
+  // and NOT setContent, whose body is `add<T>()` followed by two writes.
+  template <class T>
+  T* adopt(T* child) {
+    add<T>(child);
+    count_ = count_ + 1;
+    return child;
+  }
+
   // Shape 4: protected virtual -- the access specifier is not part of the test,
   // which is the whole point of scanning declarations rather than call sites.
  protected:

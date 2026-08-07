@@ -16,9 +16,10 @@ go green for a reason nobody wrote down.
 
 | # | 位置 | 门原语 | 门后经 `this`/成员的读写 | 级 | 轮 |
 |---|---|---|---|---|---|
-| F1 | `Thing.cpp`（`unguardedDoorThenMemberRead`） | P1 `onDecorated()` | `count_` |  | W2 |
+| F1 | `Thing.cpp`（`unguardedDoorThenMemberRead`） | P1 `onDecorated()` | `count_` | S2 | W2 |
 | F2 | `Thing.cpp`（`overrideOnlyVirtualIsStillADoor`） | P1 `layoutRect()` | `count_` | S3 | W3 |
 | F3 | `Thing.cpp`（`qualifiedP2CallIsStillADoor`） | P2 `setGeometry()` | `count_` | S3 | W3 |
+| F4 | `Thing.hpp`（`reseat`） | P2 `setGeometry()` | `count_` | S3 | W3 |
 
 ### 11.5 开销量化
 

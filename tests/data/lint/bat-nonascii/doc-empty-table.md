@@ -5,6 +5,8 @@ different verdict), but it must not archive the candidate under test.
 
 ### 11.4 门的定义、谓词、枚举表
 
+> * **P2**: library functions known to reach application code -- `setGeometry` / `add<T>`.
+
 | # | 位置 | 门原语 | 门后经 `this`/成员的读写 | 级 | 轮 |
 |---|---|---|---|---|---|
 | F1 | `Nothing.cpp`（`somethingElse`） | P1 | yes | S3 | W3 |
