@@ -1045,3 +1045,108 @@ GEEYOOU_TEST(removal, every_node_of_a_departing_subtree_announces_itself) {
   CHECK_EQ(box->viewport(), static_cast<Widget*>(nullptr));
   CHECK_EQ(box->cached(), static_cast<Widget*>(nullptr));
 }
+
+// ================ E14's own blast radius: the cursor was armed one door late ===
+//
+// announceDetached guards its `parent` -- the argument for doing so is written
+// out above the line, at length, and it is right.  The cursor was simply taken
+// AFTER the broadcast:
+//
+//     detail::notifyDetachToAncestors(node);          // the door
+//     cancelOn(g_bubbles, node);
+//     cancelOn(g_geometries, node);
+//     detail::DeathWatch host(&parent);               // the cursor
+//     if (win) win->widgetDetached(node);
+//     if (!host.alive()) return;
+//     if (!stillAChild(parent, node, nodeHint)) return;   // reads parent
+//
+// A cursor is cancelled by ~Widget.  Arm it after the widget has already died
+// and there is nothing left to do the cancelling: host.alive() then answers TRUE
+// FOR EVER, and stillAChild dereferences freed memory one line further down.
+// The guard reads as present in a diff and is absent in fact.
+//
+// This is the shape §11.4 keeps re-learning, inverted: not "the ninth door had
+// no guard" but "the guard was on the wrong side of the door".  The fix is two
+// lines -- move the construction up, re-test immediately after the broadcast --
+// which is why it is being made rather than registered a third time.
+//
+// THE RED STATE WAS MEASURED FIRST, and it is quoted here because the case that
+// produced it CANNOT BE LANDED THIS ROUND -- which is itself the finding.
+//
+// The probe: a host held by a unique_ptr outside the tree, whose
+// onDescendantDetached drops that unique_ptr and so frees itself.  On the
+// unfixed tree, ASan reported FIVE heap-use-after-frees, and they split two ways:
+//
+//     4 x  READ ... in stillAChild                Widget.cpp:284 / :285
+//               in announceDetached               Widget.cpp:366   <- THIS defect
+//     1 x  READ ... in notifyDetachToAncestors    Widget.cpp:432   <- section
+//               in announceDetached               Widget.cpp:340        11.11-7
+//
+// The four are the late cursor, and the fix below removes them.  The fifth is
+// the broadcast LOOP's own `a = a->parent()`, which section 12.4 group C
+// registers separately and this round deliberately does not touch.
+//
+// ⚠️ AND THE TWO CANNOT BE TRIGGERED APART.  The broadcast walks the departing
+// node's ANCESTOR chain, and `parent` is by construction the FIRST widget on it
+// (announceDetached is only ever called with parent == node->parent()).  So the
+// only frame a hook can run in and destroy `parent` from is `parent` itself --
+// after which the loop's own increment reads it.  Destroying `parent` from a
+// HIGHER ancestor instead needs takeChild, which REM3-G9's assert forbids from
+// inside the walk and rightly.  There is no third shape.  ⇒ A case that reddens
+// on the late cursor also reddens on the unguarded loop, so it cannot go into a
+// green gate until section 11.11-7 is closed too.  Recorded in section 12.4
+// group C: the two entries share ONE trigger and can only be accepted together.
+//
+// So the case that IS here asserts the ORDERING directly, deterministically, and
+// on all three legs: at the moment the hook runs, is announceDetached's cursor
+// already on the list?  Before the fix the answer is no (depth 1 -- only
+// takeChild's own); after it, yes (depth 2).  No memory is misused, nothing
+// REM3-G9 forbids happens, and the case is red exactly when the guard is on the
+// wrong side of the door.  Measured in both directions before this landed.
+namespace {
+
+// Reads the cursor depth from inside the broadcast.  That is the whole probe:
+// a guard registered AFTER the door is not on the list while the door is open,
+// and "is it on the list yet" is a question with a number for an answer.
+class DepthProbeHost : public Widget {
+ public:
+  int hookRuns = 0;
+  std::size_t depthInsideHook = 0;
+
+ protected:
+  void onDescendantDetached(Widget*) override {
+    ++hookRuns;
+    depthInsideHook = geeyoou::detail::deathWatchDepth();
+  }
+};
+
+}  // namespace
+
+GEEYOOU_TEST(removal, the_announcement_arms_its_cursor_before_the_broadcast) {
+  DepthProbeHost host;
+  Widget* node = host.add<Widget>();
+  REQUIRE(node != nullptr);
+  REQUIRE(node->parent() == &host);
+  // No Window and no ancestor above the host, on purpose: announceDetached's
+  // cursor is taken unconditionally, not under `if (win)`, and one ancestor
+  // makes the expected depth a single exact number rather than a range.
+  REQUIRE(host.parent() == nullptr);
+  CHECK_EQ(geeyoou::detail::deathWatchDepth(), static_cast<std::size_t>(0));
+
+  const std::unique_ptr<Widget> taken = host.takeChild(node);
+
+  CHECK_EQ(host.hookRuns, 1);
+  // TWO, and each one is named:
+  //   1. Widget::takeChild's own `alive` (Widget.cpp:549), which has always
+  //      been on the correct side of this door;
+  //   2. announceDetached's `host`, which was not, and now is.
+  // Delete the hoist below and this reads 1: the frame that is about to
+  // dereference `parent` has nothing on the list to be cancelled by ~Widget,
+  // so its alive() would answer true for ever.
+  CHECK_EQ(host.depthInsideHook, static_cast<std::size_t>(2));
+
+  // The healthy path is unchanged: nobody died, so the child comes back.
+  CHECK(taken.get() == node);
+  CHECK_EQ(node->parent(), static_cast<Widget*>(nullptr));
+  CHECK_EQ(geeyoou::detail::deathWatchDepth(), static_cast<std::size_t>(0));
+}
