@@ -197,7 +197,51 @@ rem as an argument would have its closing quote eaten by the CRT's argument
 rem parser -- the same trailing-backslash trap that once left this very
 rem subroutine's findstr matching nothing at all and the whole leg decorative.
 rem The script derives the repository root from its own location instead.
+rem
+rem AND FIRST, THE CLASSIFIER IS ASKED TO PROVE ITSELF.  tools\classify-asan.ps1
+rem is the only thing standing between a use-after-free and a release, and until
+rem now the suite that checks it ran only when somebody remembered to run it --
+rem which is precisely the argument this whole file makes against a manual ASan
+rem leg, applied to the component that decides whether the ASan leg can speak.
+rem
+rem The objection was that this would be a seventh step and the six-step output
+rem shape is a contract.  The shape is kept: six banners, same summary table,
+rem same exit codes, one extra line inside step 6.  A component that gates a
+rem gate, ungated, is a defect, and a convention loses to a defect.
+rem
+rem A self-test failure does NOT fall through to the classification.  A
+rem classifier that fails its own fixtures has no verdict worth reading, and
+rem running it anyway would produce an authoritative-looking answer from a thing
+rem we have just proved is broken.  The leg goes red and says why.
+rem
+rem Budget: the suite runs its table in-process for this reason and costs ~4s.
+rem If it ever creeps past ~10s here, fix it there -- do not delete this call.
+rem
+rem KEEP THIS FILE PURE ASCII.  MEASURED, AND IT COST AN HOUR.  verify.bat has
+rem LF line endings, and cmd.exe parses a batch file by BYTE OFFSET while
+rem counting the text it has consumed in CHARACTERS.  With CRLF the two happen
+rem to stay in step; with LF plus one multi-byte character anywhere in the file,
+rem they drift, and the parser resumes mid-line -- SOMEWHERE ELSE ENTIRELY.
+rem Adding one Chinese sentence to the message below made cmd execute `set "R'
+rem and then try to run `C_REL_BUILD=0' as a program, at line 56, a hundred and
+rem sixty lines above the edit.  A gate that mis-executes its own first step
+rem while still printing banner [1/6] is about the worst failure this file could
+rem have, so: no non-ASCII here.  The Chinese half of the message is printed by
+rem tools\test-classify-asan.ps1, which is a .ps1 with a UTF-8 BOM and gets the
+rem console encoding right.
 :classify_asan
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive ^
+  -ExecutionPolicy Bypass -File "%ROOT%tools\test-classify-asan.ps1" -Quiet
+set "RC_SELFTEST=%ERRORLEVEL%"
+if not "%RC_SELFTEST%"=="0" (
+  echo   [FAIL] ASan classifier self-test FAILED; this leg's verdict is not
+  echo          trustworthy, so the run was NOT classified. The failing case and
+  echo          the reason it exists are printed above. Fix
+  echo          tools\classify-asan.ps1, or the fixture that caught it, first.
+  set "RC_ASAN_TEST=asan"
+  goto :eof
+)
+
 "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive ^
   -ExecutionPolicy Bypass -File "%ROOT%tools\classify-asan.ps1" -LogPath "%ASAN_LOG%"
 set "RC_CLASSIFY=%ERRORLEVEL%"
