@@ -848,7 +848,9 @@ void frameDegraded();
 >   ⚠️ **`layoutRect()` 是 E5 复核时补进这个括号的。它一直在谓词的覆盖范围内，只是从来没有被扫到过**——原因见 §11.9 的更正：本节的第一刀是一张 grep **名字表**，而 P1 说的是"任何虚调用"，**虚调用是按名字 grep 不出来的**。
 >   ⚠️⚠️ **主语是 E9 复核时从"widget"改宽的，这是与上一条不同的第二个洞。**`Layout` 不是 widget，于是 `Layout::onInvalidated()` / `onChildAppended()` / `onChildRemoved()`（`Layout.hpp` 的 protected virtual，注释白纸黑字写着是给子类用的扩展点）**P1 管不着、P2 没登记**，两头落空——而它们是货真价实的门，见下面的 N1/N2/N3。
 >   **两个洞的区别值得写死**（Leo 的判词，我核对后同意）：`layoutRect()` 漏掉是因为「**虚调用 grep 不出名字**」，`Layout` 三个钩子漏掉是因为「**主语写窄了**」。补第一个（§11.9 的声明侧生成）**不会**自动补上第二个——声明侧扫描的根目录如果只有 `Widget.hpp`，`Layout.hpp` 的三个钩子照样扫不到。所以 §11.9 lint 第四条的扫描根同时改成 `include/geeyoou/**/*.hpp`。
-> * **P2**：调用**已知能到达应用代码的库函数**：`setGeometry` / `setVisible` / `setLayout` / `invalidateSizeHint` / `add<T>` / `takeChild` / `removeChild` / `clearChildren` / `Window::openPopup` / `Window::closePopup` / `Widget::performLayout` / `Layout::arrange` / `Layout::measure(For)`，**以及任何被本清单登记过的库函数**（传递性在这里显式展开，见下）。
+> * **P2**：调用**已知能到达应用代码的库函数**：`setGeometry` / `setVisible` / `setLayout` / `invalidateSizeHint` / `add<T>` / `takeChild` / `removeChild` / `clearChildren` / `Window::openPopup` / `Window::closePopup` / `Widget::performLayout` / `Layout::arrange` / `Layout::measure` / `Layout::measureFor` / `AppWindow::relayout`，**以及任何被本清单登记过的库函数**（传递性在这里显式展开，见下）。
+>   ⚠️ **这一行就是 lint 的 P2 名字集合本身，脚本里没有第二份。** §11.9 性质 2 早就为 allowlist 定了这条规矩（"两者不得各写一份"），P2 清单是同一种东西——人维护、机器消费——所以守同一条规矩。**在 R2 第 4 轮之前它没有守**：`tools/lint-door-coverage.ps1` 里有一份手抄的 `$P2Names`，旁边写着"你在这里加一个，记得也去那边加"，而两份**已经漂了**——脚本有 `relayout`，本行没有。这次漂的方向是红的（多扫一个名字），所以什么都没漏；**反方向的同一次漂移会静默删掉一整类候选，并且是让门禁变绿的那个方向**。⇒ 脚本改成解析本行，手抄那份已删除；`relayout` 按"取两者的并集、不取交集"补进本行（它确实是门：`AppWindow::relayout` 里三个 `setGeometry`，就是 #16）。
+>   ⚠️ **本行的书写格式是承重的**（脚本按此归一）：每个原语一个反引号 token，`add<T>` 去掉模板实参取 `add`，`Window::openPopup` 去掉限定名取 `openPopup`。**原先的 `Layout::measure(For)` 这种缩写已展开成两条**——它省下四个字符，代价是机器读不出来。本行上任何一个反引号 token 若归一不出一个标识符，lint **退 3**（fail closed），不是跳过：跳过意味着文档里的一个笔误静默删掉一个原语。
 > * **P3**：`signal.emit(...)`。
 >
 > **危险（hazard）**：门 `S` 对指针 `P` 危险，当且仅当 `S` **之后本帧**还有一次经 `P` 到达的读或写。`P` 取自 `{this}` ∪ `{本帧要解引用的成员指针}`。
@@ -887,7 +889,8 @@ void frameDegraded();
 | 16 | **`AppWindow.cpp:72/74/75`**（`relayout`） | P2 `setGeometry` ×3 | `:73→:74` 读并解引用 `content_`、`:75` 读并解引用 `fill_`、`:77` 读信号成员、`:78` `update()` | `this,content_`（`header_` **不需要**：`:72` 之后没有任何语句再解引用它；`fill_` 见 §11.14 —— 它取 `MayBeNull` 游标） | **S1（本表最高）** | W2 | ✅ **已封**（E19；CP-A1 / CP-A2 / CP-A3，§11.14） |
 | 17 | `AppWindow.cpp:77`（`relayout`） | P3 `contentResized.emit` | `:78` `update()` 只读 `this` | — | — | — | ❌ D7 豁免 |
 | 18 | `AppWindow.cpp:85`（`setHeaderVisible`） | P2 `setVisible` | `:86` `relayout()` 经 `this` | `this` | S2 | W2 | ❌ 本轮不改 |
-| 19 | `WindowHeader.cpp:218`（`relayoutItems`） | P2 `setGeometry`（**在 range-for 里**） | `:219-221` 继续用 `slots_` 的迭代器、`:222` `update()` | `this` + 迭代器失效 | S1 | **W2** | ❌ 本轮不改；与 BoxLayout scratch 越界同形 |
+| 19 | `WindowHeader.cpp:218`（`relayoutItems`） | P2 `setGeometry`（**在 range-for 里**） | `:219` 读引用 `s`、下一轮 `:218` 再读、`:222` `update()` | **不是游标**：按下标迭代 + 每轮重读 `size()`（或先快照）；**外加** `this` | S1 | **W2** | ❌ 本轮只改表（处方原写错了，见下）；实修归 R2.4 |
+| 19b | **`WindowHeader.cpp:183-191`（`setTrailingItemWidth`）** | P2 `relayoutItems()`（内含 #19） | **无**——门后紧跟 `return`，`s` 不再被读 | — | **S3** | **W2** | ❌ **同形，靠一个 `return` 侥幸活着**；与 #19 同批读，见下 |
 | 20 | `Cascader.cpp:143`（`rebuildColumns`） | P2 `setVisible`（循环内，按下标读 `columns_`） | `:150` 起继续按下标读（`:142` 的循环自己也按下标） | `this` + 下标 | S2 | W2 | ❌ 本轮不改；**主语已更正**（原写作 `relayoutColumns`，见下） |
 | 21 | `Cascader.cpp:152/159/161`（`rebuildColumns`） | P2 `setGeometry` | `:153-155` 局部量、`:156-159` 按下标读 `columns_`、`:161` 读 `popupBox_` | `this,popupBox_` + 下标 | S2 | **W2** | ❌ 本轮不改；下标防重分配、**防不了缩短**；**主语已补上**（原行只有文件名，归档不到任何东西） |
 | 22 | `SelectBase.cpp:60`（`showCustomPopup`） | P2 `Window::openPopup`（内含 `closePopup`→`popupClosed.emit`） | `:61` `update()`、`:62` 读 `openStateChanged`（都经 `this`） | `this` | S2 | W2 | ❌ 本轮不改；**P3 家族的样本**（宿主是 `Window` 不是 `this`，D7 不豁免） |
@@ -937,6 +940,22 @@ const float titleW =
 
 **#16 为什么定级最高**：三个 `setGeometry` 无条件执行、**每帧**跑（`AppWindow::onGeometryChanged():81` → `relayout()`），`header()`/`content()` 都是 public，showcase 五页正是这么用；门后一个游标都没有。
 ⚠️ 而 `Widget.cpp:483-489` 的注释**就是拿这个函数当例子写的**——"*onGeometryChanged runs APPLICATION code: AppWindow::relayout emits contentResized from inside one, and a slot is entitled to destroy widgets -- this one included.*" 那条注释给 `setGeometry` **自己那一帧**加了 `GeometryGuard`（`:491`），而 `AppWindow::relayout` 的帧在它**下面**，一个游标都没有。**库里最显眼的那条注释，指着的正是本表漏掉的那一行。** 这是"表不是扫出来的"最硬的证据，我接受。
+
+**#19 的处方原本是错的，本轮更正（R2 第 4 轮安全评审 C5；只改表，实修归 R2.4）**。这一行原来写的是「需守卫：`this` + 迭代器失效」——**前半句对，后半句会把下一个人带进沟里**：它读起来像"再上一个游标就行了"，而**一个 `DeathWatch` 关不掉这一条**。游标回答的是"我记下的那个对象死了没有"；这里出事的**不是对象死亡**，是 `std::vector` 重分配，`slots_` 那块缓冲区换了地址，而 `this` 从头到尾好好活着。游标答不了这个问题。
+
+```cpp
+for (const Slot& s : slots_) {                 // :215
+  s.widget->setGeometry({x, y, s.width, h});   // :218  <- 门
+  x += s.width;                                // :219  <- 读已失效的引用
+}
+update();                                       // :222
+```
+
+**触发路径走得通，而且不需要任何对象死亡**——这一点让它在本表里独一份：应用的尾部项在自己的 `onGeometryChanged()` 里回调 `header->addTrailingItem<T>(...)`（**`README.md:170/176` 演示的正是这个 API**）⇒ `slots_.push_back` ⇒ **vector 重分配** ⇒ range-for 的迭代器与引用 `s` 全部失效 ⇒ `:219` 读已释放内存，下一轮 `:218` 再读一次。**本表其余每一条 S1 都要求"某个对象死在门里"；这一条只要求"应用又加了一个尾部项"。**
+
+**正确的处方**：按下标迭代 + **每轮重读 `slots_.size()`**（下标能防重分配），或者在循环前把要摆的 (widget, x, y, w, h) 快照出来、门全部开在快照上。⚠️ 下标**防不了缩短**（#21 已经写过这句），所以每轮都要重读 `size()` 并重新取 `slots_[i]`，不能把引用提到循环外。**`this` 的游标仍然要，那是另一件事**：`:222` 的 `update()` 经 `this`。
+
+**#19b —— `setTrailingItemWidth` 同形，靠一个 `return` 活着（本轮补登记）**：`WindowHeader.cpp:183-191` 也是 `for (Slot& s : slots_)`，循环里改 `s.width` 之后调 `relayoutItems()`（同一扇门，同一条回调链），然后**立刻 `return`**。门后不再读 `s`，所以按谓词它今天**非危险**——与 #13b 完全同一条规矩，也与 #13b 同一个风险：**这条命是那个 `return` 给的，而这件事此前哪里都没写**。哪天有人把它改成"批量设宽度"（把 `return` 换成 `continue`，或在循环外再 `relayoutItems()` 一次），它当场变成第二个 #19，而没有任何东西会提醒他。**定级 S3、排 W2，与 #19 同批读**——修 #19 的人手就在这个文件里，两处一起改是一次改动，分两轮改是两次。
 
 **#27 为什么按家族登记而不逐点列**：全库 `.emit(` 约 60 处，但 D7 豁免砍掉其中大半——凡是"发自有信号、门后只读 `this`"的（`PushButton::activate:107-109`、`ScrollArea::scrollTo:65`、`Cascader:78` …）都不危险。**剩下的是"发别人的信号 / 经别的对象绕一圈回来"那一类**，#22 是已确认的一个样本。逐点判定要读 60 个函数体，那是一次独立的扫描任务，不是 E1 能在设计文档里完成的事。**登记形态**：家族已识别、判定谓词已给出（P3 + D7 豁免）、定级 S2、排 W2，扫描产出物是 §11.9 那个 lint 的 allowlist。
 
@@ -1004,6 +1023,8 @@ const float titleW =
 
 * **L75-X `Window::widgetDetached`**——**这是本次扫描最该被带走的一条**。它的门是 `closePopup()`（→ `popupClosed.emit` → 应用槽），门后紧跟着 `if (focus_ == w) focus_ = nullptr;` 等**三次经 `this` 的写**，而**一个游标都没有**。函数自己的注释甚至写着"Re-tested after that emit, which can move the focus or open another popup"——**想到了信号会动状态，没想到信号会把 `this` 拆掉**。
   ⚠️ 而 §11.14 里 N4 的整条论证（"`widgetDetached` 的记账没有洞"）**正是站在这个函数身上**。记账没有洞是对的；**记账的那一帧自己没有游标**，是另一件事。定级 **S1**，与 N1/N4/#16 同级。
+  ⚠️⚠️ **L75-X 的触发路径本轮被收窄了一半（R2 第 4 轮安全评审 C6），登记下来免得下一轮照着错的那一支去修**：`closePopup()` 里有**两支**能到应用代码——`:126 p->setVisible(false)` 和 `:130 popupClosed.emit()`。**emit 那一支到不了"`this` 死在门里"**：`popupClosed` 的宿主就是这个 `Window`，而契约 D7 明令禁止槽销毁信号自己的宿主（`Widget.hpp:105-108`），这正是 §11.4 hazard 条款那条唯一豁免。**真正走得通的只有 `setVisible` 那一支**：`setVisible` → `markLayoutDirty` → 一趟 pass → `setGeometry` → 应用的 `onGeometryChanged` → 销毁这个 `Window`。⇒ 下一轮写用例的人**别从 `popupClosed` 的槽入手**，那条走不通（这就是 §12.5 教训 12 说的"门是必要条件不是充分条件"，只是这次省的是下一轮的时间而不是本轮的）。
+* **L54-C `Window::closePopup` 与 L75-X 是同生共死的一对，定级本轮拉平到 S1（C6）**。`widgetDetached:141` 的第一句就是 `if (popup_ == w) closePopup();`——**L54-C 就是 L75-X 那扇门的里面**，而且 **`closePopup` 才是发 emit、真正把控制权交出去的那一帧**。两条同形（门后都有经 `this` 的写：`closePopup:127-129` 写 `hovered_` / `pressGrab_` 并 `update()`），却一条 S2 一条 S1，**这个不一致会让下一轮先做高的那条、然后发现低的那条才是根**——修 `widgetDetached` 而不修 `closePopup`，等于在门外面上锁。⇒ **L54-C 提为 S1，与 L75-X 同批做，一条用例应当同时覆盖两帧。**
 * **家族 F（6 条）**是平台事件入口：`Win32Platform::handle` / `paint` 与 `Window::handleMouse` / `handleKey` / `handlePaint` / `handleResize`。这些是**每一次输入事件的最外层帧**，门后继续读成员。它们与 N5（`animationTickTree`，S1）是同一形状，只是站在树的更外面。
 * **家族 A（21 条）**是 #2 / #23 的族（`styleState()` 之后接着读自己的成员），**REM3-RES-2 已裁定走契约不走守卫**，所以整族 S3/W3。**它的规模是新信息**：表里原本只有 2 个站点，实际是 **21** 个，遍布每一个控件的 `onPaint` / `sizeHint`。"收紧 `styleState()` 覆写的契约"这个处方的**收益面**因此比表里看起来大一个数量级。
 * **家族 G（2 条）是谓词的名字碰撞误报**，登记而不掩盖：`Painter::fillArcRing` 与 `VectorPath::fromSvg` 里的 `close()` 是 `VectorPath` / `BLPath` 的路径闭合，不是 `SelectBase::close()`。**虚调用按名字扫就是会这样**，这正是 §11.9 承认的"近似"的代价；把它写进表里，比在脚本里加一条"忽略 `Painter.cpp`"的暗规则可复核。
@@ -1014,7 +1035,7 @@ const float titleW =
 |---|---|---|---|---|
 | **A**（21） | `styleState()` / `displayText()` / `arrowWidth()` 等只读渲染与度量帧里的虚调用 | S3 | W3 | 并入 #2 / #23 的族，REM3-RES-2：处方是收紧契约 |
 | **B**（19） | P3 `.emit(` | S2 | W2 | 就是 #27 登记的那个家族，本表把它逐点展开 |
-| **C**（15） | popup / 菜单的生命周期帧（`openPopup` / `closePopup` / `ensurePopup` / `open` / `close` …） | S2 | W2 | 与 #22 同形，宿主不是 `this`，D7 不豁免 |
+| **C**（15） | popup / 菜单的生命周期帧（`openPopup` / `closePopup` / `ensurePopup` / `open` / `close` …） | S2（**L54-C 除外：S1**） | W2 | 与 #22 同形，宿主不是 `this`，D7 不豁免。⚠️ **家族级定级压不住成员级事实**：`Window::closePopup`（L54-C）是 L75-X 那扇门的里面，与它同生共死，本轮按 C6 提为 S1 |
 | **D**（5） | 布局与度量帧（`arrange` / `gather` / `measureAxis` / `measureFor`） | S2 | W2 | R2 的停车场 + `hostAlive()` 覆盖了其中一部分，覆盖到哪未逐点核对 |
 | **E**（3） | 构造函数帧（`AppWindow` / `ScrollArea` / `Window`） | S3 | W3 | 对象尚未交给应用，门是 `add<T>()`；无已知触发路径 |
 | **F**（6） | 平台与窗口的事件入口 | S2 | W2 | 与 N5 同形，见上 |
@@ -1090,7 +1111,7 @@ const float titleW =
 | L51-C | `SelectBase.cpp`（`onFocusChanged`） | P1 close | 1 | S2 | W2 |
 | L52-C | `SelectBase.cpp`（`onKey`） | P1 open | 10 | S2 | W2 |
 | L53-C | `SelectBase.cpp`（`onMouse`） | P1 close | 2 | S2 | W2 |
-| L54-C | `Window.cpp`（`closePopup`） | P2 setVisible | 1 | S2 | W2 |
+| L54-C | `Window.cpp`（`closePopup`） | P2 setVisible | 1 | **S1** | W2 |
 | L55-C | `Window.cpp`（`openPopup`） | P2 closePopup | 3 | S2 | W2 |
 | L56-D | `BoxLayout.cpp`（`arrange`） | P2 setGeometry | 1 | S2 | W2 |
 | L57-D | `BoxLayout.cpp`（`gather`） | P1 sizeHint | 1 | S2 | W2 |
@@ -1112,6 +1133,37 @@ const float titleW =
 | L73-H | `LineEdit.cpp`（`setText`） | P2 invalidateSizeHint | 1 | S2 | W2 |
 | L74-H | `TreeSelect.cpp`（`onRowActivated`） | P1 onExpanderToggled | 1 | S2 | W2 |
 | L75-X | `Window.cpp`（`widgetDetached`） | P2 closePopup | 1 | S1 | W2 |
+
+---
+
+#### 【E21】候选侧扫描根扩到 `include/` 之后多出来的两条（family T）
+
+> 状态：**登记，不是判定**，与上面 E20 那张表同一条规矩。**代码本身定级 S3**（今天没有已知触发路径）；**lint 漏掉它们是 S1**，那一条已在本轮关闭，见 §11.9 的 E21 记录。
+
+**这是同一个洞的第三次出现，而且前两次的修都没有碰到它。** §11.4 P1 那条更正（`layoutRect()` 漏掉是因为"虚调用 grep 不出名字"）与 §12.5 教训 2 的第二层（"扫描根写成 `Widget.hpp` 而不是 `include/geeyoou/**`"）**两条都修在了声明侧**——lint 拿 `include/geeyoou/**` 生成 P1 名字表，这一条从 E20 起就是对的。**候选侧的根却一直是 `src/`**（`tools/lint-door-coverage.ps1` 里的 `$SrcDirs`），而这个库的代码**不全在 `src/`**：头文件里的模板与 inline 函数体，从来没有被 `Split-CppFunctions` 切过。
+
+**"哪里有 `.cpp`" 和 "哪里有代码" 是两个问题，扫描根要按后一个写。** 这句话是本轮唯一值得从这段里带走的东西。
+
+**扩根之后一并暴露的两个机械陷阱**（都实测，都记在脚本的修复处；**只扩根不修这两条等于什么都没做**）：
+
+1. **`Get-ChildItem -LiteralPath <dir> -Recurse -File -Include *.cpp` 根本不过滤。** 实测（PowerShell 5.1.19041）：`-LiteralPath include` 返回 **59** 个文件（全是 `.hpp`），`-Path include` 返回 **0**。也就是说旧扫描里那个"只扫 `.cpp`"从来不是一个过滤器，只是 `src/` 里恰好几乎没有别的东西——**恰好有一个**（`src/render/VectorPathImpl.hpp`），它一直在被当作 TU 扫，纯属侥幸对了。现改成直接判扩展名。
+2. **`template` 在 `NotAFunctionHead` 里，于是每一个模板函数体都被读成"不是函数"。** 切分器遇到 `template <class T, class... Args>` 开头的片段就判"不是函数、往里降一层找函数"，进去找不到（模板体内没有嵌套函数定义），**整个函数体连同它的门一起从未被扫过**。实测：`AppWindow.hpp` 切出 `header` / `content` / `isBorderVisible` 三个，**没有 `setContent`**。现改成在 `NotAFunctionHead` 判定**之前**按尖括号配平剥掉 `template <...>` 前缀（不是 `.*?>`：`template <class T, std::vector<int> V>` 有嵌套，惰性匹配会停在第一个 `>`）。
+
+**扩根后的实测规模**：源文件 47 → **106**（多出 59 个头文件），头文件里切出 **318** 个函数体，新增候选 **2** 个，其余 316 个函数体全部落选（绝大多数是一行访问器，门后无代码）。**没有出现"为了变绿要收窄谓词"的压力**，两条照单登记。
+
+| # | 位置（文件 :: 函数） | 首个门原语 | 门数 | 级 | 轮 |
+|---|---|---|---|---|---|
+| L76-T | `AppWindow.hpp`（`setContent`） | P2 add | 2 | S3 | W3 |
+| L77-T | `WindowHeader.hpp`（`addTrailingItem`） | P2 add | 1 | S3 | W3 |
+
+**family T = 头文件里的模板便利构造器**：门是 `add<T>(...)`（P2，经 `addChild` → `childAppended` → `Layout::onChildAppended` + `markLayoutDirty`，够得到应用代码），门后**有经 `this` 的写**——
+
+* **L76-T `AppWindow::setContent<T>`**（`AppWindow.hpp:78-84`）：门 `:80 content_->add<T>(...)`；门后 `:81 fill_ = w;`（**写**）、`:82 relayout()`（**第二扇门**，就是 #16 那三个 `setGeometry` 所在的帧）。
+* **L77-T `WindowHeader::addTrailingItem<T>`**（`WindowHeader.hpp:108-115`）：门 `:110 add<T>(...)`；门后 `:111 slots_.push_back({w,...})`（**写**）、`:112 pendingGap_ = 0.0f`（**写**）、`:113 relayoutItems()`（**#19 那一帧**）。
+
+**为什么定 S3 而不是 S1**：两处的门后确有写，形状与 #16 同级；**但今天没有已知触发路径**——要走通得让 `add<T>` 里那趟 `markLayoutDirty` 当场起一趟 pass、pass 里的 `onGeometryChanged` 再销毁这个 `AppWindow` / `WindowHeader` 自己，而 `setContent` / `addTrailingItem` 的主流用法是在窗口构造期（README:170/176 的样例正是如此），那时对象还没交给应用。**这是"今天没有已知触发路径"，不是"没有接口"**——按 §12.5 教训 11 的分量，它只值 S3，不值免检；两条 API 都是 public 模板，轮次 W3 与 family E（构造函数帧）同批。
+
+⚠️ **L77-T 与 #19 是同一条链上的两环，读的时候要一起读**：`addTrailingItem` 的门后调 `relayoutItems()`，而 #19 说的正是 `relayoutItems()` 里 range-for 中的 `setGeometry`。#19 的触发路径（见下面 §11.4 对 #19 处方的更正）**反过来又要经过 `addTrailingItem` 的 `slots_.push_back`**。**两条的定级不同是对的**：L77-T 要求"窗口自己死在门里"（S3），#19 只要求"应用在几何回调里再加一个尾部项"（S1，无需任何对象死亡）。
 
 ---
 
@@ -1376,6 +1428,27 @@ grep -n "setGeometry(\|sizeHint()\|\.emit(\|setVisible(\|setLayout\|invalidateSi
 
 **顺带兑现的第三条（本轮 D4b 的连带产物，见任务 B）**：所有 `*.bat` 必须是**纯 ASCII**。`cmd.exe` 按**字节偏移**定位、按**字符**计消耗量，实测真值表——`CRLF+UTF-8` 对、`CRLF+GBK` 对、`LF+纯 ASCII` 对、**`LF+多字节` 错**（解析器从 160 行之上的行中间续跑，把 `ine` 当命令执行）。**要两个条件同时成立**；本树四个 `.bat` 全是 LF，所以 ASCII 是唯一撑着的那一半，也就是值得机器守的那一半。**⚠️ 这条检查保护不了 `verify.bat` 自己**——它由 `verify.bat` 调起，而漂移的 `verify.bat` 在跑到这一步之前就已经错行执行了。它保护的是**下一次**运行。
 
+---
+
+#### 【E21】第四轮安全评审：门禁自身的四个缺口，以及第四条性质的第三次修
+
+> 状态：**四条全部关闭，逐条有能变红的自检夹具。** 自检 22 → **30** 例，ASan 分类器自检 21 → **22** 例；lint 三条腿门禁全绿。
+
+**性质 4 的扫描根，这是它第三次被修，而前两次都没有碰到这一处。** §11.4 P1 那条更正修的是"虚调用 grep 不出名字"（⇒ 声明侧生成），§12.5 教训 2 的第二层修的是"根写成 `Widget.hpp` 而不是 `include/geeyoou/**`"（⇒ 声明侧的根）。**两条都在声明侧。候选侧的根一直是 `src/`**，而这个库的代码**不全在 `src/`**——头文件里的模板与 inline 定义从来没有被 `Split-CppFunctions` 切过。⇒ 候选侧的根改成 `src/` + `include/`，实测多出两条候选（L76-T / L77-T，§11.4 E21），**没有出现"为了变绿收窄谓词"的压力**。
+
+**只扩根买不到任何东西，还得修两个机械陷阱**（都实测，都记在脚本的修复处）：
+
+1. **`-Include` 在 `-LiteralPath` + `-Recurse` 下不过滤**（PowerShell 5.1.19041：`-LiteralPath include` 返回 59 个 `.hpp`，`-Path` 返回 0）。旧扫描那句"只扫 `.cpp`"从来不是一个过滤器。
+2. **`template` 在 `NotAFunctionHead` 里**，于是每一个模板函数体都被读成"不是函数"，切分器往里降一层找不到东西，**整个函数体连同它的门一起从未被扫过**。实测：`AppWindow.hpp` 切出三个函数，**没有 `setContent`**。
+
+**P2 清单不再有第二份**（C2）。脚本里那份手抄的 `$P2Names` 旁边写着"你在这里加一个，记得也去那边加"，而两份**已经漂了**——脚本有 `relayout`，§11.4 那行没有。⇒ 脚本改成解析 §11.4 的 P2 行（与 allowlist 同一条规矩，性质 2 的字面）；**那一行的书写格式从此是承重的**，归一不出标识符的反引号 token ⇒ **退 3**。自检三例：narrowed（差分证明脚本真的在读文档）、无 P2 行（退 3）、token 归一不了（退 3）。**报告行现在打印 P2 原语条数**——丢一条 allowlist 行会让门禁更红，丢一条 P2 原语会让门禁**更绿**，而后者没有任何别的东西看得见，所以它要在日志里有个数字。
+
+**P2 不再套 `(?<!::)`**（C3）。那条 lookbehind 的依据是 §11.4 的"限定名调用不算 P1"，而那句话讲的是**虚分派**——`PushButton::sizeHint()` 静态绑定，落不进应用的覆写。**P2 不是分派**：`Widget::setGeometry(r)` / `Base::relayout()` 写成限定名照样跑到应用代码，限定名选的是实现，挡不住实现去调应用的 `onGeometryChanged`。**实测全库候选数不变**（今天的限定名调用全部是 P1 家族），所以它不是活缺陷，是**潜伏的漏报**——**而漏报的方向就是本缺陷族本身**，只能靠读论证而不是靠红灯抓。自检一例（限定名 P2 仍是门），并与既有的"限定名 P1 不是门"那一例并排放着。
+
+**门禁有没有插上电，现在有机器守**（C4）。剥掉 `rem` 之后 grep `verify.bat`，缺任一 `call :lint_doors` / `call :classify_asan`、或缺任一对应标签，即退 1。**剥注释是必需的**：`verify.bat` 的注释比代码长，而且**它们逐字引用这两行**，不剥就等于被"描述那条刚被删掉的调用"的句子满足。
+
+**C4 的自指，以及它是怎么关掉的**：这条检查由 `:lint_doors` 调起，**抓不到自己那条 `call` 被删**——它没在跑。⇒ **一份实现、两个调用者**：lint 抓 `call :classify_asan` 丢失；`tools/test-classify-asan.ps1` 通过 `-GateWiringOnly` 起一个进程抓 `call :lint_doors` 丢失。**两个守门的机器互相看着对方的电源线。** 两个方向都实测（各注释掉一行，两次都拿到非 0 退出码，且第二次是从 ASan 腿红的）。**为什么是 spawn 不是 dot-source**：两个脚本各有自己的 `$script:Emitted` 与输出函数，共享作用域是留给某个安静下午的缺陷；0.6 秒买两份互不相干。
+
 **这条 lint 不做什么，写清楚免得下一个人以为它做了：** 它**不判危险性**。§11.4 的 hazard 条款（"门 S 对 P 危险，当且仅当 S 之后本帧还有一次经 P 到达的读或写"）要求知道一个名字指的是什么，那需要编译器。它回答的是便宜的那个问题——**有没有一扇门，后面还有代码，而这一帧没有游标**——然后逼一个人在表里回答贵的那个，并留档。
 
 ### 11.10 【E5 · E6】两条护栏的落地记录
@@ -1614,11 +1687,32 @@ src/widget/Widget.cpp:445:  owned->parent_ = nullptr;                   <- takeC
    **修法是两行**（Leo 给的）：把 `detail::DeathWatch host(&parent);` 提到广播**之前**，广播后立刻补一句 `if (!host.alive()) return;`。
 
    **本轮不做，编排者裁定**：它改的是**契约已禁止的路径**上的运行时行为（G9 禁止钩子跑任何应用代码，销毁 `parent` 更在其外），属评审外的范围蔓延。**但它落在 E14 自己的爆炸半径里**——是 E14 把广播插到守卫**之前**的——所以**必须登记，且定级不低于 S2**。
+
+   ✅ **【E21 / R2 第 4 轮 C7】已修。** 裁定翻转的理由：**这是 G9 三件套里唯一一条修补代价小于登记代价的**——守卫本来就在这一帧里，它的论证也早就写在它上面（那段注释是对的），**它只是被装在了门的另一侧**。而"守卫在 diff 里读起来是有的、事实上是没有的"比"根本没有守卫"更坏：后者会被 lint 扫成候选，前者不会（§12.4 A′ 残留 2：带游标的函数整体豁免）。
+
+   **红态先行，实测原文**（改之前，`build-asan`，探针是一个把自己从 `onDescendantDetached` 里释放掉的宿主）：
+
+   ```
+   ==16940==ERROR: AddressSanitizer: heap-use-after-free
+   READ of size 8 ...
+       #0 ... std::vector<...>::size
+       #1 geeyoou::`anonymous namespace'::stillAChild        Widget.cpp:284
+       #2 geeyoou::`anonymous namespace'::announceDetached   Widget.cpp:366
+       #3 geeyoou::Widget::takeChild                         Widget.cpp:550
+   ```
+
+   一次跑出 **5 条**报告：**4 条**是本条（`stillAChild` 的 `:284` / `:285` 两处读，各两次），**1 条**是下面第 7 条那个广播循环自己的 `a = a->parent()`（`Widget.cpp:432`）。
+
+   ⚠️⚠️ **而这 5 条分不开，这是本轮最该带走的一条新事实**：广播走的是离场节点的**祖先链**，`parent` 按构造是链上**第一个**（`announceDetached` 只以 `parent == node->parent()` 被调用）⇒ **唯一能销毁 `parent` 的钩子帧就是 `parent` 自己**，而之后循环的自增就读它；从**更高**的祖先去销毁 `parent` 则必须走 `takeChild`，那被 G9 的 assert 挡住（Debug 直接 abort）。**没有第三种形状。** ⇒ **本条的 UAF 用例必然同时打红第 7 条**，所以它不能进门禁。
+
+   **落进门禁的是一条确定性的顺序探针**（`tests/widget/test_removal.cpp` 的 `the_announcement_arms_its_cursor_before_the_broadcast`）：钩子里读一次 `detail::deathWatchDepth()`——**修之前是 1**（只有 `takeChild` 自己那个），**修之后是 2**。不碰任何已释放内存，不违反 G9 的任何一条，三条腿都能跑，而且**恰好在守卫站错边时变红**。两个方向都实测过。
 7. **`notifyDetachToAncestors` 的祖先链循环一个守卫都没有。** 【**S2 / W2**，本轮登记不修】
 
    `for (Widget* a = node->parent(); a; a = a->parent()) a->onDescendantDetached(node);`（`Widget.cpp:425-433`）：钩子若销毁了自己所在的 `a`、或它上面的任何一层，**下一次 `a->parent()` 就是 UAF**。
 
    这正是 §11.6 约束 (ii) 要的那张检查点表所指向的东西。**本轮以 G9 替代 (ii)**（理由见上面"§11.6 约束 (ii) 的处置"），于是**广播循环本身无守卫**这件事从"设计缺口"变成了"依赖契约的已知残留"——**它依然是残留，本条就是它的登记。**
+
+   ⚠️ **【E21】本条与第 6 条共用同一个触发器**（论证见第 6 条末尾：`parent` 是祖先链上的第一个，没有第三种形状）。实测第 6 条的红态时，本条**跟着红了一条**（`notifyDetachToAncestors`，`Widget.cpp:432`）。**后果是可延期性变了**：第 6 条已修，但**它的 UAF 形态验收要等本条一起做**——今天进门禁的只是那条顺序探针。下一轮排期时这两条是**一块**，不是两条。
 
    ⚠️ **第 6/7 条与 REM3-RES-7 的处置是同一根链条**：三者都建立在"G9 让钩子不跑应用代码"这一条契约上。契约一旦被违反，三条同时作废，而**今天没有任何机器能在那一天变红**。这是本节最重的一笔账，写在最后而不是省略。
 
@@ -2045,7 +2139,7 @@ heap-use-after-free  READ 8   #0 geeyoou::Signal<Size>::emit      include\geeyoo
 |---|---|
 | **五组复现器先红后绿** | 每一组都在修复**之前**先跑出红态并留档；红态形态（退出码 / 哪条腿 / 报告种类）逐条记在各自小节 |
 | **门计数器** | soak 实测 `framesDegraded = 403 × 5 = 2015`（403 = 400 圈 + 3 轮热身）。**它证明守卫幸存于调用，而不是压掉了调用**——降级路径被真正走到 2015 次，而几何仍然逐位稳定 |
-| **门禁** | **207 用例、三条腿全绿**（E16 收口时）；E18 新增 1 条 ⇒ **208**；**E19（§11.14）新增 4 条 ⇒ 212** |
+| **门禁** | **207 用例、三条腿全绿**（E16 收口时）；E18 新增 1 条 ⇒ **208**；**E19（§11.14）新增 4 条 ⇒ 212**；**E21（C7）新增 1 条 ⇒ 213**。lint 自检 22 → **30** 例，ASan 分类器自检 21 → **22** 例 |
 | **Release 双峰问题已消失** | E2 期间 Release 腿是**双峰的**（同一个二进制 10 次里崩 8~9 次），那是活跃 UAF 的指纹。收口后 **10 次 0 崩溃、stdout 逐字节相同** |
 | **golden** | 9 张逐字节不变（SHA-256 逐个比对） |
 | **零分配** | soak 四条采样序列的**平坦性**（唯一被断言的性质）未变；末值不高于热身后的值 |
@@ -2059,14 +2153,32 @@ heap-use-after-free  READ 8   #0 geeyoou::Signal<Size>::emit      include\geeyoo
 
 **每一条都带定级与轮次。** 定级：**S1** 无条件或主流用法下必然执行且门后有写；**S2** 条件性/低频，或门后只有读；**S3** 理论暴露面，无已知触发路径。轮次：**W2** 紧接下一轮；**W3** 需要一次架构裁定之后才能排；**R5** 已被判到第五轮。
 
+#### 12.4.0 出门声明：**R2 出门时，库内存活的 S1 共 4 条**
+
+> **为什么要有这么一句（R2 第 4 轮产品验收条件 P-C3）**：这个数字此前散在三处——A 组的表头写着"仍有两条 S1"，A′ 组的表里另有一条，家族对照表里还有一条——**读者要自己把它数出来。一个必须被数出来的数字，就是一个迟早会数错的数字。** 所以它在这里，是一句声明，不是一次统计练习；下一轮任何人改动这四条中的任何一条，**必须同时改这一句**，否则两处就开始漂（这条规矩本轮刚在 P2 清单上付过一次学费，见 §11.4 P2 那行的 ⚠️）。
+
+**逐条点名，`库内` = `src/` + `include/`，不含 `examples/`，不含工具：**
+
+| # | 位置 | 触发条件 | 备注 |
+|---|---|---|---|
+| 1 | **`WindowHeader::relayoutItems`**（§11.4 #19） | **不需要任何对象死亡**——应用在 `onGeometryChanged()` 里再加一个尾部项即可 | **四条里唯一一条不需要对象死亡的**，因此排第一。处方本轮更正：**不是游标**，是按下标 + 重读 `size()`。同形的 `setTrailingItemWidth`（#19b）靠一个 `return` 活着，同批读 |
+| 2 | **`Window::closePopup`**（§11.4 L54-C） | `setVisible` → pass → `setGeometry` → 应用 `onGeometryChanged` 销毁这个 `Window` | 本轮由 S2 提为 S1（C6）。**它是第 3 条那扇门的里面**，两条同生共死 |
+| 3 | **`Window::widgetDetached`**（§11.4 L75-X） | 同上，经 `closePopup()` | 触发路径本轮收窄：**`popupClosed.emit` 那一支到不了**（D7 禁止槽销毁信号宿主），只有 `setVisible` 那一支走得通 |
+| 4 | **`Widget::animationTickTree`**（§11.4 N5） | 应用的 `onAnimationTick()` 覆写销毁子节点 | 门后 `for (children_)` |
+
+**第 2 条与第 3 条是同一个修法的两半，第 1 条与它们无关，第 4 条独立。** 所以 R2.4 的门覆盖工作面是**三块**，不是四条。
+
+⚠️ **本轮新登记的两条（L76-T / L77-T，§11.4 E21）都是 S3，不进这个数**；**C7 关掉的是一条 S2**（§12.4 C 组第一条），也不影响这个数。**这个数字在本轮没有减少，减少的是"表看不见的地方"**——lint 的候选侧扫描根、P2 清单的第二份手抄、P2 的错误 lookbehind、以及"没人守着门禁有没有插上电"。
+
 #### A. 门覆盖（§11.4 与 N1–N9）
 
-> **【E19 更新】本组减三条：`#16` / `N1` / `N4` 三条 S1 已封，见 §11.14。** 本组**从此不再有 S1 以外的更高定级项，但仍有两条 S1**（`#19`、`N5`）。
+> **【E19 更新】本组减三条：`#16` / `N1` / `N4` 三条 S1 已封，见 §11.14。** 本组**从此不再有 S1 以外的更高定级项，但仍有两条 S1**（`#19`、`N5`）。**【E21】本组的两条 S1 不变；另外两条 S1 在下面的 A′ 组（`L75-X`、`L54-C`），全库合计 4 条，逐条点名见 §12.4.0。**
 > 连带产生的新残留（**RES-N1a / RES-N1b / RES-N4a**）不在本组，登记在下面的 **F 组**——它们是状态与机制缺口，不是未封的门。
 
 | 项 | 位置 | 级 | 轮 | 备注 |
 |---|---|---|---|---|
-| **#19** | `WindowHeader::relayoutItems`，range-for 里的 `setGeometry` | **S1** | **W2** | 门后继续用 `slots_` 的迭代器 ⇒ **迭代器失效**，与 BoxLayout scratch 越界同形。⚠️ **E19 之后它是本组最高的一条**，而且 §11.14 的 #16 用例正是从一个 header 尾部项的 `onGeometryChanged` 里发起的——**那条用例每跑一次就从这扇门里过一次** |
+| **#19** | `WindowHeader::relayoutItems`，range-for 里的 `setGeometry` | **S1** | **W2（排第一）** | 门后继续用 `slots_` 的迭代器 ⇒ **迭代器失效**，与 BoxLayout scratch 越界同形。⚠️ **E19 之后它是本组最高的一条**，而且 §11.14 的 #16 用例正是从一个 header 尾部项的 `onGeometryChanged` 里发起的——**那条用例每跑一次就从这扇门里过一次**。⚠️⚠️ **【E21 / C5】处方本轮更正，原来那句"需守卫：`this` + 迭代器失效"会误导下一个人**：一个 `DeathWatch` 关不掉它——**游标只回答"我记下的对象死了没有"，答不了"`slots_` 重分配了没有"**，而这里 `this` 从头到尾活着。正确处方是**按下标迭代 + 每轮重读 `size()`**（或先快照）。**触发路径不需要任何对象死亡**：应用在尾部项的 `onGeometryChanged()` 里回调 `addTrailingItem<T>`（README:170/176 的样例 API）⇒ `push_back` ⇒ 重分配。**这是全库唯一一条不需要对象死亡就能触发的 S1，所以它排 W2 的第一位**。逐条论证见 §11.4 #19 那一段 |
+| **#19b** | `WindowHeader::setTrailingItemWidth`，同一形状 | **S3** | **W2（跟 #19 同批）** | **【E21 / C5 新登记】** 同样是 `for (Slot& s : slots_)` 里调 `relayoutItems()`，靠门后紧跟的 `return` 侥幸非危险——**与 #13b 同一条规矩，也同一个风险：这条命是那个 `return` 给的，而此前哪里都没写**。改成批量设宽度就当场变成第二个 #19。**修 #19 的人手就在这个文件里** |
 | **#20** | `Cascader::rebuildColumns` 的 `setVisible`（循环内按下标读 `columns_`） | S2 | W2 | **主语已更正**（原写作 `relayoutColumns`，全库无此函数），见 §11.4 |
 | **#21** | `Cascader::rebuildColumns` 三处 `setGeometry`（`:152/159/161`） | S2 | **W2** | 下标能防重分配，**防不了缩短**。主语同上 |
 | **#22** | `SelectBase::showCustomPopup` 的 `Window::openPopup` | S2 | W2 | **P3 家族的已确认样本**：宿主是 `Window` 不是 `this`，**D7 不豁免** |
@@ -2089,6 +2201,7 @@ heap-use-after-free  READ 8   #0 geeyoou::Signal<Size>::emit      include\geeyoo
 | 项 | 位置 | 级 | 轮 | 备注 |
 |---|---|---|---|---|
 | **L75-X** | **`Window::widgetDetached`**，门是 `closePopup()`（→ `popupClosed.emit` → 应用槽），门后 `focus_` / `hovered_` / `pressGrab_` **三次经 `this` 的写**，一个游标都没有 | **S1** | **W2** | ⚠️ **本次扫描最该被带走的一条。** §11.14 里 N4 的整条论证（"`widgetDetached` 的记账没有洞"）**正是站在这个函数身上**——记账没有洞是对的，**记账的那一帧自己没有游标**是另一件事。函数自己的注释写着"Re-tested after that emit, which can move the focus or open another popup"：**想到了信号会动状态，没想到信号会把 `this` 拆掉** |
+| **L54-C** | **`Window::closePopup`**，门是 `:126 p->setVisible(false)`，门后 `:127-129` 写 `hovered_` / `pressGrab_` 并 `update()` | **S1**（本轮由 S2 提级） | **W2（与 L75-X 同批）** | **【E21 / C6】** 与上一行**同形、同生共死**：`widgetDetached:141` 的第一句就是 `if (popup_ == w) closePopup();`，**L54-C 就是 L75-X 那扇门的里面，而且它才是发 emit 的那一帧**。两条定级不同会让下一轮**先做高的那条、然后发现低的那条才是根**——修外面不修里面等于在门外上锁。⚠️ 顺带收窄触发路径：**`popupClosed.emit` 那一支到不了"`this` 死在门里"**（宿主就是这个 `Window`，D7 明令禁止槽销毁信号自己的宿主），走得通的只有 `setVisible` → `markLayoutDirty` → pass → `setGeometry` → 应用 `onGeometryChanged` → 销毁 `Window` 这一支。**下一轮写用例的人别从 `popupClosed` 的槽入手** |
 | **L-F 组（6）** | `Win32Platform::handle` / `paint`，`Window::handleMouse` / `handleKey` / `handlePaint` / `handleResize` | S2 | W2 | 每一次输入事件的**最外层帧**，门后继续读成员；与 **N5** 同形，只是站在树的更外面 |
 | **L-C 组（15）** | popup / 菜单生命周期帧（`Window::openPopup` / `closePopup`、`SelectBase` 的 `ensurePopup` / `close` / `onKey` / `onMouse` …、`MenuButton::openMenu` / `closeMenu`、`Cascader::open` / `rebuildColumns`、`DatePicker::open`） | S2 | W2 | 与 **#22** 同形：宿主不是 `this`，**D7 不豁免**。#22 是这一族里唯一被人点过名的一个 |
 | **L-A 组（21）** | `styleState()` / `displayText()` 之后接着读自己成员的只读渲染与度量帧 | S3 | W3 | **就是 #2 / #23 的族，但规模是新信息**：表里 2 个站点，实际 **21** 个，遍布每一个控件的 `onPaint` / `sizeHint`。**"收紧 `styleState()` 覆写契约"这个处方的收益面因此大一个数量级**——请架构团队在裁 #23 时按 21 个站点而不是 2 个站点算 |
@@ -2103,6 +2216,25 @@ heap-use-after-free  READ 8   #0 geeyoou::Signal<Size>::emit      include\geeyoo
 2. **带游标的函数整体豁免。** 谓词按 §11.9 的原文是函数级的，所以 `AppWindow::relayout` 这种**已经封好**的帧从此不再是候选——**往它里面加第四扇门而不加检查，lint 看不见**。**S2 / W2。**
 3. **P1 是按名字匹配的**，所以 `VectorPath::close()` 撞上 `SelectBase::close()`（L71-G / L72-G 两条误报），反过来一个虚函数若被 `std::function` / 指针间接调用也扫不到（§11.9 末尾登记的第四类原语 `PlatformWindow` 的 7 个公有 `std::function` 成员仍未覆盖）。**S2 / W2，与 P4 谓词那条同批。**
 
+#### A″. 【E21】门禁自身的四个缺口（R2 第 4 轮安全评审 C1–C4，**本轮全部关闭**）
+
+> **上面 A′ 登记的是 lint 扫出来的东西；本小节登记的是 lint 自己身上的东西。** 四条都不是"lint 报错了"，而是**lint 结构上看不见 / 没人守**——**判据全部是机器判据，四条都有能变红的自检夹具**（自检 22 → **30** 例，ASan 分类器自检 21 → **22** 例）。
+
+| 项 | 缺口 | 定级（**门禁的**） | 状态 |
+|---|---|---|---|
+| **C1** | **候选侧的扫描根只有 `src/`**，`include/geeyoou/**` 从来没有被 `Split-CppFunctions` 切过函数体 | **S1** | ✅ 关闭。扩根 + 修两个机械陷阱，逐条见 §11.4 E21。**代码本身两条 S3**（L76-T / L77-T） |
+| **C2** | **P2 原语清单是第二份手抄，而且已经漂了**（脚本有 `relayout`，文档没有） | S2 | ✅ 关闭。脚本改成解析 §11.4 的 P2 行，手抄那份已删除；文档那行的书写格式变成承重的 |
+| **C3** | **`(?<!::)` 套在 P2 上是错的**——那条 lookbehind 讲的是虚分派，P2 不是虚分派 | S2 | ✅ 关闭。P2 去掉 lookbehind，**P1 保留**。实测：全库候选数不变（今天限定名调用全部是 P1 家族），**是潜伏漏报不是活缺陷** |
+| **C4** | **没有机器检查门禁还在调 lint 和分类器** | S2 | ✅ 关闭。剥掉 `rem` 之后 grep `verify.bat`，缺任一 `call` 或任一标签即红 |
+
+**C1 的判词，值得单独留一句**：`layoutRect()` 那条更正（"虚调用 grep 不出名字"）与 §12.5 教训 2 的第二层（"扫描根写成 `Widget.hpp` 而不是 `include/geeyoou/**`"）**两条都修在了声明侧**，而候选侧的同一个洞**没人修**。⇒ **同一个洞的第三次出现，而且前两次的修都没有碰到它。** 教训写进 §12.5 第 15 条。
+
+**C4 的自指问题，以及它是怎么关掉的**：这条检查由 `verify.bat` 的 `:lint_doors` 调起，所以**它抓不到自己那条 `call` 被删**——它没在跑。⇒ 谓词**一份实现、两个调用者**：lint 抓 `call :classify_asan` 丢失，**ASan 腿的分类器自检（`tools/test-classify-asan.ps1`）通过 `-GateWiringOnly` 抓 `call :lint_doors` 丢失**。**两个守门的机器现在互相看着对方的电源线。** 两个方向都实测过（各注释掉一行，两次都拿到非 0 退出码）。
+
+**顺带修掉的一条，它自己就是一个"过滤器不过滤"**：`Get-ChildItem -LiteralPath <dir> -Recurse -File -Include *.cpp` **在本机（PowerShell 5.1.19041）根本不过滤**——`-LiteralPath include` 返回 59 个文件（全是 `.hpp`），换成 `-Path` 返回 0。所以旧扫描里那句"只扫 `.cpp`"从来不是过滤器，只是 `src/` 里恰好几乎没有别的东西；恰好有的那一个（`src/render/VectorPathImpl.hpp`）一直在被当作 TU 扫，纯属侥幸对了。现改成直接判扩展名。**同一个 API 用法在 `Test-NoPlatformInstallPoint` 里也有一处，一并改掉**（那处方向是安全的——多扫不会漏掉安装点——但"不过滤的过滤器"不该留着）。
+
+**本轮新增的一条 lint 残留（登记，不掩盖）**：**扩根之后，`include/` 下的头文件同时是 P1 名字表的输入和候选集的输入。** 今天没有冲突（`Get-VirtualNames` 只读声明行，`Split-CppFunctions` 只读函数体），但两条路径共用一份 `Get-CleanText` 缓存，**任何一边将来改动剥离规则，另一边会跟着变而没有任何用例会红**。**S3 / W3。**
+
 #### B. 状态修复（RES-1 家族）
 
 | 项 | 级 | 轮 | 备注 |
@@ -2114,8 +2246,8 @@ heap-use-after-free  READ 8   #0 geeyoou::Signal<Size>::emit      include\geeyoo
 
 | 项 | 级 | 轮 | 备注 |
 |---|---|---|---|
-| **`DeathWatch` 提前到广播之前** | **S2** | **W2** | `announceDetached` 的 `detail::DeathWatch host(&parent)` 注册在广播**之后**（`Widget.cpp:340` 广播 / `:361` 注册）⇒ 钩子槽销毁 `parent` 时 `host.alive()` **恒为 true**，`:366` 的 `stillAChild` 直接读已释放内存。修法两行（守卫提前 + 广播后补一次 `alive()`）。**编排者裁定本轮不做**——它改的是契约已禁止的路径上的运行时行为，属评审外的范围蔓延——但它落在 E14 自己的爆炸半径里，**必须登记，定级不低于 S2**。详见 §11.11 未验证栏第 6 条 |
-| **广播循环本身无守卫** | **S2** | **W2** | `notifyDetachToAncestors` 的 `for (a = node->parent(); a; a = a->parent())` 一个守卫都没有；钩子销毁自己所在的 `a`（或上面任何一层），下一次 `a->parent()` 就是 UAF。这是 §11.6 约束 (ii) 被 REM3-G9 替代之后留下的那一半。详见 §11.11 未验证栏第 7 条 |
+| **`DeathWatch` 提前到广播之前** | **S2** | — | ✅ **【E21 / C7】已修**。`announceDetached` 的 `detail::DeathWatch host(&parent)` 原本注册在广播**之后**（`Widget.cpp:340` 广播 / `:361` 注册）⇒ 钩子槽销毁 `parent` 时 `host.alive()` **恒为 true**，`:366` 的 `stillAChild` 直接读已释放内存。**守卫在 diff 里读起来是有的，事实上是没有的**——比没有守卫更坏，因为它是让人不再看的那种状态。修法两行：守卫提到广播之前 + 广播后立刻 `if (!host.alive()) return;`。**红态先行**：改之前实测拿到 **4 条** `stillAChild` 的 heap-use-after-free（原文见 §11.11 E21 记录） |
+| **广播循环本身无守卫** | **S2** | **W2** | `notifyDetachToAncestors` 的 `for (a = node->parent(); a; a = a->parent())` 一个守卫都没有；钩子销毁自己所在的 `a`（或上面任何一层），下一次 `a->parent()` 就是 UAF。这是 §11.6 约束 (ii) 被 REM3-G9 替代之后留下的那一半。详见 §11.11 未验证栏第 7 条。⚠️⚠️ **【E21】本条与上一条共用同一个触发器，这是本轮实测出来的新事实，它改变了本条的可延期性**：广播走的是**离场节点的祖先链**，而 `parent` 按构造就是链上的**第一个**（`announceDetached` 只以 `parent == node->parent()` 被调用），所以**唯一能销毁 `parent` 的钩子帧就是 `parent` 自己**——之后循环的自增 `a = a->parent()` 就读它；换成从**更高**的祖先去销毁 `parent`，那需要 `takeChild`，而 REM3-G9 的 assert 在walk 内部禁止它（且理由正当）。**没有第三种形状。** ⇒ **一条能把上一条打红的用例，必然同时把本条打红**，因此上一条的验收用例**无法**做成"只测它自己"的形态——本轮改用确定性的**顺序探针**（钩子里读游标链深度：修之前 1，修之后 2）落进门禁，见 `tests/widget/test_removal.cpp` 的 `the_announcement_arms_its_cursor_before_the_broadcast`。**本条与上一条只能一起验收**，下一轮排期请按"一块"而不是"两条" |
 
 #### D. 谓词与工具
 
@@ -2199,3 +2331,15 @@ heap-use-after-free  READ 8   #0 geeyoou::Signal<Size>::emit      include\geeyoo
 
 14. **【E19】检查链的顺序是承重的，而且这条现在有实测。**
     只拆掉 N4 的 `!self.alive()`、其余两项原样保留，ASan 报告出在**紧跟着的那一项自己身上**（`focus_ != w` 要经 `this` 解引用）。**用例照样 PASS、退出码 0、ASan 红**——第 4 条那个"两个独立信号"又演了一遍。REM3-G3 的"第一项必须是 `this` 的游标"从此不是风格规则。
+
+15. **【E21】一个洞修在了声明侧，不等于它在候选侧也修了——"哪里有 `.cpp`"和"哪里有代码"是两个问题。**
+    §11.4 的 `layoutRect()` 更正（虚调用 grep 不出名字）与本节第 2 条的第二层（扫描根写成 `Widget.hpp` 而不是 `include/geeyoou/**`）**两条都落在声明侧**；lint 的**候选侧**扫描根一直是 `src/`，而库的代码不全在 `src/`——头文件里的模板与 inline 定义从来没被切过函数体。**同一个洞的第三次出现，前两次的修都没有碰到它。** 下一个改扫描根的人：问题不是"这个目录里有没有 `.cpp`"，是"代码在哪"。
+    **连带的第二层**：扩根之后仍然一个都扫不出来，因为 `template` 在切分器的"不是函数头"表里，模板体连同它的门一起从未被读过。**"根写窄了"和"切分器看不见这种函数"又是两个洞，还是要两条修。** 这条教训到这里已经是同一句话的第三个变奏，所以它值一条自己的编号。
+
+16. **【E21】一份人维护、机器消费的清单，只能有一份。**
+    §11.9 性质 2 为 allowlist 定过这条规矩（"allowlist 就是 §11.4 的表，两者不得各写一份"），**而 P2 原语清单是同一种东西，却被漏在规矩外面**：脚本里一份手抄，文档里一份散文，旁边写着"你在这里加一个，记得也去那边加"——**而它们已经漂了**。这次漂的方向是红的（脚本多一个 `relayout`），所以什么都没漏；**反方向的同一次漂移会静默删掉一整类候选，而且是让门禁变绿的那个方向。** ⇒ 判据不是"提醒大家同步"，是"只留一份"。
+    **推论，写给下一个加检查的人**：一条会让门禁**更红**的漂移可以靠红灯发现；一条会让门禁**更绿**的漂移只能靠"没有第二份"或"日志里有个数字"。**两种漂移不是同一件事，不能用同一种手段对付。**
+
+17. **【E21】守门的机器，自己有没有被守着？**
+    删掉 `verify.bat` 里的 `call :lint_doors` 或 `call :classify_asan`，门禁照样跑完六步、照样打印 `[ok] gate is GREEN`——因为这两个检查器都是**在一个没人调用的子例程里**去设那个变红的变量。**一个没被调用的检查器是 fail-open 的，而且那一趟看起来和干净的一趟一模一样。**
+    **自指是这条的难点，也是它的答案**：由 `:lint_doors` 调起的东西抓不到自己那条 `call` 被删。⇒ **两个检查器互相看着对方的电源线**，一份实现两个调用者。递归到此为止：再往上一层就是"有人蓄意同时掏空两个文件"，那已经不是机器该回答的问题了。
