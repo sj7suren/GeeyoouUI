@@ -320,6 +320,32 @@ bool stillAChild(const Widget& parent, const Widget* w, std::size_t& hint) {
 //     snapshotted and each entry re-checked against the live one.
 void announceDetached(Widget& parent, Widget* node, std::size_t nodeHint,
                       Window* win) {
+  // THE CURSOR ON `parent`, AND IT IS THE FIRST STATEMENT OF THE FUNCTION.
+  // That placement is the whole of this guard; the argument for HAVING it is
+  // further down, next to widgetDetached, and that argument was always right.
+  //
+  // It used to be constructed down there too -- after the broadcast below,
+  // after both cancelOn calls -- and that is one door too late.  A cursor is
+  // cancelled by ~Widget.  Register it AFTER the widget has already died and
+  // there is nothing left to do the cancelling: alive() answers true FOR EVER,
+  // and stillAChild(parent, ...) dereferences freed memory a few lines on.  A
+  // guard that reads as present in a diff and is absent in fact is worse than
+  // no guard, because it is the state that stops anybody looking -- and section
+  // 12.4 A' residue 2 says so in general: a frame holding a cursor is not a
+  // lint candidate, so nothing mechanical was ever going to find this.
+  //
+  // Measured before the move, with a hook that frees `parent`: four
+  // heap-use-after-frees in stillAChild.  Section 11.11, unverified item 6.
+  //
+  // "BEFORE THE FIRST DOOR", not "before the door I was thinking of".  Taking a
+  // cursor costs five instructions and no allocation (section 11.5), so there
+  // is never a reason to place one anywhere but the top of the frame it guards.
+  //
+  // Nothing else moved.  The broadcast is still the first CALL, for the reasons
+  // in the comment under this one; constructing a cursor is not a call, runs no
+  // application code and dereferences nothing.
+  detail::DeathWatch host(&parent);
+
   // E14, and FIRST in the body for two reasons that are both about what is
   // still true at this instant: nothing has been unlinked yet, and no
   // application code has run yet.  So every ancestor is alive, the whole
@@ -338,6 +364,19 @@ void announceDetached(Widget& parent, Widget* node, std::size_t nodeHint,
   // it is per NODE, so every node of the departing subtree announces itself up
   // its own ancestor chain.
   detail::notifyDetachToAncestors(node);
+  // REM3-G3: the check is the statement immediately after the door.  `host` is
+  // taken at the very top of this function -- see the note there; this is the
+  // first of its three checkpoints.
+  //
+  // Returning here skips both cancelOn calls, and that is correct rather than
+  // merely tolerable: `node` is owned by `parent`, so a dead `parent` means a
+  // dead `node`, and ~Widget has already cancelled every cursor naming it.
+  if (!host.alive()) return;
+  // REM3-G3: the check is the statement immediately after the door.  Returning
+  // here skips both cancelOn calls, and that is correct rather than merely
+  // tolerable -- `node` is owned by `parent`, so a dead `parent` means a dead
+  // `node`, and ~Widget has already cancelled every cursor naming it.
+  if (!host.alive()) return;
   cancelOn(g_bubbles, node);
   cancelOn(g_geometries, node);
   // NOTHING is done to g_layouts here, and the layout is not parked either.
@@ -355,10 +394,11 @@ void announceDetached(Widget& parent, Widget* node, std::size_t nodeHint,
   // inside a layout pass is ordinary application code (a page moving a panel
   // between two containers on a resize), and it made the panel a picture.
   //
-  // The cursor on `parent`, on the other hand, is taken here and nowhere else:
-  // it is this frame's own, it covers the one call below that runs application
-  // code, and the check is the statement immediately after that call.  REM3-G3.
-  detail::DeathWatch host(&parent);
+  // The cursor on `parent`, on the other hand, is taken in this frame and
+  // nowhere else: it is this frame's own, it covers EVERY call in it that runs
+  // application code -- the broadcast above and the announcement below -- and
+  // each of those is followed immediately by a check.  REM3-G3.  It is armed at
+  // the top of the function; the note up there is about the placement.
   if (win) win->widgetDetached(node);
   // Order matters: `parent` is dereferenced by everything after this, the
   // liveness test dereferences nothing, so it comes first.
