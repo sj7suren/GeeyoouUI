@@ -23,8 +23,79 @@ void Layout::setSpacing(float px) {
   invalidate();
 }
 
+// N1 (section 11.4 of docs/iterations/02-layout-engine.md), and THE ONE PLACE
+// IN THIS FAMILY WHERE THE PARK LIST DOES NOT CATCH THE FALL.
+//
+// onInvalidated() is a protected virtual, which is to say it is application
+// code -- a P1 door, reached through setMargins, setSpacing, or any setter a
+// Layout subclass writes.  Everywhere else in this engine a host that dies
+// under a layout leaves the LAYOUT OBJECT alive: ~Widget tests
+// `layoutRunning_ || layout_->buffersBusy_` and parks instead of deleting, and
+// half of section 11's arguments rest on that.  Down this path BOTH flags are
+// false -- there is no pass and no measurement -- so ~Widget runs the
+// unique_ptr and frees the object whose member function is on this stack.  The
+// `if (host_)` below is then a read of freed memory, and the reproducer shows
+// it does not stop there: the value it reads is poison, non-null, and
+// performLayout() goes on to read AND WRITE the freed host as well.
+//
+// ONE GUARD, ON THE HOST, AND IT ANSWERS BOTH QUESTIONS.  Two objects are at
+// risk here and only one of them is a Widget, so only one of them can carry a
+// cursor -- there is no cursor list keyed on Layout.  It turns out not to
+// matter for the graded case, because the two liveness facts are not
+// independent:
+//
+//   * `this` alive AND host_ non-null IMPLIES the host is alive.  A host's
+//     death always runs ~Widget, which either parks this layout (and parking
+//     clears host_) or deletes it.  So a layout that survived its host's death
+//     has a null host_, and a non-null host_ means ~Widget has not run.
+//   * The host dying is what DELETES `this` on this path.  When the cursor goes
+//     false, `this` is either freed or parked; both cases must touch nothing,
+//     and touching nothing is bit for bit what the unguarded code did anyway
+//     (a parked layout has a null host_, so `if (host_)` was already false).
+//
+// WHAT ONE CURSOR DOES NOT COVER, registered rather than glossed over.  Two
+// residues, both S2/S3 and both needing a mechanism this round does not build:
+//
+//   * An onInvalidated() that leaves the host ALIVE and replaces its layout
+//     (host()->setLayout<Other>() -- both are public) frees `this` while the
+//     cursor still reads true.
+//   * A layout that was already PARKED when invalidate() was called has no host
+//     and therefore no cursor, so a hook that drains the park list from in
+//     there -- any layout pass that unwinds to depth zero does -- frees `this`
+//     under the `if (host_)` at the bottom.
+//
+// Closing either needs a cursor keyed on Layout: a fifth list and a ~Layout
+// that cancels on it, which is a mechanism change rather than a checkpoint.
+// The cheap substitute for the first -- re-reading host_->layout() and
+// comparing it with `this` -- was REJECTED: it compares a freed pointer VALUE
+// against a fresh allocation, so two setLayout calls in one hook can hand it
+// the same address and a silent wrong answer, which is the trade this whole
+// remediation exists to refuse.
 void Layout::invalidate() {
+  // The pre-door capture, and the only thing this frame is allowed to decide
+  // with once the cursor has gone false (REM3-G1).  It is also what keeps the
+  // no-host case honest: with nothing to watch there is nothing that can die,
+  // so the check below must not consult alive() at all -- a frame that gave up
+  // over an absent host would be recording a degradation that never happened.
+  Widget* const h0 = host_;
+  // MayBeNull because a PARKED layout legitimately has none (see the note on
+  // the `if` at the bottom).  REM3-G7 asks the site to make its own null test
+  // rather than let a guard impersonate a death, and `h0 &&` below is it.
+  const detail::DeathWatch hw(host_, detail::DeathWatch::MayBeNull{});
   onInvalidated();
+  // REM3-G3: immediately after the door, before any other statement.
+  //
+  // NO MEMBER RE-READ, and the reason is a property of host_ rather than an
+  // oversight.  The other checkpoints in this family re-read their member
+  // because a hook may repoint it at a different live object; host_ has no such
+  // path.  It is written in exactly two places -- adoptLayout sets it (private,
+  // and it takes OWNERSHIP, so it can never rebind a layout that already has a
+  // host) and parkLayout clears it.  So host_ can only go null, never sideways,
+  // and the `if (host_)` this function has always ended with is that test.
+  if (h0 && !hw.alive()) {
+    detail::frameDegraded();  // REM3-G8: once per frame, and the frame ends here
+    return;
+  }
   // Null only for a Layout that was constructed but never adopted, which the
   // public API cannot produce -- setLayout constructs and adopts in one step --
   // or for one that has been parked because its host died mid-pass.
