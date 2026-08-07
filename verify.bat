@@ -52,6 +52,7 @@ set "GY_SOAK_CYCLES=400"
 echo ==========================================================================
 echo  [1/6] Release build
 echo ==========================================================================
+call :lint_doors
 call "%ROOT%build.bat"
 set "RC_REL_BUILD=%ERRORLEVEL%"
 if not "%RC_REL_BUILD%"=="0" (
@@ -165,6 +166,73 @@ if defined GY_RED (
 echo [ok] gate is GREEN: Release, Debug and ASan all built, all three suites
 echo      exited 0, and no AddressSanitizer report was attributable to GeeyoouUI.
 exit /b 0
+
+rem --------------------------------------------------------------------------
+rem DOOR COVERAGE (section 11.9 of docs\iterations\02-layout-engine.md).
+rem
+rem The three legs below check BEHAVIOUR.  None of them can check the property
+rem this family keeps losing, which is a property of the SOURCE: that every
+rem statement handing control to application code, with member access after it,
+rem either carries a cursor or is written down in section 11.4 with a reason, a
+rem grade and a round.  Six recurrences, and every one was found by a person
+rem re-reading code a person had already reviewed.  layoutRect() -- a door on
+rem the every-frame layout path -- survived two full enumerations because A
+rem VIRTUAL CALL HAS NO NAME TO GREP, and it was found by a human in the end.
+rem
+rem So this runs before the build, on the sources, and a candidate with no home
+rem makes the gate red.
+rem
+rem WHY IT IS INSIDE STEP [1/6] AND NOT A STEP [7].  The six-banner shape and
+rem the six-row summary are a contract other things read; the classifier
+rem self-test in step [6/6] already established how to add a check without
+rem adding a step.  A source check belongs to the step that turns sources into
+rem a binary, so it goes here, prints its own [ ok ] / [FAIL] line, and sets
+rem GY_RED directly.  The summary table is untouched, and the final verdict
+rem already tells the reader to look for FAIL lines above.
+rem
+rem IT DOES NOT ABORT THE BUILD.  An unarchived candidate means somebody wrote a
+rem door and did not register it; it does not mean the tree fails to compile,
+rem and throwing away the other five steps' evidence to say so would trade a
+rem real signal for a louder one.  The gate still goes red.
+rem
+rem AND THE LINT IS ASKED TO PROVE ITSELF FIRST, for the same reason the ASan
+rem classifier is: it is the only thing standing between an unguarded door and a
+rem release, and a checker that fails its own fixtures has no verdict worth
+rem reading.  A self-test failure does NOT fall through to the lint.
+rem
+rem Budget: self-test ~6.5s, lint ~2s.  If either creeps past ~15s, fix it
+rem there -- do not delete this call.  Both run their tables in one process.
+:lint_doors
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive ^
+  -ExecutionPolicy Bypass -File "%ROOT%tools\test-lint-door-coverage.ps1" -Quiet
+set "RC_LINT_SELFTEST=%ERRORLEVEL%"
+if not "%RC_LINT_SELFTEST%"=="0" (
+  echo   [FAIL] door-coverage lint self-test FAILED, so the lint was NOT run.
+  echo          The failing case and the reason it exists are printed above.
+  echo          Fix tools\lint-door-coverage.ps1, or the fixture that caught it.
+  set "GY_RED=1"
+  goto :eof
+)
+
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive ^
+  -ExecutionPolicy Bypass -File "%ROOT%tools\lint-door-coverage.ps1" -Quiet
+set "RC_LINT=%ERRORLEVEL%"
+if "%RC_LINT%"=="0" (
+  echo   [ ok ] door coverage: every candidate is guarded or archived in section 11.4.
+  goto :eof
+)
+if "%RC_LINT%"=="1" (
+  echo   [FAIL] door coverage: a candidate has no home. Guard the frame, or register
+  echo          it in section 11.4 of docs\iterations\02-layout-engine.md with a
+  echo          reason, a grade and a round. Do NOT lower a grade to silence this.
+  set "GY_RED=1"
+  goto :eof
+)
+echo   [FAIL] the door-coverage lint reached no verdict ^(exit %RC_LINT%^).
+echo          Counted as UNCOVERED on purpose: fail-closed, same rule as the ASan
+echo          classifier below.
+set "GY_RED=1"
+goto :eof
 
 rem --------------------------------------------------------------------------
 rem Did the ASan run report anything, and was any of it OURS?  Turns
