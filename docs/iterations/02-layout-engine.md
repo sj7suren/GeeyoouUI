@@ -850,7 +850,7 @@ void frameDegraded();
 | 13b | **`Widget.cpp:416`（`takeChild` 的第二道门）** | P2 `childRemoved(index)` → `Layout::onChildRemoved` + `markLayoutDirty` → `runLayoutIfAny` → `arrange` → `setGeometry` → `onGeometryChanged` | **无**（`:417 return owned;` 只读局部量） | — | — | — | ❌ 非危险，**但理由是隐式的 ⇒ 本轮加注释**（见下） |
 | 14 | `Widget.cpp:436`（`clearChildren`） | P2 `removeChild` | `:437`/`:441` 读 `children_` | `this` | S1 | — | ✅ **已修**（E17；`:431`/`:437`） |
 | 15 | `Widget.cpp:492`（`setGeometry`） | P1 `onGeometryChanged()` | `:495` `visible_` + `update()` | `this` | S1 | — | ✅ **已修**（R2；`GeometryGuard` `:491`/`:493`） |
-| 16 | **`AppWindow.cpp:72/74/75`** | P2 `setGeometry` ×3 | `:73→:74` 读并解引用 `content_`、`:75` 读并解引用 `fill_`、`:77` 读信号成员、`:78` `update()` | `this,content_,fill_`（`header_` **不需要**：`:72` 之后没有任何语句再解引用它） | **S1（本表最高）** | **W2** | ❌ 本轮不改，**已定级** |
+| 16 | **`AppWindow.cpp:72/74/75`** | P2 `setGeometry` ×3 | `:73→:74` 读并解引用 `content_`、`:75` 读并解引用 `fill_`、`:77` 读信号成员、`:78` `update()` | `this,content_`（`header_` **不需要**：`:72` 之后没有任何语句再解引用它；`fill_` 见 §11.14 —— 它取 `MayBeNull` 游标） | **S1（本表最高）** | W2 | ✅ **已封**（E19；CP-A1 / CP-A2 / CP-A3，§11.14） |
 | 17 | `AppWindow.cpp:77` | P3 `contentResized.emit` | `:78` `update()` 只读 `this` | — | — | — | ❌ D7 豁免 |
 | 18 | `AppWindow.cpp:85`（`setHeaderVisible`） | P2 `setVisible` | `:86` `relayout()` 经 `this` | `this` | S2 | W2 | ❌ 本轮不改 |
 | 19 | `WindowHeader.cpp:218`（`relayoutItems`） | P2 `setGeometry`（**在 range-for 里**） | `:219-221` 继续用 `slots_` 的迭代器、`:222` `update()` | `this` + 迭代器失效 | S1 | **W2** | ❌ 本轮不改；与 BoxLayout scratch 越界同形 |
@@ -926,10 +926,10 @@ const float titleW =
 
 | # | 位置（HEAD） | 门 | 门后经 `this`/成员的读写 | 级 | 轮 |
 |---|---|---|---|---|---|
-| **N1** | `Layout.cpp:27` `Layout::invalidate()` | P1 `onInvalidated()` | `:31` `if (host_) host_->performLayout()` | **S1** | **W2** |
+| **N1** | `Layout.cpp:27` `Layout::invalidate()` | P1 `onInvalidated()` | `:31` `if (host_) host_->performLayout()` | **S1** | W2 → ✅ **已封**（E19；CP-L1，守 `host_`。两条残留见 §11.14） |
 | N2 | `Widget.cpp:821` `childAppended()` | P1 `layout_->onChildAppended()` | `:822` `markLayoutDirty()` | S2 | W2 |
 | N3 | `Widget.cpp:826` `childRemoved()` | P1 `layout_->onChildRemoved(index)` | `:827` `markLayoutDirty()` | S2 | W2 |
-| **N4** | `Window.cpp:165` `setFocusWidget()` | P1 `old->onFocusChanged(false)` | `:166` `focus_->onFocusChanged(true)` | **S1** | **W2** |
+| **N4** | `Window.cpp:165` `setFocusWidget()` | P1 `old->onFocusChanged(false)` | `:166` `focus_->onFocusChanged(true)` | **S1** | W2 → ✅ **已封**（E19；CP-W1。⚠️ 触发形态与本表原文不同，见 §11.14） |
 | **N5** | `Widget.cpp:1195` `animationTickTree()` | P1 `onAnimationTick()` | `:1196` `for (children_)` | **S1** | **W2** |
 | N6 | `Widget.cpp:1131` `paintTree()` | P1 `onPaint()` | `:1136` `for (children_)` | S3 | W3 |
 | N7 | `SelectBase.cpp:106`（`refreshRows`）、`:121`/`:125`（`open`） | P1 `buildRows()` / `onOpened()` | `:110-112` 与 `:126-127` 共 4 处经 `this` 的读（`popupWidth_`、`geometry()`、`update()`、`openStateChanged`） | S2 | W2 |
@@ -941,6 +941,10 @@ const float titleW =
 * **N1 是这九条里唯一一条会真正 `delete` 而不是 park 的，park list 在这条路径上救不了它。** `Layout::invalidate()` 由 `setMargins` / `setSpacing` / 任何子类 setter 调用。走这条路时 `layoutRunning_` 与 `buffersBusy_` **都是 false**（没有 pass、没有 measure），于是 `~Widget` 里 `if (layoutRunning_ || layout_->buffersBusy_) parkLayout(...)` 的条件不成立，`unique_ptr<Layout> layout_` 直接把 Layout **删掉**——而 `Layout::invalidate()` 的栈帧还在，`:31` 的 `if (host_)` 就是一次对已释放对象的读。§11.3 反复引用的"停车场兜底"在这里**不成立**，这是它第一次不成立。定级 S1。
 * **N3 是 E6 那个形状，早了一轮，而且在同一个文件里。** 本表 #13b 分析的是 `takeChild` **那一帧**：`childRemoved(index)` 之后只剩 `return owned;`，不碰 `this`，所以那一帧非危险——**这个结论是对的**，本轮不改。但它**停在了 `childRemoved()` 的门口**：`Widget::childRemoved()` **自己那一帧**里，门（`layout_->onChildRemoved()`）之后还有一句 `markLayoutDirty()`，那是一次经 `this` 的成员访问。**外帧看着干净不等于内帧干净**——这与 E6 抓 `contentRect` / `runLayoutIfAny` 是同一件事（#28 / #28b），只是这一次内外两帧都在 `Widget.cpp` 里。N2 是它的孪生。
 * **N4 今天就能走到应用代码，不需要任何假设。** 路径是现成的：`SelectBase::onFocusChanged(false)` → `close()` → `w->closePopup()` + `openStateChanged.emit(false)`。挂在 `openStateChanged` 上的槽只要销毁那个**即将获得焦点**的控件，`Window.cpp:166` 就在悬空的 `focus_` 上做虚调用。注意 `focus_` 在 `:162` 已经被写成新值了，所以这不是"读旧指针"，是**读一个刚写进去、又在门里被销毁的成员**——REM3-G2 的成员重读正是为这个形状写的。
+
+  ⚠️ **上面这段的最后一句对了，前面的路径错了。E19 封门时逐步走过一遍，本轮更正**：那个槽若用**树内移除**（`removeChild`/`takeChild`/`clearChildren`）去"销毁那个即将获得焦点的控件"，`announceDetached` → `Window::widgetDetached` 会**先**把 `focus_` 清空——R1 就有，且是**按离场子树的每个节点**发的，所以孙子也覆盖。于是 `:166` 的 `if (focus_)` 根本不成立，**这条路径今天不会崩**。E19 把它写成了用例的第一块，在无守卫的构建上实测**存活**。
+  **真正的洞是另外两个形状**（两条都实测出了红态，见 §11.14）：(i) **不走 `takeChild` 的销毁**——`~Widget` 对 Window 不发任何通知（ADR-R2-11 §3 的有意设计），所以一个孤儿控件、或应用早先摘下现在才释放的子树，`focus_` 无人清空；(ii) **窗口自己死在门里**，那是 `widgetDetached` 从来就管不着的。
+  **登记这条更正本身**：`widgetDetached` 的记账**没有洞**，洞在"哪些死亡会经过它"。把"能到达应用代码"当成"能崩"，是本族第七次同形错误——**门是必要条件，不是充分条件**。
 
 #### "看过了、不需要封"清单（E9 复核的免检项；与 #11、#13b 同一条规矩：可复核的理由 > 沉默）
 
@@ -1616,6 +1620,187 @@ freed by thread T0 here:
 
 ---
 
+### 11.14 【E19】§12.4 A 组的三条 S1：N1 / N4 / #16
+
+> 状态：**已实现、已自检、三条腿门禁全绿、四条红态先行且逐条留档，未由测试团队验证。** 结论由测试团队下。
+> 本小节把 §12.4 A 组的三条 **S1** 关掉，并**更正**其中两条的判词——两条的现场都与表里写的不一样，且不一样的方向相反：一条比表里说的更糟，一条比表里说的更窄。
+
+#### 三条各自的失败形态不同，这是本轮最该被带走的一条事实
+
+同一族、同一个定级、同一轮，**三种模式**，所以证据的腿也不同：
+
+| 门 | 今天真正会发生什么 | 哪条腿看得见 |
+|---|---|---|
+| **N1** `Layout::invalidate` | Layout 对象自己被 `delete`，`:31` 读已释放的 `this->host_`，随后 `performLayout()` 对已释放的**宿主又读又写** | ASan |
+| **N4** `Window::setFocusWidget` | `focus_` 指向的控件被释放，`:166` 经它做**虚调用** | ASan（Release 双峰） |
+| **#16** `AppWindow::relayout` | E15 的钩子**先把成员置空**，所以是**空解引用**不是悬垂 | **三条腿都红** |
+
+**#16 这一行值得单独读**：E15 给 `AppWindow` 装了 `onDescendantDetached`，广播在任何释放**之前**跑，于是这条 S1 从 UAF 降级成了确定性空解引用。**降级不是关闭**——它每帧路径上仍然是一次进程当场死，只是从"只有 sanitizer 看得见"变成了"谁跑谁看得见"。E15 的收益是把一个隐形缺陷变成了一个显形缺陷，这正是它当初被判为正确方向的理由。
+
+#### N1 —— 需要几个守卫，守谁，以及一个守不了的对象
+
+**两个对象有风险，只有一个能上游标**：`host_` 是 `Widget*`，而 `Layout` 自己也会被删，可 `DeathWatch` 的游标是 `Widget*`，`~Layout` 不在任何一条链表的取消点上。**结论是一个守卫，守 `host_`**，理由是两条存活性事实并不独立：
+
+1. **`this` 活 ∧ `host_` 非空 ⇒ 宿主活。** 宿主的死一定跑 `~Widget`，它要么 park 这个 layout（park 会把 `host_` 置空），要么把它删掉。所以"活过宿主之死的 layout"必然 `host_` 为空；反过来 `host_` 非空就意味着 `~Widget` 还没跑。
+2. **本路径上删掉 `this` 的正是宿主之死。** 游标一翻假，`this` 要么已释放要么已 park，两种都必须一个字节都不碰——而"一个字节都不碰"与无守卫版本**逐位同义**（park 过的 layout `host_` 为空，`if (host_)` 本来就不成立）。
+
+**没有成员重读**，这是 `host_` 的性质而不是疏忽：写它的只有两处，`adoptLayout`（private，且**接管所有权**，无法把一个已有宿主的 layout 重新绑到别处）与 `parkLayout`（置空）。`host_` **只会变空，不会变成别的对象**，而"变空"正是函数本来就有的那个 `if (host_)`。
+
+**两条残留，登记不掩盖**（两条都需要一条以 `Layout*` 为键的游标链表 + 会取消它的 `~Layout`，那是机制改动不是检查点）：
+
+* **RES-N1a（S2/W2）**：`onInvalidated()` 里 `host()->setLayout<Other>()`——宿主活着，`this` 被换掉并释放，游标仍读真。
+* **RES-N1b（S3/W2）**：进函数时就**已经 park** 的 layout 没有宿主也就没有游标，钩子里任何退栈到深度零的布局趟都会排空停车场并释放 `this`。
+
+**明确否决的廉价替代**：门后重读 `host_->layout()` 并与 `this` 比较。它拿一个**已释放的指针值**去比一次新分配——一个钩子里连着两次 `setLayout` 就能让新对象落在旧地址上，于是它会**静默答对**。这正是本轮整治反复拒绝的那笔交易（§12.5 第 10 条）。
+
+#### N4 —— 先判断再动手：`widgetDetached` 到底覆盖了没有
+
+**覆盖了，而且没有洞；洞在"哪些死亡会经过它"。** 结论与 §11.4 N 表原文相反，更正已写在那张表下面的要点里。
+
+* `Window::widgetDetached` 自 R1 就清 `focus_`，它由 `announceDetached` 调用，而 `announceDetached` 只有 `Widget::takeChild` 一个调用者——**那是一棵子树离开活树的唯一一扇门**（ADR-R2-11 §3，两条 grep + Leo 的扩面复核）。广播**按离场子树的每个节点**发，所以孙子也在内。⇒ **一切"树内移除"形状的销毁都已被覆盖**，包括 §12.4 点名的那条 `SelectBase` 路径。
+* 用例的第一块就是那条路径，**在无守卫的构建上实测存活**。
+
+**剩下的两个形状才是 N4**：
+
+1. **不经 `takeChild` 的销毁**。`~Widget` 对 Window 不发任何通知（ADR-R2-11 §3 的有意设计，理由是"告诉一个正在被释放的对象它的成员要没了"没有意义）。而 `setFocusWidget` 从来不要求参数在树里——一个孤儿控件，或者应用早先 `takeChild` 下来、现在才丢掉的子树，`focus_` 无人清空。
+2. **窗口自己死在门里**。从 focus-out 处理里关掉窗口是应用会写的东西，而这是 `widgetDetached` 的记账从来管不着的。
+
+**检查点 CP-W1**：`!self.alive() || focus_ != w || (w && !incoming.alive())`——`this` → 成员重读 → 游标，顺序承重（见下面的判别性实验 D5）。
+
+**不修复状态，登记**：守卫是帧作用域的，触发后 `focus_` 仍指着那个死掉的控件。置空是一次经 `this` 的写，而 REM3-G1 明令降级帧不得写；真正的修法是给 `focus_` 补上"不经 takeChild 的死亡"那条通知路径，那是 ADR-R2-11 的题目。**RES-N4a（S2/W2）。**
+
+#### #16 —— 三扇门、三个检查点，以及 `header_` / `fill_` 的两处更正
+
+| 检查点 | 紧贴哪扇门后 | 检查项 |
+|---|---|---|
+| **CP-A1** | `header_->setGeometry` | `!self.alive()` → `content_ != ct0` → `fill_ != fl0` → `!ctw.alive()` → `(fl0 && !flw.alive())` |
+| **CP-A2** | `content_->setGeometry` | `!self.alive()` → `fill_ != fl0` → `(fl0 && !flw.alive())` |
+| **CP-A3** | `fill_->setGeometry` | `!self.alive()` |
+
+* **`header_` 不守**——Leo 在 E9 抽查时的判词成立，本轮复核确认：`:82` 与 `:84` 两次解引用都在**第一扇门之前**（`borderWidth()` / `localRect()` / `WindowHeader::height()` / `isVisible()` 全是非虚），`:84` 之后再没有任何语句碰它。
+* **CP-A2 只有三项，CP-A3 只有一项**：`content_` 在 `:86` 之后不再出现，`fill_` 在 `:87` 之后不再出现——与 `ScrollArea::relayout` 的 CP-S2 同一条理由。
+* **`fill_` 走 `MayBeNull` 游标**：它可以合法为空（`setContent<T>` 之前的每一个 `AppWindow`），而 `DeathWatch` 的契约把空定义为已死。空时不得查 `alive()`，否则一个**健康**帧会被判成降级并跳过 `contentResized.emit` 与 `update()`——那才是真的行为改变。
+* **`:89 contentResized.emit` 不危险**：宿主是 `this`，D7 豁免（表 #17），门后只剩 `update()`。这是 D7 在本文件里唯一一次干实事。
+
+#### 设施的一处扩展：`DeathWatch(const Widget*, MayBeNull)`
+
+**Q7 的 `assert` 前提对"可选成员"不成立，这三条门是证据。** 原话是"任何一个上守卫的现场，都是因为它**马上要解引用那个指针**"——对**无条件**解引用的成员完全正确（`ScrollArea::content_` 在 `hasParts()` 之后，`AppWindow::content_` 在 `relayout()` 第一行之后），对**有条件**解引用的成员是错的：`AppWindow::fill_`、`Layout::host_`、`Window::focus_` 三个都是"没有它也是正常状态"。
+
+REM3-G7 给的处方（现场自己先做空检查）只在"现场可以整帧放弃"时可用，而这三处**都不能**：没有内容的窗口仍要摆标题栏，没有宿主的 layout 仍要跑 `onInvalidated()`。所以扩展的是构造方式而不是语义——**同一条链表、同一套取消、同一个 `alive()`，空仍然读作已死**；现场欠的是一句 `(p0 && !pw.alive())`，用门前捕获的局部量做短路，而不是让守卫去冒充一次死亡。
+
+**代价**：`Widget.hpp` 纯新增 39 行（一个 tag 类型 + 一个构造函数 + 理由），`sizeof(Widget)` 与 `sizeof(DeathWatch)` 均不变，原来那个带 `assert` 的构造函数一个字未改。**这一条请架构团队复签**：它动的是 §11.2「唯一权威」的 API 形状。
+
+#### 红态先行（四条，全部在封门**之前**实跑并留档）
+
+用例落在 `tests/widget/test_rem3_doors.cpp`，每一次可能 UAF 的读都有消费者（§11.8 的证据标准）。**逐条给出最内层非运行时栈帧**：
+
+**N1** —— `a_layout_that_loses_its_host_in_on_invalidated_stops_there`，ASan 腿 **10 条报告**，退出码 1：
+
+```
+heap-use-after-free  READ 8   #0 geeyoou::Layout::invalidate      src\widget\Layout.cpp:31
+                     freed by #3 SuicidalLayout::~SuicidalLayout  (经 ~Widget 的 unique_ptr)
+heap-use-after-free  READ 8   #0 geeyoou::Widget::performLayout   src\widget\Widget.cpp:727
+heap-use-after-free  WRITE 1  #0 geeyoou::Widget::performLayout   src\widget\Widget.cpp:728
+```
+
+⚠️ **第三条是写，不是读**——§11.4 的 N 表把 N1 的门后只记成 `if (host_)`，实际的爆炸半径包含一次对已释放宿主的**写**。定级 S1 是对的，描述是轻了。
+
+**N4** —— `a_focus_handover_that_loses_the_winner_stops_there`（第二块，孤儿获焦者）：
+
+```
+heap-use-after-free  READ 8   #0 geeyoou::Window::setFocusWidget  src\widget\Window.cpp:166
+                     freed by #3 FocusHook::~FocusHook
+                              #5 FocusHook::onFocusChanged
+                              #6 geeyoou::Window::setFocusWidget  src\widget\Window.cpp:165
+access-violation              #0 geeyoou::Window::setFocusWidget  src\widget\Window.cpp:166  <- 进程在此死掉
+```
+
+**#16 之一** —— `an_appwindow_relayout_that_loses_its_content_stops_there`，**三条腿都红**（Release 退出码 139）：
+
+```
+access-violation on 0x000000000008   <- content_ 是 nullptr
+    #0 geeyoou::Rect::operator==     include\geeyoou\core\Types.hpp:73
+    #1 geeyoou::Widget::setGeometry  src\widget\Widget.cpp:620
+    #2 geeyoou::AppWindow::relayout  src\widget\AppWindow.cpp:86
+```
+
+**#16 之二** —— `an_appwindow_relayout_that_loses_itself_stops_there`：
+
+```
+heap-use-after-free  READ 8   #0 geeyoou::Signal<Size>::emit      include\geeyoou\core\Signal.hpp:209
+                              #1 geeyoou::AppWindow::relayout     src\widget\AppWindow.cpp:89
+                     freed by ~AppWindow（从 fill_->onGeometryChanged 里）
+```
+
+#### 判别性实验（五个，每个只拆一项）
+
+**合取反证只能证明"至少有一处必要"**（§12.5 第 6 条）。逐条：
+
+| # | 只拆掉什么 | 结果 |
+|---|---|---|
+| **D1** | N1 的**检查块**（守卫与门前捕获**保留**） | 原 UAF 原样回来（`Layout.cpp:98` 读 `host_`），11 条报告，退出码 1 ⇒ **救命的是检查，不是守卫在场** |
+| **D2** | N4 的 `(w && !incoming.alive())`，其余两项保留 | 只有孤儿那一块红：`Window.cpp:216` heap-use-after-free ⇒ **获焦者的游标单独必要，`widgetDetached` 替代不了** |
+| **D3** | CP-A1 的 `content_ != ct0`，其余四项保留 | Release 段错误 139 / ASan `AppWindow.cpp:143` 空解引用 ⇒ **成员重读单独必要** |
+| **D4** | **整个 CP-A3**（CP-A1 / CP-A2 保留） | `AppWindow.cpp:153` heap-use-after-free（`contentResized.emit`）⇒ **第三个检查点单独必要** |
+| **D5** | N4 的 `!self.alive()`，其余两项保留 | `Window.cpp:212` heap-use-after-free —— **报告出在 `focus_ != w` 这一项自己身上**，因为它要经 `this` 解引用。用例**照样 PASS**（帧随后在游标上降级了），**ASan 红** |
+
+⚠️ **D5 是本轮最值钱的一条，两个理由**：
+
+1. 它把 REM3-G3 的"第一项必须是 `this` 的游标"从一条风格规则变成了**实测事实**——顺序错了，检查链自己就是那次 UAF。
+2. 它是 §11.8 那条证据标准的又一个现场：**退出码 0、用例全绿、ASan 红**。任何人拿"套件是绿的"来主张这一项可以省掉，都会漏掉它。
+
+⚠️ **一处方法学教训，写下来给下一个人**：第一版的 #16 用例是"有 fill + `removeChild`"，五项检查里**同时**有四项会触发，于是 D3 拆掉任何单独一项都不会红——实测过，套件全绿。**判别性实验做不出来，往往说明用例的构造不够分离，而不是那一项不必要。** 现在的第一块用 `takeChild`（**摘下但不销毁**，游标按 Q4 的策略仍读真）加上**不调 `setContent`**（`fill_` 前后都是空，它那两项恒静默），把可能触发的检查项压到**恰好一项**。**分离的构造是判别性实验的前提。**
+
+#### 每帧路径的开销：`/FAsc` 实测，不是推算
+
+`src/widget/AppWindow.cpp` 单独取汇编，**真实 CMake flags**（`/O2 /Ob2 /W4 /permissive- /utf-8 /Zc:__cplusplus -DNDEBUG` 加 CMake 注入项）、**真实 include 链**，与 `build/build.ninja` 里那一行逐字一致；对照组是改动前的同一文件。
+
+| | `AppWindow::relayout` 自身指令数 |
+|---|---|
+| 改动前 | **77** |
+| 改动后 | **137** |
+
+**+60**，拆开来看：
+
+| 段 | 实测 |
+|---|---|
+| 门前捕获 `ct0` / `fl0` | 2 |
+| 三个游标构造 | **17** |
+| CP-A1 | 13 |
+| CP-A2 | 10 |
+| **CP-A3** | **2**（`test rax,rax` + `je`——编译器把 CP-A2 载入的 `self.node` 留在 `rax` 里复用了） |
+| 三个守卫析构 | **2**（LIFO 折叠成一次 `mov rax,[self.outer]` + `mov [g_deathWatch],rax`，与 §11.5 记的"无论几个都是 2"一致） |
+
+三守卫构造实测 **17**，与 §11.5 在 `ScrollArea` 落点上量到的 17/18 吻合——**同一个形状、同一个数**，那条"探针里的 9 是另一个形状"的更正因此又被独立复现了一次。分项加起来是 46，与整函数的 +60 差 14：那 14 是多出来的活跃值造成的**寄存器压力/溢出**，不是守卫代码本身。**这正是 §11.5 那条教训——落点的形状由周围的代码决定——所以本表以整函数的 77→137 为准，分项只作说明。**
+
+**分母，以及守卫落在哪里**：
+
+* 三个检查点**全部落在既有的 `if (!header_ || !content_) return;` 之内**。丢了标题栏或内容区的窗口**一条都不执行**——与 ADR-R2-01 对 `ScrollArea` 的论证同形。
+* 这一帧要发出**三次 `Widget::setGeometry`**（自身实测 **92** 条指令，外加两次调用：虚的 `onGeometryChanged` 与 `Widget::update`，后者自身 **49** 条再加一趟父链行走），其中第一次的 `onGeometryChanged` 是 `WindowHeader::relayoutItems`，它**每个尾部项再发一次 `setGeometry`**；末尾还有一次进应用代码的 `contentResized.emit`。**+60 对 10³ 量级**。
+* 没有分支预测灾难：六个条件跳转全是"本帧栈槽/寄存器 vs 0 或 vs 另一个栈槽"，生产中恒不跳转。
+
+#### 门禁
+
+* 基线 **208 用例 / 三条腿全绿**（196 提交、工作树干净）→ 改动后 **212 用例 / 三条腿全绿**，0 失败。**新增 4 条，既有用例一条未改、一条未删。**
+* **Release 独立跑 3 次**，退出码全 0，三次 stdout **逐字节相同**。
+* **整份 Release stdout 与基线 diff**：**只有 4 行新增的 PASS 和 `208 个用例` → `212 个用例`，此外一个字符都没有。** Debug 腿的 diff 逐字相同。特别地 `[soak] 400 cycles ... live-allocs 18/18/18` **一位没动**，也就是说 soak 末尾那条 `framesDegraded == (cycles+3) × 5` 的常驻断言**照旧成立**——三个新检查点在既有路径上一次都没有触发。
+* ASan 腿：**1 条报告，且与基线是同一条**（本机 SogouPY.ime，use / free 两端都无我方帧，分类器判 `[known]`），退出码 0。
+* **9 张 golden 逐字节不变**（SHA-256 逐个比对，`tests/visual/baseline/**` 全量）。
+* **REM3-G5 机械判据**：五个改动文件 `git diff -U0 | grep -c "^-[^-]"` **全部为 0**，合计 **587 行纯新增、0 行删除**。**没有例外项要说明**——本轮一条既有语句都没有移动、合并、拆分或重写，注释也没有。
+* 三条腿都是从既有目录增量构建，但 `Widget.hpp` 一改，ninja 重编了 **73 个目标文件**，`Widget.cpp.obj` / `Layout.cpp.obj` / `Window.cpp.obj` / `AppWindow.cpp.obj` 全部在列——所以 `Widget.cpp:36` 的 `sizeof(Widget)` 预算 `static_assert` **被真正重新求值过**。全库 `/W4 /permissive-` **零警告**（三条腿各自 `grep -c "warning C"` 为 0）。
+
+#### 未验证 / 留给下一轮
+
+1. **`DeathWatch` 的 `MayBeNull` 构造函数是对 §11.2「唯一权威」API 形状的扩展**，需要架构团队复签。它不改语义、不改尺寸、不改取消策略，但 Q7 的判词要跟着改一句。
+2. **RES-N1a / RES-N1b**（见上）：`Layout::invalidate` 的另外两条删除路径没关，两条都要一条以 `Layout*` 为键的游标链表。**S2 / S3，均排 W2。**
+3. **RES-N4a**：`focus_` 在降级后仍是悬垂成员。守卫是帧作用域的，这是 REM3-RES-1 在 `Window` 上的又一个实例。**S2 / W2。**
+4. **N4 的第一块（`widgetDetached` 覆盖的那条路径）现在多记一次 `framesDegraded`**：`focus_` 被清空 ⇒ 成员重读为假 ⇒ 帧降级。**行为逐位不变**（原本 `if (focus_)` 也不成立），变的只有诊断计数。按 REM3-G8 记录是对的（这一帧确实没把 `onFocusChanged(true)` 送出去，而放弃在返回值里不可见），但它是本轮唯一一处让既有路径**多记一次**的地方。既有门禁未受影响（Release stdout 逐字节相同证明了这一点），但**下一个改 soak 断言的人要知道有这条**。
+5. **`setFocusWidget` 的重入语义有一处收紧**：门里若有人重入 `setFocusWidget(other)`，本帧的 `focus_ != w` 会为真而降级，于是外层**不再**对 `other` 第二次调用 `onFocusChanged(true)`。原行为是通知两次。**这更像修复而不是回归，但它是一次行为改变**，今天全库没有任何路径这么做（整份 Release/Debug stdout 逐字节相同即证），**登记备查**。
+6. **`Layout::onInvalidated()` 在库、examples、tests 里的覆写数是 0**（本轮的用例是进程史上第一个）。所以 N1 的门此前从未真正跨越过——这解释了为什么它能活到第九次复扫才被发现，也意味着**这条门的红态完全依赖那条新用例存在**。
+7. **`/FAsc` 只取了 `AppWindow.cpp`。** N1 与 N4 的成本按 §11.5 的单价推算（各一到两个守卫 + 一次检查，冷路径），**未实测**——按 §11.5 自己的教训，这一条就是推算，标注在此。
+
+---
+
 ## 12. 【E13】R2 关帐
 
 > 状态：**本节是关帐记录，不是验收结论。** 本轮全部改动"已实现、已自检"，**结论由测试团队下**。
@@ -1671,7 +1856,7 @@ freed by thread T0 here:
 |---|---|
 | **五组复现器先红后绿** | 每一组都在修复**之前**先跑出红态并留档；红态形态（退出码 / 哪条腿 / 报告种类）逐条记在各自小节 |
 | **门计数器** | soak 实测 `framesDegraded = 403 × 5 = 2015`（403 = 400 圈 + 3 轮热身）。**它证明守卫幸存于调用，而不是压掉了调用**——降级路径被真正走到 2015 次，而几何仍然逐位稳定 |
-| **门禁** | **207 用例、三条腿全绿**（E16 收口时）；本轮 E18 新增 1 条 ⇒ **208** |
+| **门禁** | **207 用例、三条腿全绿**（E16 收口时）；E18 新增 1 条 ⇒ **208**；**E19（§11.14）新增 4 条 ⇒ 212** |
 | **Release 双峰问题已消失** | E2 期间 Release 腿是**双峰的**（同一个二进制 10 次里崩 8~9 次），那是活跃 UAF 的指纹。收口后 **10 次 0 崩溃、stdout 逐字节相同** |
 | **golden** | 9 张逐字节不变（SHA-256 逐个比对） |
 | **零分配** | soak 四条采样序列的**平坦性**（唯一被断言的性质）未变；末值不高于热身后的值 |
@@ -1687,18 +1872,18 @@ freed by thread T0 here:
 
 #### A. 门覆盖（§11.4 与 N1–N9）
 
+> **【E19 更新】本组减三条：`#16` / `N1` / `N4` 三条 S1 已封，见 §11.14。** 本组**从此不再有 S1 以外的更高定级项，但仍有两条 S1**（`#19`、`N5`）。
+> 连带产生的新残留（**RES-N1a / RES-N1b / RES-N4a**）不在本组，登记在下面的 **F 组**——它们是状态与机制缺口，不是未封的门。
+
 | 项 | 位置 | 级 | 轮 | 备注 |
 |---|---|---|---|---|
-| **#16** | `AppWindow::relayout` 的三处 `setGeometry` | **S1（全表最高）** | **W2** | **每帧跑**（`onGeometryChanged` → `relayout`），`header()`/`content()` 都是 public，showcase 五页正是这么用，门后一个游标都没有。库里最显眼的那条注释（`Widget.cpp` 里 `GeometryGuard` 上方那段）拿的正是这个函数当例子 |
-| **#19** | `WindowHeader::relayoutItems`，range-for 里的 `setGeometry` | **S1** | **W2** | 门后继续用 `slots_` 的迭代器 ⇒ **迭代器失效**，与 BoxLayout scratch 越界同形 |
+| **#19** | `WindowHeader::relayoutItems`，range-for 里的 `setGeometry` | **S1** | **W2** | 门后继续用 `slots_` 的迭代器 ⇒ **迭代器失效**，与 BoxLayout scratch 越界同形。⚠️ **E19 之后它是本组最高的一条**，而且 §11.14 的 #16 用例正是从一个 header 尾部项的 `onGeometryChanged` 里发起的——**那条用例每跑一次就从这扇门里过一次** |
 | **#20** | `Cascader::relayoutColumns` 的 `setVisible`（循环内按下标读 `columns_`） | S2 | W2 | |
 | **#21** | `Cascader.cpp` 三处 `setGeometry` | S2 | **W2** | 下标能防重分配，**防不了缩短** |
 | **#22** | `SelectBase::showCustomPopup` 的 `Window::openPopup` | S2 | W2 | **P3 家族的已确认样本**：宿主是 `Window` 不是 `this`，**D7 不豁免** |
 | **#23 / #2** | `PushButton::sizeHint` / `GroupBox::sizeHint` 的 `styleState()` 族 | **S3** | **W3** | **REM3-RES-2**：处理方向是**收紧契约**（`styleState()` / `onPaint()` 的覆写不得修改控件树），不是逐点加守卫——这一族在库里几十处。需要一次架构裁定（会不会有应用在 `onPaint` 里改树？） |
 | **#27** | **P3 家族，全库约 60 处 `.emit(`** | S2 | **W2（扫描任务）** | D7 豁免砍掉大半；剩下的是"发别人的信号 / 经别的对象绕一圈回来"那一类。产出物就是 §11.9 lint 的 allowlist |
-| **N1** | `Layout::invalidate()` → `onInvalidated()`，门后 `if (host_) host_->performLayout()` | **S1** | **W2** | ⚠️ **九条里唯一一条会真正 `delete` 而不是 park 的**：走这条路时 `layoutRunning_` 与 `buffersBusy_` 都是 false，**停车场兜底在这里第一次不成立** |
 | **N2 / N3** | `Widget::childAppended()` / `childRemoved()`，门后 `markLayoutDirty()` | S2 | W2 | **外帧看着干净不等于内帧干净**：#13b 证明的是 `takeChild` 那一帧安全，它停在了 `childRemoved()` 的门口 |
-| **N4** | `Window::setFocusWidget()`，门后 `focus_->onFocusChanged(true)` | **S1** | **W2** | **今天就能走到应用代码**：`SelectBase::onFocusChanged(false)` → `close()` → `openStateChanged.emit(false)`，槽销毁那个即将获得焦点的控件即可。且 `focus_` 已被写成新值 ⇒ 是**成员重读**的形状 |
 | **N5** | `Widget::animationTickTree()`，门后 `for (children_)` | **S1** | **W2** | |
 | **N6** | `Widget::paintTree()`，门后 `for (children_)` | S3 | W3 | |
 | **N7** | `SelectBase::refreshRows` / `open` | S2 | W2 | 门后 4 处经 `this` 的读 |
@@ -1739,6 +1924,18 @@ freed by thread T0 here:
 | `ScrollArea` 降级后残留的 `hoverV_` / `hoverH_` | S3 | W3 | 看不见（两个 bar 矩形都是空的），但它是状态而不是不变量 |
 | ADR-R2-11 时序图**未渲染** | — | W2 | 本机 `plantuml.jar` 未安装。`.puml` 源已入库；**未渲染前不许宣称已出图** |
 
+#### F. 【E19 新登记】封 N1 / N4 / #16 自己的爆炸半径
+
+**三条都不是"没做完的门"，而是这三扇门关上之后剩下的、需要新机制或新裁定的东西。** 详见 §11.14。
+
+| 项 | 级 | 轮 | 备注 |
+|---|---|---|---|
+| **RES-N1a**：`onInvalidated()` 里换掉宿主的 layout | **S2** | **W2** | 宿主活着、`this` 被 `setLayout<Other>()` 释放，`host_` 的游标仍读真。`host()` 与 `setLayout` 都是 public。**廉价替代（比较 `host_->layout()` 与 `this`）已被明确否决**：它比的是一个已释放的指针值，两次 `setLayout` 就能让新对象落在旧地址上 ⇒ 静默答对 |
+| **RES-N1b**：进 `invalidate()` 时已 park 的 layout | S3 | **W2** | 没有宿主就没有游标，钩子里任何退栈到深度零的布局趟都会排空停车场并释放 `this`，`if (host_)` 就是那次读 |
+| **RES-N4a**：`focus_` 在降级后仍悬垂 | **S2** | **W2** | 守卫是帧作用域的，不修复对象状态——REM3-RES-1 在 `Window` 上的实例。**修法不是在守卫里置空**（那是 REM3-G1 禁止的、经 `this` 的写），而是给"不经 `takeChild` 的死亡"补一条通知路径，那是 ADR-R2-11 / REM3-G7 的题目 |
+| **`DeathWatch(const Widget*, MayBeNull)`** | — | **W2（复签）** | §11.2 的 API 形状扩展，**需要架构团队复签**。Q7 的 `assert` 前提（"上守卫就是马上要解引用"）对**有条件解引用的可选成员**不成立，三条门都是证据。语义、尺寸、取消策略均未变 |
+| **RES-N1c**：以 `Layout*` 为键的游标链表 | — | **W2（裁定）** | RES-N1a / RES-N1b **两条都只能靠它关**。要一条第五链表 + 一个会取消它的 `~Layout`（今天是头文件里的 `= default`）。按 §11.1 判据 1/2 先判它的取消策略与决策读者，再决定是新开还是复用 |
+
 ---
 
 ### 12.5 本轮的方法学产出
@@ -1778,3 +1975,14 @@ freed by thread T0 here:
 
 11. **免检要给结构性理由，不给用法观察。**
     `Platform.hpp` 那 21 条虚函数免检，理由是"**没有安装接口**"（一条两行的 grep），不是"今天没人这么用"。两句话的分量差着一个数量级——**本族六次复发里，"今天没人这么用"输了六次。**
+
+12. **【E19】门是必要条件，不是充分条件——"能到达应用代码"不等于"能崩"。**
+    §11.4 的 N 表给 N4 写的触发路径（`SelectBase::onFocusChanged(false)` → `openStateChanged.emit(false)` → 槽销毁即将获焦的控件）**逐步走一遍就不成立**：那个"销毁"若走树内移除，`Window::widgetDetached` 会先把 `focus_` 清空。真正的洞是**不经 `takeChild` 的销毁**与**窗口自己死在门里**——两个都不在原判词里。
+    谓词扫描给的是**候选**；把候选当成结论，方向与本族前六次相反（前六次是漏判），但**同样是"看起来复核过、其实没有"**。⇒ 定级可以照候选给，**触发路径必须实际走通并留下一条会红的用例**。
+
+13. **【E19】判别性实验做不出来，通常说明用例的构造不够分离。**
+    第一版的 #16 用例（有 fill + `removeChild`）里，CP-A1 的五项检查**同时**有四项会触发，于是单独拆掉任何一项都不红——实测过，套件全绿。换成 `takeChild`（**摘下但不销毁**，游标按 Q4 的策略仍读真）加上**不调 `setContent`**（`fill_` 前后皆空，两项恒静默）之后，能触发的检查项恰好剩一项，实验立刻有了判别力。
+    **"拆了没红"有两种读法——那一项多余，或者用例分不开它们——先排除第二种。**
+
+14. **【E19】检查链的顺序是承重的，而且这条现在有实测。**
+    只拆掉 N4 的 `!self.alive()`、其余两项原样保留，ASan 报告出在**紧跟着的那一项自己身上**（`focus_ != w` 要经 `this` 解引用）。**用例照样 PASS、退出码 0、ASan 红**——第 4 条那个"两个独立信号"又演了一遍。REM3-G3 的"第一项必须是 `this` 的游标"从此不是风格规则。
