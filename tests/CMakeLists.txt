@@ -29,6 +29,7 @@ add_executable(geeyoou_tests
   widget/test_r2_remediation.cpp
   widget/test_rem3_doors.cpp
   widget/test_layout_soak.cpp
+  widget/test_table.cpp
   render/test_style_cascade.cpp
   visual/test_golden.cpp
 
@@ -58,6 +59,8 @@ add_executable(geeyoou_tests
   ${CMAKE_SOURCE_DIR}/examples/showcase/PageOps.cpp
   ${CMAKE_SOURCE_DIR}/examples/showcase/PageIcons.cpp
   ${CMAKE_SOURCE_DIR}/examples/showcase/PageLayout.cpp
+  ${CMAKE_SOURCE_DIR}/examples/showcase/PageTables.cpp
+  ${CMAKE_SOURCE_DIR}/examples/showcase/PageTablesTree.cpp
 
   # PageIcons renders the registry, and half of what it renders -- the accent
   # tint, the corner dot, the `icons().find("name")` usage line -- is the
