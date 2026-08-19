@@ -292,6 +292,9 @@ skins().reloadStyleSheet(qssText);     // 解析失败不抛异常，见下
 | `DatePicker` / `CalendarView` | 日期选择：周一起始、周末着色、范围限制、月份翻页 |
 | `ScrollArea` | 滚动容器：滚轮、拖拽滑块、点轨道翻页、`ensureVisible` |
 | `ListView` | 虚拟化多列表格，**拉取式模型**（回调取单元格，百万行不占内存） |
+| `TableView` | 数据网格：**每个单元格都是画出来的**（序号 / 勾选 / 开关 / 进度条 / 标签 / 操作链接 / 树形展开），行内编辑复用四个常驻编辑器；固定列、合并行列、列排序三态、奇偶行、loading 与空状态 |
+| `TableModel` / `TreeTableModel` | 表格的拉取式数据源（**非控件，不进控件树**）；树模型自带展开状态与**异步子节点**三态（Loading / Ready / Failed），只发 `childrenRequested` 信号，绝不自己去取 |
+| `TablePager` | 分页条：总数 / 每页条数 / 页码（带省略号）；**不持有表格指针**，只发页码信号 |
 
 | 数据层 | 说明 |
 |---|---|
