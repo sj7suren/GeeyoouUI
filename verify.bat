@@ -285,18 +285,34 @@ rem
 rem Budget: the suite runs its table in-process for this reason and costs ~4s.
 rem If it ever creeps past ~10s here, fix it there -- do not delete this call.
 rem
-rem KEEP THIS FILE PURE ASCII.  MEASURED, AND IT COST AN HOUR.  verify.bat has
-rem LF line endings, and cmd.exe parses a batch file by BYTE OFFSET while
-rem counting the text it has consumed in CHARACTERS.  With CRLF the two happen
-rem to stay in step; with LF plus one multi-byte character anywhere in the file,
-rem they drift, and the parser resumes mid-line -- SOMEWHERE ELSE ENTIRELY.
-rem Adding one Chinese sentence to the message below made cmd execute `set "R'
-rem and then try to run `C_REL_BUILD=0' as a program, at line 56, a hundred and
-rem sixty lines above the edit.  A gate that mis-executes its own first step
-rem while still printing banner [1/6] is about the worst failure this file could
-rem have, so: no non-ASCII here.  The Chinese half of the message is printed by
-rem tools\test-classify-asan.ps1, which is a .ps1 with a UTF-8 BOM and gets the
-rem console encoding right.
+rem KEEP THIS FILE PURE ASCII, AND KEEP IT CRLF.  MEASURED, AND IT COST AN
+rem HOUR.  cmd.exe parses a batch file by BYTE OFFSET while counting the text it
+rem has consumed in CHARACTERS.  With CRLF the two stay in step; with bare LF
+rem plus one multi-byte character anywhere in the file, they drift, and the
+rem parser resumes mid-line -- SOMEWHERE ELSE ENTIRELY.  Adding one Chinese
+rem sentence to the message below made cmd execute `set "R' and then try to run
+rem `C_REL_BUILD=0' as a program, at line 56, a hundred and sixty lines above
+rem the edit.  A gate that mis-executes its own first step while still printing
+rem banner [1/6] is about the worst failure this file could have.
+rem
+rem BOTH conditions have to hold, and BOTH are now machine-checked, which they
+rem were not before R2.4.  Until then this file was bare-LF and the paragraph
+rem above said so, which meant the ONLY thing standing between the gate and
+rem mis-execution was everybody remembering, forever, not to type a non-ASCII
+rem character here.  Now .gitattributes pins `*.bat text eol=crlf` so a checkout
+rem cannot produce a bare-LF .bat, and Test-BatchFileHygiene in
+rem tools\lint-door-coverage.ps1 reads the BYTES of every .bat and reddens on
+rem EITHER half -- because breaking a conjunction only needs one of them.
+rem
+rem Note which way round those two work: THE LINT CANNOT PROTECT THIS FILE FROM
+rem ITSELF.  It runs from :lint_doors below, i.e. from inside the file, so a
+rem verify.bat that has already drifted mis-executes before control ever gets
+rem there.  The durable half of the guarantee has to live in something applied
+rem BEFORE any of this runs, and that is what .gitattributes is for.
+rem
+rem The rule for non-ASCII text is unchanged: it goes in a .ps1.  The Chinese
+rem half of the message is printed by tools\test-classify-asan.ps1, which is a
+rem .ps1 with a UTF-8 BOM and gets the console encoding right.
 :classify_asan
 "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive ^
   -ExecutionPolicy Bypass -File "%ROOT%tools\test-classify-asan.ps1" -Quiet
