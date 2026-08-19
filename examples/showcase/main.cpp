@@ -93,6 +93,26 @@ int main() {
   shell->addPage("", "下拉选择", "单选 / 搜索 / 多选 / 树形 / 级联 / 菜单 / 日期",
                  Icon::ChevronDown, [](Widget* c) { return buildSelectsPage(c); });
 
+  // 表格族。Seven entries rather than one page with seven tables: each of these
+  // demonstrates a different PROPERTY (virtualisation, frozen geometry, a row
+  // count that moves, a row count that moves later), and stacking them on one
+  // page would put four scrollbars inside one scrollbar.
+  shell->addPage("表格", "基础表格", "普通表格 / 斑马纹 / 列排序 / 空状态 / 加载中",
+                 Icon::Menu, [](Widget* c) { return buildTablesBasicPage(c); });
+  shell->addPage("", "行内控件与编辑",
+                 "行内编辑 / 下拉 / 多选 / 数值 / 开关 / 勾选 / 进度条 / 操作列",
+                 Icon::Edit, [](Widget* c) { return buildTablesEditPage(c); });
+  shell->addPage("", "分页表格", "分页控件 / 每页条数 / 保持操作员所在位置",
+                 Icon::ChevronRight, [](Widget* c) { return buildTablesPagedPage(c); });
+  shell->addPage("", "固定列与合并", "左右冻结列 / 横向滚动 / 合并行",
+                 Icon::Lock, [](Widget* c) { return buildTablesFrozenPage(c); });
+  shell->addPage("", "树形表格", "层级展开 / 全展开 / 全折叠", Icon::Filter,
+                 [](Widget* c) { return buildTablesTreePage(c); });
+  shell->addPage("", "异步树形表格", "展开时才取子节点 / 转圈 / 失败重试",
+                 Icon::Download, [](Widget* c) { return buildTablesAsyncPage(c); });
+  shell->addPage("", "大数据量表格", "20 万行虚拟滚动 · 模型里一行都不存",
+                 Icon::Upload, [](Widget* c) { return buildTablesBigPage(c); });
+
   shell->showPage(0);
 
   // Draining runs on a timer of its own rather than on a page's ticker: the
