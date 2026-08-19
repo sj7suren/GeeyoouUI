@@ -400,6 +400,32 @@ GEEYOOU_TEST(table, expand_all_does_not_stampede_the_lazy_branches) {
   CHECK(tree.tableExpansion(tree.rowOfNode(b)) == RowExpansion::Collapsed);
 }
 
+// A grouping row has no switch, and that is not the same thing as a switch that
+// is off.  The distinction is the difference between an honest empty cell and a
+// control that looks operable and means nothing.
+GEEYOOU_TEST(table, a_grouping_row_has_no_cell_where_a_leaf_has_one) {
+  TreeTableModel tree;
+  const auto area = tree.addNode(TreeTableModel::kRootNode, {"area", "", "", ""});
+  const auto leaf = tree.addNode(area, {"TI-101", "transmitter", "run", ""});
+  tree.setFlag(leaf, 3, true);
+  tree.expandAll();
+
+  const int areaRow = tree.rowOfNode(area);
+  const int leafRow = tree.rowOfNode(leaf);
+  REQUIRE(areaRow >= 0 && leafRow >= 0);
+
+  // Column 3 is the switch: the leaf was given one, the group never was.
+  CHECK(tree.tableCellPresent(leafRow, 3));
+  CHECK(!tree.tableCellPresent(areaRow, 3));
+  // ...and BOTH answer false to tableFlag, which is exactly why the flag alone
+  // cannot be used to decide whether to draw anything.
+  CHECK(!tree.tableFlag(areaRow, 3));
+
+  // Column 0 is the label, and both rows have one.
+  CHECK(tree.tableCellPresent(areaRow, 0));
+  CHECK(tree.tableCellPresent(leafRow, 0));
+}
+
 // The view drives the model's expansion through the same call a click makes, and
 // the row count it caches has to follow.
 GEEYOOU_TEST(table, the_view_follows_the_tree_it_is_showing) {
