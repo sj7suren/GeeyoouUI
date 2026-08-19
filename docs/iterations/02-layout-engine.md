@@ -1165,6 +1165,37 @@ update();                                       // :222
 
 ⚠️ **L77-T 与 #19 是同一条链上的两环，读的时候要一起读**：`addTrailingItem` 的门后调 `relayoutItems()`，而 #19 说的正是 `relayoutItems()` 里 range-for 中的 `setGeometry`。#19 的触发路径（见下面 §11.4 对 #19 处方的更正）**反过来又要经过 `addTrailingItem` 的 `slots_.push_back`**。**两条的定级不同是对的**：L77-T 要求"窗口自己死在门里"（S3），#19 只要求"应用在几何回调里再加一个尾部项"（S1，无需任何对象死亡）。
 
+#### 【R3-T】`TableView` / `TreeTableModel` / `TablePager` 的候选登记（family R）
+
+> 状态：**登记，不是判定**，与 E20 / E21 两张表同一条规矩。**七条全部 S3 / W3**，理由逐条在下面，不在这句里。
+
+**这一族是 PULL 模型自己的形状，不是这个控件的疏忽。** `TableView` 把每一个单元格画出来，画之前必须问模型要值——`tableText` / `tableFlag` / `tableNumber` / `tableSpan` / `tableExpansion` / `tableDepth` 都是 `TableModel` 的虚函数，应用可以覆写，所以每一次取值都是 P1 门。一屏两打行乘十列就是几百次穿门，**而它们全部落在 (文件, 函数) 这个键的六个格子里**——这正是 §11.4 的键选得对的地方：登记的是"哪个函数会穿门"，不是"穿了几次"。
+
+**为什么定 S3，而且为什么不逐点加守卫。** 形状与 L01-A…L21-A 那一族（`styleState()` 出现在每个控件的 `onPaint` / `sizeHint` 里）**完全相同**，定级理由也相同，走的是 **REM3-RES-2 的方向：收紧契约，不是逐点加守卫**。契约白纸黑字写在 `include/geeyoou/widget/TableModel.hpp` 的头注释里：
+
+> 覆写**不得**销毁 `TableView` 或它的任何祖先；**不得**改变行数、列表或模型指针。读、格式化、返回。
+
+逐点加守卫在这里比在 `styleState()` 那一族更不划算：一次绘制要括住的不是一扇门而是几百扇，**而且守卫救不了真正的危险**——`tableRowCount()` 在一帧中途变小，守卫照样回答"活着"，painter 照样按旧的行数往下画。**能救的只有"别在拉取里改结构"这条契约**，与 `Signal` 的 D7 同族、同理由、同处理方式。
+
+**唯一一条不是拉取的是构造函数（L78-R）**，它是 family E（构造函数帧）的第三例：四个 `add<T>` 建常驻编辑器，门后还要配置和接线。**在构造函数里这是按构造安全的**——控件此时还没有父节点，进程里没有任何指针指向它，门里没有东西能销毁它。**替代方案更糟**：编辑器改成首次编辑时惰性创建，就是把这四扇门原样搬进一个**可重入**的鼠标处理帧里。
+
+| # | 位置（文件 :: 函数） | 首个门原语 | 门数 | 级 | 轮 |
+|---|---|---|---|---|---|
+| L78-R | `TableView.cpp`（`TableView`） | P2 add | 8 | S3 | W3 |
+| L79-R | `TableView.cpp`（`rowsReset`） | P1 tableRowCount | 1 | S3 | W3 |
+| L80-R | `TableView.cpp`（`mergedAt`） | P1 tableSpan | 2 | S3 | W3 |
+| L81-R | `TableView.cpp`（`expanderRect`） | P1 tableDepth | 1 | S3 | W3 |
+| L82-R | `TableView.cpp`（`paintPane`） | P1 tableAccent | 1 | S3 | W3 |
+| L83-R | `TableView.cpp`（`paintCell`） | P1 tableFlag | 7 | S3 | W3 |
+| L84-R | `TableView.cpp`（`paintTreeCell`） | P1 tableExpansion | 2 | S3 | W3 |
+
+**这张表要和"没有出现在表里的那四帧"一起读，那才是本族的完整判断：**
+
+* `TableView::handlePress`、`beginEdit`、`endEdit`、`commitNumber` **上了游标（`DeathWatch`），没有登记**。区别不是工作量，是**门后那段代码在干什么**：绘制帧只**读**模型，受上面那条契约保护；这四帧调的是 `tableToggleExpansion` / `tableSetFlag` / `tableSetText`，**那是应用的存储被写进去**，而一个"被写之后重建整屏"的应用是完全正常的应用。契约管不到它们，所以它们用守卫。
+* `TreeTableModel::tableToggleExpansion`、`TablePager::onMouse` **两处的信号发射被改写成了尾发射**，因此一条都不在表里。⚠️ 值得记下来的是**为什么它们本来在**：`emit` 后面跟一个 `return;` 或一个 `break;` 就已经是"门后有代码"——`TablePager::onMouse` 的四处 `emit` 全部埋在 `switch` 的 `case` 里，每一个后面都有 `break`。**处方是把发射抬出 `switch`，抬进两个只有一条语句的 `emitPage()` / `emitPageSize()`**，这就是"抽尾调用"，本轮第一次真正用上。
+
+**本族不改变 §12.4.0 的那个数**：七条都是 S3，全库存活的 S1 仍然是四条。
+
 ---
 
 ### 11.5 开销量化
@@ -2191,6 +2222,7 @@ heap-use-after-free  READ 8   #0 geeyoou::Signal<Size>::emit      include\geeyoo
 | **N8** | `MenuButton::onMouse` | S3 | W3 | |
 | **N9** | `Widget::window()` | S3 | W3 | |
 | **#25** | `examples/showcase/PageIcons.cpp:633` 的调用者义务 | S2 | W3 | **"契约主语是调用者"的活样本**；R3 不改 examples |
+| **PULL-1** | **`std::function` 回调进应用代码这一整类**——`ListView::cellText` / `rowAccent` / `rowIcon`、`FunctionTableModel` 的七个回调、以及任何不经 `Signal` 的裸回调 | S3 | W3 | **门谓词看不见它。** P1 认虚函数名，P2 认封闭库函数清单，P3 认 `.emit(`——`std::function` 的调用一条都不匹配，于是 `ListView::onPaint` 里那句 `cellText(row, col)` **是一扇实打实的门，而 lint 在这个文件上报的是零个候选**。⚠️ **主语是这一整类，不是某个控件**：`ListView` 早在 R1 就带着这个暴露面出货了，`TableView` 只是又添了一个用户（`FunctionTableModel`，见 §11.4 family R）。**把主语写窄成「某某控件有个洞」，正是这个缺陷族复发里至少两次的直接原因**（§11.4 P1 那两处更正、§12.5 教训 2 的第二层），所以这一条从登记的第一天就写宽。**为什么是 W3 而不是 W2**：补谓词等于给全库回调式控件重新定级，`ListView` 首当其冲当场变红，**需要一次架构裁定（回调门算不算门；算的话，收紧契约够不够，还是必须逐点守卫）之后才能排**，不是一次 lint 改动能收口的。 |
 
 #### A′. 【E20】门覆盖的机器校验上线，以及它第一次扫出来的东西
 
