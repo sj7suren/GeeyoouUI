@@ -19,6 +19,7 @@
 #include "geeyoou/widget/TableModel.hpp"
 #include "geeyoou/widget/TablePager.hpp"
 #include "geeyoou/widget/TableView.hpp"
+#include "geeyoou/widget/TreeTableModel.hpp"
 #include "geeyoou/widget/Widget.hpp"
 
 namespace showcase {
@@ -113,6 +114,28 @@ inline Color statusColor(const std::string& s) {
   if (s == "维护") return t.warn;
   return t.textDim;
 }
+
+// A tree whose chip colour is DERIVED from the row's status text,每次绘制时求值.
+//
+// Same argument as CellAction::Tone one level up: TreeTableModel::setAccent
+// stores a Color, and a demo that called it with Theme::current().success at
+// build time would freeze that skin into the model.  Overriding the accessor
+// costs three lines and is live under every skin.
+//
+// `statusCol` is which of the node's cells holds the status word.
+class StatusTreeModel : public geeyoou::TreeTableModel {
+ public:
+  explicit StatusTreeModel(int statusCol) : statusCol_(statusCol) {}
+
+  Color tableAccent(int row, int col) const override {
+    if (col < 0) return Color::rgba(0, 0, 0, 0);
+    const std::string s = tableText(row, statusCol_);
+    return s.empty() ? Color::rgba(0, 0, 0, 0) : statusColor(s);
+  }
+
+ private:
+  int statusCol_ = 0;
+};
 
 // A pull model over `rows`, showing `fields` in that order.
 //
