@@ -587,7 +587,11 @@ Color TableView::rowBackground(int row) const {
   const Theme& t = Theme::current();
   if (isRowSelected(row)) return t.selection;
   if (hoverHighlight_ && row == hoverRow_) return t.panelBorder.withAlpha(70);
-  if (alternating_ && (row & 1)) return t.panel.withAlpha(80);
+  // 80 was measured on screen and was not enough: against `field` the two rows
+  // differed by about two levels of grey, which reads as a rendering artefact
+  // rather than as a stripe.  Zebra rows exist so an eye can track ACROSS a wide
+  // row without losing the line; a stripe you have to look for does not do that.
+  if (alternating_ && (row & 1)) return t.panel.withAlpha(150);
   return Color::rgba(0, 0, 0, 0);
 }
 
@@ -758,6 +762,7 @@ void TableView::paintPane(Painter& p, Pane pane, int firstRow, int lastRow) cons
       if (m.row != row || m.col != c) continue;
 
       Rect cell = cellRect(row, c);
+      Rect content = cell;
       if (m.rowSpan > 1 || m.colSpan > 1) {
         float w = 0.0f;
         for (int k = c; k < std::min(n, c + m.colSpan); ++k) w += widths_[std::size_t(k)];
@@ -766,12 +771,19 @@ void TableView::paintPane(Painter& p, Pane pane, int firstRow, int lastRow) cons
         const Color bg = rowBackground(row);
         if (bg.alpha() > 0) p.fillRect(cell, bg);
         p.strokeRect(cell.deflated(0.5f), t.grid, 1.0f);
+        // THE LABEL IS CENTRED IN WHAT IS VISIBLE, not in the merge.  A run of
+        // fifteen rows is taller than most viewports, so centring it in the
+        // merge puts the one word that says which group you are looking at off
+        // the bottom of the screen -- for every group, most of the time.
+        // Centring it in the intersection makes it stick as the block scrolls,
+        // which is what a frozen group header does and for the same reason.
+        content = cell.intersected(band);
       }
       if (!cell.intersects(band)) continue;
 
       p.save();
       p.clip(cell.intersected(band));
-      paintCell(p, cell, row, c);
+      paintCell(p, content, row, c);
       p.restore();
 
       if (gridV_ && c + 1 < c1 && m.colSpan <= 1) {
@@ -859,6 +871,7 @@ void TableView::paintCell(Painter& p, const Rect& cell, int row, int col) const 
     }
 
     case CellKind::Check: {
+      if (!model_->tableCellPresent(row, col)) break;
       const Rect box(cell.center().x - kGlyph * 0.5f, cell.center().y - kGlyph * 0.5f,
                      kGlyph, kGlyph);
       paintCheckGlyph(p, box, model_->tableFlag(row, col), en);
@@ -866,11 +879,13 @@ void TableView::paintCell(Painter& p, const Rect& cell, int row, int col) const 
     }
 
     case CellKind::Switch: {
+      if (!model_->tableCellPresent(row, col)) break;
       paintSwitchGlyph(p, cell, model_->tableFlag(row, col), en);
       break;
     }
 
     case CellKind::Progress: {
+      if (!model_->tableCellPresent(row, col)) break;
       const double v = std::clamp(model_->tableNumber(row, col), 0.0, 1.0);
       const float barH = 8.0f;
       const Rect track(cell.x() + kCellPad, cell.center().y - barH * 0.5f,
@@ -928,7 +943,10 @@ void TableView::paintCell(Painter& p, const Rect& cell, int row, int col) const 
         const CellAction& a = c.actions[i];
         const Rect ar = actionRect(cell, c, i);
         if (ar.isEmpty()) continue;
-        Color col2 = a.color.alpha() > 0 ? a.color : t.accent;
+        // Resolved here, against the theme that is live NOW.
+        Color col2 = a.tone == CellAction::Tone::Danger  ? t.danger
+                     : a.tone == CellAction::Tone::Muted ? t.textDim
+                                                         : t.accent;
         if (!a.enabled || !en) col2 = t.textDisabled;
         p.drawText({ar.x(), ar.center().y}, a.label, t.fontSmall, col2,
                    HAlign::Left, VAlign::Middle);
@@ -1195,6 +1213,9 @@ void TableView::handlePress(const MouseEvent& e) {
     return;
   }
   if ((c.kind == CellKind::Check || c.kind == CellKind::Switch) && model_) {
+    // A cell that is not drawn is not clickable.  Anything else makes an
+    // invisible control operable, which is the same defect wearing a hat.
+    if (!model_->tableCellPresent(row, col)) return;
     const bool next = !model_->tableFlag(row, col);
     const bool accepted = model_->tableSetFlag(row, col, next);
     if (!self.alive()) {
