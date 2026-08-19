@@ -1186,13 +1186,16 @@ update();                                       // :222
 | L80-R | `TableView.cpp`（`mergedAt`） | P1 tableSpan | 2 | S3 | W3 |
 | L81-R | `TableView.cpp`（`expanderRect`） | P1 tableDepth | 1 | S3 | W3 |
 | L82-R | `TableView.cpp`（`paintPane`） | P1 tableAccent | 1 | S3 | W3 |
-| L83-R | `TableView.cpp`（`paintCell`） | P1 tableFlag | 7 | S3 | W3 |
+| L83-R | `TableView.cpp`（`paintCell`） | P1 tableCellPresent | 10 | S3 | W3 |
 | L84-R | `TableView.cpp`（`paintTreeCell`） | P1 tableExpansion | 2 | S3 | W3 |
 
 **这张表要和"没有出现在表里的那四帧"一起读，那才是本族的完整判断：**
 
 * `TableView::handlePress`、`beginEdit`、`endEdit`、`commitNumber` **上了游标（`DeathWatch`），没有登记**。区别不是工作量，是**门后那段代码在干什么**：绘制帧只**读**模型，受上面那条契约保护；这四帧调的是 `tableToggleExpansion` / `tableSetFlag` / `tableSetText`，**那是应用的存储被写进去**，而一个"被写之后重建整屏"的应用是完全正常的应用。契约管不到它们，所以它们用守卫。
 * `TreeTableModel::tableToggleExpansion`、`TablePager::onMouse` **两处的信号发射被改写成了尾发射**，因此一条都不在表里。⚠️ 值得记下来的是**为什么它们本来在**：`emit` 后面跟一个 `return;` 或一个 `break;` 就已经是"门后有代码"——`TablePager::onMouse` 的四处 `emit` 全部埋在 `switch` 的 `case` 里，每一个后面都有 `break`。**处方是把发射抬出 `switch`，抬进两个只有一条语句的 `emitPage()` / `emitPageSize()`**，这就是"抽尾调用"，本轮第一次真正用上。
+
+**⚠️ L83-R 的首个原语与门数在本轮内变过一次，记下来是因为变的原因值得记**："
+`paintCell` 原本是 7 扇门、首个是 `tableFlag`；离屏渲染复核时发现**树的分组行画出了一个「关」状态的开关**——分组行根本没有「投用」这个值，画一个 off 开关等于放了一个看起来可操作、实则什么都不代表的控件。修法是给 `TableModel` 加 `tableCellPresent()`，让模型能回答「这一格根本不存在」，于是 `Check` / `Switch` / `Progress` 三个分支各多问一次，门数 7 → 10，首个原语也随之前移。**门数是描述，不是约束**——lint 的键是 (文件, 函数)，这一行不改也不会变红；改它是因为一张自己都不准的表，下一个人就不会再信它。
 
 **本族不改变 §12.4.0 的那个数**：七条都是 S3，全库存活的 S1 仍然是四条。
 
