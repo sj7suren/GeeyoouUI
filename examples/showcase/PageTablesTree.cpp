@@ -129,7 +129,9 @@ class SyntheticModel : public TableModel {
 // destructor body cannot do the job.
 class TreeModelHolder {
  protected:
-  TreeTableModel tree_;
+  // Column 2 is the status word; see StatusTreeModel for why the colour is
+  // derived rather than stored.
+  StatusTreeModel tree_{2};
 };
 
 // ---------------------------------------------------------------------------
@@ -169,7 +171,6 @@ class AsyncTreePanel : public TreeModelHolder, public Widget {
     const char* stations[] = {"1# 反应釜", "2# 反应釜", "3# 罐区", "4# 公用工程"};
     for (const char* s : stations) {
       const auto id = tree_.addNode(TreeTableModel::kRootNode, {s, "站点", "运行", ""});
-      tree_.setAccent(id, Theme::current().success);
       tree_.setLazy(id, true);
     }
     tree_.structureChanged.connect([this] { table_->rowsReset(); });
@@ -242,7 +243,6 @@ class AsyncTreePanel : public TreeModelHolder, public Widget {
       const auto child = tree_.addNode(
           id, {tag, i % 2 ? "压力" : "温度", ok ? "运行" : "维护", ""});
       tree_.setFlag(child, 3, ok);
-      tree_.setAccent(child, statusColor(ok ? "运行" : "维护"));
       // One grandchild per child, itself lazy: the point is that depth is not
       // special-cased anywhere.
       if (i == 0) tree_.setLazy(child, true);
@@ -295,7 +295,7 @@ Size buildTablesFrozenPage(Widget* content) {
   cols.push_back(kindColumn("状态", 90.0f, CellKind::Chip));
   TableView::Column ops = kindColumn("操作", 120.0f, CellKind::Actions);
   ops.actions = {CellAction("edit", "编辑"),
-                 CellAction("delete", "删除", Theme::current().danger)};
+                 CellAction("delete", "删除", CellAction::Tone::Danger)};
   cols.push_back(ops);
 
   t->setColumns(cols);
@@ -357,7 +357,8 @@ Size buildTablesTreePage(Widget* content) {
   topRow->addWidget(g, 1);
   BoxLayout* gStack = stack(g, kItemGap);
 
-  auto tree = std::make_unique<TreeTableModel>();
+  // Column 2 holds the status word; the model tints the chip from it.
+  auto tree = std::make_unique<StatusTreeModel>(2);
   TreeTableModel* raw = tree.get();
 
   // Built from the SAME sixty records the flat pages show: a tree is a different
@@ -366,7 +367,6 @@ Size buildTablesTreePage(Widget* content) {
   for (const char* areaName : areas) {
     const auto areaNode =
         raw->addNode(TreeTableModel::kRootNode, {areaName, "", "", ""});
-    raw->setAccent(areaNode, Theme::current().accent);
 
     const char* types[] = {"温度", "压力", "流量", "液位", "阀门"};
     for (const char* typeName : types) {
@@ -375,10 +375,8 @@ Size buildTablesTreePage(Widget* content) {
         if (d.area != areaName || d.type != typeName) continue;
         if (typeNode == TreeTableModel::kInvalidNode) {
           typeNode = raw->addNode(areaNode, {std::string(typeName) + "仪表", "", "", ""});
-          raw->setAccent(typeNode, Theme::current().textDim);
         }
         const auto leaf = raw->addNode(typeNode, {d.tag, d.name, d.status, ""});
-        raw->setAccent(leaf, statusColor(d.status));
         raw->setFlag(leaf, 3, d.running);
       }
     }
