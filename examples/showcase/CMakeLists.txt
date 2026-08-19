@@ -13,6 +13,8 @@ add_executable(showcase
   PageInputs.cpp
   PageSelects.cpp
   PageOps.cpp
+  PageTables.cpp
+  PageTablesTree.cpp
 )
 target_link_libraries(showcase PRIVATE geeyoou::geeyoou)
 target_include_directories(showcase PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
