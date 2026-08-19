@@ -114,6 +114,7 @@ class TreeTableModel : public TableModel {
   double tableNumber(int row, int col) const override;
   bool tableFlag(int row, int col) const override;
   Color tableAccent(int row, int col) const override;
+  bool tableCellPresent(int row, int col) const override;
   int tableDepth(int row) const override;
   RowExpansion tableExpansion(int row) const override;
   void tableToggleExpansion(int row) override;
