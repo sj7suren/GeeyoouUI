@@ -1,0 +1,116 @@
+# ===========================================================================
+# LINE ENDINGS ARE A CORRECTNESS PROPERTY IN THIS TREE, NOT A PREFERENCE.
+# ===========================================================================
+#
+# WHY THIS FILE EXISTS, measured, and it cost an hour:
+#
+# cmd.exe parses a batch file by BYTE OFFSET while counting the text it has
+# consumed in CHARACTERS.  With CRLF the two happen to stay in step.  With bare
+# LF plus ONE multi-byte character anywhere in the file they drift, and the
+# parser resumes MID-LINE, SOMEWHERE ELSE ENTIRELY.  Adding one Chinese
+# sentence to verify.bat made cmd execute `set "R' and then try to run
+# `C_REL_BUILD=0' as a program -- at line 56, a hundred and sixty lines above
+# the edit, while still printing banner [1/6].
+#
+# The truth table was measured four ways: BOTH conditions must hold.  LF alone
+# is harmless.  Multi-byte alone is harmless.  LF AND multi-byte mis-executes.
+#
+# tools\lint-door-coverage.ps1 (Test-BatchFileHygiene) guards BOTH halves of
+# that conjunction, by reading BYTES.  THIS FILE IS THE OTHER HALF OF THE SAME
+# GUARANTEE: the lint says "the .bat in your working tree is well formed", and
+# this file says "the .bat git puts in your working tree is well formed in the
+# first place".  Neither is sufficient alone -- a lint cannot fix a checkout,
+# and a checkout rule cannot see an edit.
+#
+# AND THE .bat HALF PROTECTS THE GATE ITSELF.  The lint runs from inside
+# verify.bat's :lint_doors, so a verify.bat that has ALREADY drifted
+# mis-executes before it ever reaches the check.  A checker cannot be the only
+# thing guarding the file that invokes it; that is why the rule lives here, in
+# something git applies before any of our code runs.
+#
+# ---------------------------------------------------------------------------
+# HOW TO READ IT: later lines win, so this file goes broad -> narrow.
+# `eol=` is spelled out everywhere rather than left to core.autocrlf, because
+# core.autocrlf is a PER-MACHINE setting and the whole point here is that the
+# working tree is the same bytes on every machine.
+# ---------------------------------------------------------------------------
+
+# The default.  Anything git recognises as text: LF in the index, LF in the
+# working tree.  The index in this repository was already uniformly LF before
+# this file existed, so this line changes no committed byte -- it only stops
+# the WORKING TREE from drifting away from it, which it already had (twenty-odd
+# files were checked out CRLF and eight of them were internally MIXED).
+* text=auto eol=lf
+
+# The library's own sources, stated explicitly rather than left to the
+# text=auto heuristic.  That heuristic decides text-vs-binary by looking for NUL
+# bytes, and one string literal with an embedded NUL would silently take a
+# translation unit out of normalisation and let it drift.  These are the
+# primary asset; they do not get to depend on a guess.
+*.c    text eol=lf
+*.cc   text eol=lf
+*.cpp  text eol=lf
+*.h    text eol=lf
+*.hpp  text eol=lf
+
+# ---------------------------------------------------------------------------
+# CRLF, BECAUSE THE INTERPRETER REQUIRES IT
+# ---------------------------------------------------------------------------
+
+# cmd.exe.  See the header.  This is the line REQ-40 is about.
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# Windows PowerShell 5.1.  CRLF is the native convention for the interpreter
+# these scripts hard-code the path of
+# (%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe), and two of
+# these files already carry a UTF-8 BOM because 5.1 needs one to read non-ASCII
+# correctly -- so they are Windows-only artefacts by construction.
+#
+# It also hardens the tree's own documented remediation: verify.bat tells you
+# that when a message needs non-ASCII text you MOVE IT INTO A .ps1.  That
+# advice sends multi-byte characters into these files on purpose, so these
+# files are exactly where the substrate should be the safe one.
+*.ps1  text eol=crlf
+*.psm1 text eol=crlf
+*.psd1 text eol=crlf
+
+# ---------------------------------------------------------------------------
+# BYTES THAT ARE THE TEST SUBJECT.  NOT NORMALISED, EVER.
+# ---------------------------------------------------------------------------
+
+# The ASan classifier's fixtures.  Its sentinel case is
+# third-party-sogou-uaf-stock-thunk.log, whose line 18 is deliberately GBK
+# while every other fixture's matching line is UTF-8 -- "the shape matches, the
+# bytes do not" is the property under test.  Normalising a fixture does not
+# fail a test, it DELETES the test's subject and leaves it green, which is the
+# worst of the two directions.
+#
+# `-text` (never convert) rather than `text eol=lf` (convert to LF), because
+# the requirement here is not "LF", it is "the bytes I committed".  `diff` is
+# set alongside so `-text` does not also cost us readable diffs: these stay
+# reviewable in git log, they just stop being rewritable by git.
+tests/data/asan/** -text diff
+
+# The visual-regression baselines.  Nine PNGs, compared BYTE FOR BYTE by
+# tests/visual/test_golden.cpp; normalising one is not a test failure, it is
+# the visual gate silently switching off.  git's heuristic already classifies
+# them binary today -- this line means it no longer has to be right about that.
+*.png binary
+
+# ---------------------------------------------------------------------------
+# THE FIXTURES THAT MUST STAY BROKEN
+# ---------------------------------------------------------------------------
+#
+# `*.bat text eol=crlf` above is repository-wide, and it would reach into
+# tools\test-lint-door-coverage.ps1's fixture tree and REPAIR the two files
+# whose whole job is to be defective.  A negative fixture that git silently
+# fixes on checkout is a test that passes forever without testing anything --
+# the same failure mode as normalising a golden, one level down.
+#
+# So they are pinned, individually and by name.  Two lines, not a directory
+# glob: every OTHER .bat under tests/data/lint/ is a fixture-root verify.bat
+# that must be WELL formed (its case expects a green lint), and a blanket
+# exemption would quietly stop covering those.
+tests/data/lint/bat-nonascii/armed.bat text eol=lf
+tests/data/lint/bat-eol-lf/hygiene.bat text eol=lf
