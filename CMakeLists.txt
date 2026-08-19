@@ -53,6 +53,9 @@ set(GEEYOOU_SOURCES
   src/widget/TreeSelect.cpp
   src/widget/ScrollArea.cpp
   src/widget/ListView.cpp
+  src/widget/TableView.cpp
+  src/widget/TreeTableModel.cpp
+  src/widget/TablePager.cpp
   src/widget/MenuButton.cpp
   src/widget/Cascader.cpp
   src/widget/DatePicker.cpp
