@@ -203,6 +203,21 @@ Color TreeTableModel::tableAccent(int row, int col) const {
   return nodes_[std::size_t(id)].accent;
 }
 
+// A cell exists if ANY of the three stores has something at this index.  That is
+// exactly the right test here: a grouping node is built with empty trailing
+// cells and no flags at all, while a leaf gets setFlag()/setNumber() called on
+// it -- so "has a value" and "is a leaf that carries this column" are the same
+// question asked twice.
+bool TreeTableModel::tableCellPresent(int row, int col) const {
+  const NodeId id = nodeAtRow(row);
+  if (id == kInvalidNode || col < 0) return false;
+  const Node& n = nodes_[std::size_t(id)];
+  if (col < int(n.cells.size()) && !n.cells[std::size_t(col)].empty()) return true;
+  if (col < int(n.numbers.size())) return true;
+  if (col < int(n.flags.size())) return true;
+  return false;
+}
+
 int TreeTableModel::tableDepth(int row) const {
   const NodeId id = nodeAtRow(row);
   return id == kInvalidNode ? 0 : nodes_[std::size_t(id)].depth;
