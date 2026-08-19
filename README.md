@@ -329,6 +329,9 @@ family, `CheckBox`, `RadioButton`, `ToggleSwitch`, `Slider`, `ProgressBar`, `Sep
 | `DatePicker` / `CalendarView` | Date selection: Monday-first, weekend coloring, range limits, month paging |
 | `ScrollArea` | Scrolling container: wheel, thumb drag, page-on-track-click, `ensureVisible` |
 | `ListView` | Virtualized multi-column table with a **pull model** (cells fetched by callback — a million rows costs no memory) |
+| `TableView` | Data grid: **every cell is painted** (ordinal, checkbox, switch, progress, chip, action links, tree expander), with four resident editors re-used for in-cell editing; frozen panes, merged cells, three-state column sort, zebra rows, loading and empty states |
+| `TableModel` / `TreeTableModel` | The table's pull data source (**not a widget, never in the widget tree**); the tree model owns expansion state and the three-state **async child load** (Loading / Ready / Failed), emitting `childrenRequested` rather than fetching |
+| `TablePager` | Page strip: total, page size, numbered pages with ellipses. **Holds no pointer to a table** -- it emits a page number and nothing else |
 
 | Data layer | Purpose |
 |---|---|
