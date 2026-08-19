@@ -260,7 +260,10 @@ Size buildTablesEditPage(Widget* content) {
                   SelectItem("阀门", "阀门")};
   cols.push_back(type);
 
-  TableView::Column tags = textColumn("标签", 150.0f);
+  // Flexible, so the SLACK goes to text rather than to the progress bar: a
+  // 230-pixel bar is not more informative than a 180-pixel one, and the tag list
+  // is the column that actually gets truncated.
+  TableView::Column tags = textColumn("标签", 0.0f);
   tags.editable = true;
   tags.editor = CellEditor::MultiSelect;
   tags.options = {SelectItem("关键", "关键"), SelectItem("联锁", "联锁"),
@@ -277,13 +280,13 @@ Size buildTablesEditPage(Widget* content) {
   range.decimals = 0;
   cols.push_back(range);
 
-  cols.push_back(kindColumn("完成度", 0.0f, CellKind::Progress));
+  cols.push_back(kindColumn("完成度", 180.0f, CellKind::Progress));
   cols.push_back(kindColumn("投用", 78.0f, CellKind::Switch));
   cols.push_back(kindColumn("复核", 66.0f, CellKind::Check));
 
   TableView::Column ops = kindColumn("操作", 130.0f, CellKind::Actions);
   ops.actions = {CellAction("edit", "编辑"),
-                 CellAction("delete", "删除", Theme::current().danger)};
+                 CellAction("delete", "删除", CellAction::Tone::Danger)};
   cols.push_back(ops);
 
   t->setColumns(cols);
