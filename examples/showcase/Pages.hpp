@@ -29,6 +29,17 @@ Size buildWidgetsPage(Widget* content);
 Size buildInputsPage(Widget* content);
 Size buildSelectsPage(Widget* content);
 Size buildOpsPage(Widget* content, AppState& app);
+// 表格族。All seven give `content` a BoxLayout and return
+// content->sizeHint(), so a wider window shows wider columns and a taller one
+// shows MORE ROWS -- which is the behaviour a pull-model view's viewport-shaped
+// size hint exists to produce.
+Size buildTablesBasicPage(Widget* content);
+Size buildTablesEditPage(Widget* content);
+Size buildTablesPagedPage(Widget* content);
+Size buildTablesFrozenPage(Widget* content);
+Size buildTablesTreePage(Widget* content);
+Size buildTablesAsyncPage(Widget* content);
+Size buildTablesBigPage(Widget* content);
 Size buildWindowPage(Widget* content, ShowcaseWindow& win);
 Size buildThemePage(Widget* content, ShowcaseWindow& win);
 
