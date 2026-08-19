@@ -109,17 +109,32 @@ struct CellSpan {
 };
 
 // One action inside a CellKind::Actions cell.
+//
+// IT CARRIES A MEANING, NOT A COLOUR, and that is the whole point of the enum.
+// A `Color` field here would be filled in at page-BUILD time -- almost always
+// `Theme::current().danger` -- and would then be the skin that happened to be
+// active when the screen was constructed.  Switch to a light skin afterwards and
+// every delete link stays the dark skin's red, on a white row.  That failure has
+// already been paid for once in this repository (see the NOTE in
+// ShowcaseWindow.cpp about the title bar), so the type refuses to accept the
+// mistake: the view resolves the tone against the LIVE theme, per paint.
 struct CellAction {
+  enum class Tone : std::uint8_t {
+    Link,    // the accent colour -- the ordinary "do the thing" action
+    Danger,  // destructive, and it should look it
+    Muted,   // present but secondary
+  };
+
   std::string id;     // handed back through TableView::actionTriggered
   std::string label;  // what is drawn
-  Color color;        // zero alpha = the theme's link colour
+  Tone tone = Tone::Link;
   bool enabled = true;
 
   CellAction() = default;
   CellAction(std::string id_, std::string label_)
       : id(std::move(id_)), label(std::move(label_)) {}
-  CellAction(std::string id_, std::string label_, Color c)
-      : id(std::move(id_)), label(std::move(label_)), color(c) {}
+  CellAction(std::string id_, std::string label_, Tone t)
+      : id(std::move(id_)), label(std::move(label_)), tone(t) {}
 };
 
 class TableModel {
@@ -162,6 +177,21 @@ class TableModel {
     (void)row;
     (void)col;
     return {};
+  }
+
+  // DOES THIS CELL EXIST AT ALL?
+  //
+  // Not the same question as "is it false".  A grouping row in a tree has no
+  // switch: drawing an OFF switch on it puts a control on screen that looks
+  // operable, reads as a state, and means nothing -- which is worse than an
+  // empty cell, because an empty cell is honest.
+  //
+  // Only the glyph kinds ask (Check, Switch, Progress).  Text and Chip cells
+  // already draw nothing for an empty string, so they need no second opinion.
+  virtual bool tableCellPresent(int row, int col) const {
+    (void)row;
+    (void)col;
+    return true;
   }
 
   // --- tree ----------------------------------------------------------------
