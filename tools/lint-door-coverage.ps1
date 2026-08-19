@@ -939,11 +939,54 @@ function Test-GateStillCallsItsCheckers {
     return $missing
 }
 
+# ---------------------------------------------------------------------------
+# BATCH FILE HYGIENE -- BOTH HALVES OF THE CONJUNCTION, READ AS BYTES.
+#
+# cmd.exe parses a batch file by BYTE OFFSET while counting the text it has
+# consumed in CHARACTERS.  With CRLF the two stay in step.  With bare LF plus
+# one multi-byte character they drift and the parser resumes MID-LINE,
+# somewhere else entirely: one Chinese sentence added near the bottom of
+# verify.bat made cmd execute `set "R' and then try to run `C_REL_BUILD=0' as a
+# program, at line 56, a hundred and sixty lines ABOVE the edit, while still
+# printing banner [1/6].
+#
+# THE TRUTH TABLE WAS MEASURED FOUR WAYS AND BOTH CONDITIONS MUST HOLD.  LF
+# alone is harmless.  Multi-byte alone is harmless.  Only the conjunction
+# mis-executes.  This function is red on EITHER, and that is not redundancy:
+# breaking a conjunction needs only one half, so guarding only one half leaves
+# the other free to move, and then the property is one edit from being back.
+# Until R2.4 only the ASCII half was machine-checked and the LF half was a
+# sentence in a comment; .gitattributes now pins `*.bat text eol=crlf` and THIS
+# is the check that says whether the pin is still holding.
+#
+# WHY BOTH GUARDS ARE NEEDED, AND WHY NEITHER IS SUFFICIENT.  .gitattributes
+# governs what a CHECKOUT writes; it cannot see an edit, a generated file, or a
+# tree checked out before it existed.  This function sees the bytes on disk but
+# runs far too late to fix them.  The pair is the guarantee.
+#
+# AND IT IS GUARDING THE FILE THAT INVOKES IT.  This lint runs from inside
+# verify.bat's :lint_doors, so a verify.bat that has ALREADY drifted
+# mis-executes BEFORE control ever reaches here -- which is precisely why the
+# ASCII half alone was never enough, and why the durable half of this guarantee
+# had to be moved into something git applies before any of our code runs.
+#
+# -Recurse, WHICH IT DID NOT HAVE.  It scanned $Root and nothing below it, so
+# a .bat added in tools\ or ci\ was never checked at all -- the check silently
+# covered four files and looked like it covered the repository.
+# ---------------------------------------------------------------------------
 function Test-BatchFileHygiene {
     param([string] $Root)
+
     $bad = New-Object System.Collections.ArrayList
-    foreach ($f in Get-ChildItem -LiteralPath $Root -File -Filter *.bat) {
-        $bytes = [System.IO.File]::ReadAllBytes($f.FullName)
+
+    foreach ($f in (Get-BatchFilesToScan -Root $Root)) {
+        $rel = $f.Rel
+
+        # No try/catch: a .bat that cannot be read propagates out to
+        # Invoke-LintDoorCoverage's handler, which returns exit 3, which
+        # verify.bat scores as RED.  Same fail-closed rule as an unreadable
+        # source file -- "I could not look" is never a green condition.
+        $bytes = [System.IO.File]::ReadAllBytes($f.Full)
         $lfNoCr   = 0
         $nonAscii = 0
         for ($i = 0; $i -lt $bytes.Length; $i++) {
@@ -952,11 +995,86 @@ function Test-BatchFileHygiene {
                 if ($i -eq 0 -or $bytes[$i - 1] -ne 13) { $lfNoCr++ }
             }
         }
-        if ($nonAscii -gt 0) {
-            [void] $bad.Add(@{ Name = $f.Name; BareLf = $lfNoCr; NonAscii = $nonAscii })
+        if ($nonAscii -gt 0 -or $lfNoCr -gt 0) {
+            [void] $bad.Add(@{ Rel = $rel; BareLf = $lfNoCr; NonAscii = $nonAscii })
         }
     }
     return $bad
+}
+
+# The walk, PRUNED AT THE DIRECTORY and not filtered afterwards.  `Get-ChildItem
+# -Recurse -Filter *.bat` would be one line, and it would also descend the whole
+# of build\_deps -- blend2d and asmjit unpacked, plus three configurations of
+# object files.  The lint's budget in verify.bat is ~2s with a hard "fix it, do
+# not delete the call" at 15s, and a check that gets deleted for being slow
+# protects nothing.
+function Get-BatchFilesToScan {
+    param([string] $Root)
+
+    $out   = New-Object System.Collections.ArrayList
+    $stack = New-Object System.Collections.Stack
+    [void] $stack.Push(@{ Dir = $Root; Rel = '' })
+
+    while ($stack.Count -gt 0) {
+        $cur = $stack.Pop()
+        foreach ($e in (Get-ChildItem -LiteralPath $cur.Dir -Force -ErrorAction Stop)) {
+            if ($cur.Rel -eq '') { $rel = $e.Name } else { $rel = $cur.Rel + '\' + $e.Name }
+            if ($e.PSIsContainer) {
+                if (-not (Test-SkippedBatDir -Rel $rel)) {
+                    [void] $stack.Push(@{ Dir = $e.FullName; Rel = $rel })
+                }
+            }
+            elseif ($e.Name -like '*.bat') {
+                [void] $out.Add(@{ Full = $e.FullName; Rel = $rel })
+            }
+        }
+    }
+    return $out
+}
+
+# Which DIRECTORIES the .bat scan does not enter.  Judged on the path RELATIVE
+# TO $Root, and that is load bearing: when tools\test-lint-door-coverage.ps1
+# points $Root AT a fixture directory, that fixture's own .bat sits at depth 0
+# and is scanned normally.  Judging absolute paths would switch off the four
+# cases that prove this function works.
+#
+#   build, build-debug, build-asan   CMake's FetchContent unpacks blend2d and
+#                                    asmjit under _deps and each ships a
+#                                    configure_vs2022_*.bat -- eight files this
+#                                    tree did not write, does not run and
+#                                    cannot fix.  Matched as `build` or
+#                                    `build-*` rather than listed by name, so a
+#                                    fourth configuration directory cannot
+#                                    quietly arrive inside the scan.
+#   out, .vs, .git, .claude          .gitignore's spoil and personal tooling.
+#                                    "a contributor's setup is their own
+#                                    business" is that file's words, and a lint
+#                                    that reddens the gate over somebody's
+#                                    editor directory is the random red light
+#                                    this repository has already rejected once.
+#   tests\data\lint                  the lint's OWN fixtures, WHICH ARE
+#                                    DEFECTIVE ON PURPOSE: bat-nonascii's
+#                                    armed.bat is multi-byte and bat-eol-lf's
+#                                    hygiene.bat is bare-LF, because being
+#                                    defective is their entire job.  Scanning
+#                                    them would make the real gate permanently
+#                                    red, and the fix anybody would reach for is
+#                                    deleting the negative fixtures -- i.e. the
+#                                    check would eat the proof that it works.
+#                                    .gitattributes pins those two files by name
+#                                    against the same accident from the other
+#                                    side.
+function Test-SkippedBatDir {
+    param([string] $Rel)
+
+    $seg = $Rel -split '[\\/]'
+    if ($seg.Count -eq 1) {
+        if ($seg[0] -match '^(?i)build($|-)') { return $true }
+        if (@('.git', '.vs', '.claude', 'out') -contains $seg[0]) { return $true }
+        return $false
+    }
+    if ($seg.Count -eq 3 -and $seg[0] -eq 'tests' -and $seg[1] -eq 'data' -and $seg[2] -eq 'lint') { return $true }
+    return $false
 }
 
 # ---------------------------------------------------------------------------
@@ -1141,12 +1259,18 @@ function Invoke-LintDoorCoverage {
 
         if ($batBad.Count -gt 0) {
             $red = $true
-            Write-LintLine '  [lint-doors] FAIL: a batch file is no longer pure ASCII. cmd.exe mis-executes a'
-            Write-LintLine '               batch file that has BOTH bare-LF endings AND multi-byte characters,'
-            Write-LintLine '               and every .bat here is bare-LF, so ASCII is what keeps them working.'
-            Write-LintLine '               Move the text into a .ps1, as tools\test-classify-asan.ps1 does:'
+            Write-LintLine '  [lint-doors] FAIL: batch file hygiene. cmd.exe parses a .bat by BYTE OFFSET while'
+            Write-LintLine '               counting consumed text in CHARACTERS, so a file with BOTH bare-LF'
+            Write-LintLine '               endings AND multi-byte characters makes the parser resume mid-line,'
+            Write-LintLine '               somewhere else entirely -- measured at 160 lines above the edit, while'
+            Write-LintLine '               the gate still printed banner [1/6]. Either half alone is harmless,'
+            Write-LintLine '               which is why BOTH are guarded: breaking a conjunction needs only one.'
+            Write-LintLine '                 bare-LF   -> .gitattributes says *.bat text eol=crlf. Re-check the'
+            Write-LintLine '                              file out, or convert it; do not hand-edit the pin.'
+            Write-LintLine '                 non-ASCII -> move the text into a .ps1, as tools\test-classify-asan.ps1'
+            Write-LintLine '                              does. A .ps1 with a UTF-8 BOM prints it correctly.'
             foreach ($b in $batBad) {
-                Write-LintLine ('      {0}: {1} non-ASCII byte(s), {2} bare-LF line(s)' -f $b.Name, $b.NonAscii, $b.BareLf)
+                Write-LintLine ('      {0}: {1} non-ASCII byte(s), {2} bare-LF line(s)' -f $b.Rel, $b.NonAscii, $b.BareLf)
             }
         }
 
