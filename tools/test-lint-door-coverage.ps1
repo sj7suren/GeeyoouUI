@@ -120,6 +120,8 @@ $plat      = Join-Path $fixtures 'platform'
 $platIn    = Join-Path $fixtures 'platform-installed'
 $batOk     = Join-Path $fixtures 'bat-ascii'
 $batBad    = Join-Path $fixtures 'bat-nonascii'
+$batEolOk  = Join-Path $fixtures 'bat-eol-crlf'
+$batEolBad = Join-Path $fixtures 'bat-eol-lf'
 $gateNone  = Join-Path $fixtures 'gate-no-lint-call'
 $gateRem   = Join-Path $fixtures 'gate-call-in-a-comment'
 
@@ -294,16 +296,57 @@ Test-Case -Name 'an_install_point_ends_the_platform_exemption' `
     -MustSay @('install point', 'Platform.hpp')
 
 # ---------------------------------------------------------------------------
-# 16-17  the batch-file precondition
+# 16-19  THE BATCH-FILE PRECONDITION -- BOTH HALVES OF THE CONJUNCTION
+#
+# cmd.exe mis-executes a .bat that has BOTH bare-LF endings AND multi-byte
+# characters; the truth table was measured four ways and neither condition
+# alone does anything.  Four cases and not two, because a conjunction breaks if
+# ONE half moves, so a suite that only proves the ASCII half is red-able leaves
+# the LF half free to come back unobserved -- and it did exactly that until
+# R2.4: the LF half was a sentence in a comment ("every .bat here is bare-LF")
+# and nothing on this machine could tell you whether it was still true.
+#
+# ⚠ 16's MEANING CHANGED IN R2.4 AND THE OLD WORDING IS WORTH RECORDING.  It
+# used to read "Bare LF alone is harmless and must not redden the gate", which
+# was a correct statement about cmd.exe and the wrong policy for this tree: it
+# TOLERATED the standing half of an armed conjunction, so the only thing
+# between the gate and mis-execution was everyone remembering, forever, not to
+# type a non-ASCII character into a .bat.  .gitattributes now pins
+# `*.bat text eol=crlf`, bare LF is a defect on its own, and 16 is the control
+# for the pinned state instead of for the tolerated one.
 # ---------------------------------------------------------------------------
-Test-Case -Name 'a_pure_ascii_batch_file_passes' `
-    -Why 'the control. Bare LF alone is harmless and must not redden the gate' `
+Test-Case -Name 'a_crlf_pure_ascii_batch_file_passes' `
+    -Why 'the control: the shape .gitattributes pins is the shape that must be green' `
     -Root $batOk -Doc (Join-Path $batOk 'doc-empty-table.md') -Expect 0
 
 Test-Case -Name 'a_multibyte_batch_file_reddens' `
-    -Why 'LF plus multi-byte is the combination that makes cmd.exe resume mid-line 160 lines further up' `
+    -Why 'multi-byte is the half that costs an hour when the other half is also present' `
     -Root $batBad -Doc (Join-Path $batBad 'doc-empty-table.md') -Expect 1 `
     -MustSay @('armed.bat', 'ASCII')
+
+# 18-19  THE LF HALF, AND IT IS A DIFFERENTIAL.
+#
+# bat-eol-crlf\hygiene.bat and bat-eol-lf\hygiene.bat hold THE SAME CHARACTERS
+# -- 711 bytes against 697, and the difference is exactly the fourteen CRs.
+# Both are pure ASCII, so the other half of the conjunction is held still.  Two
+# roots that differ in nothing else and are required to reach opposite
+# verdicts: that is the check being about the bytes, proved rather than
+# asserted.
+#
+# ⚠ bat-eol-lf\hygiene.bat IS PINNED `text eol=lf` IN .gitattributes, BY NAME.
+# Without that line the repository-wide `*.bat text eol=crlf` would REPAIR it
+# on the next checkout, case 19 would go green because there was nothing left
+# to catch, and the LF half would be unguarded again while its test still
+# printed [ ok ].  A negative fixture git silently fixes is the same failure as
+# a normalised golden, one level down.
+Test-Case -Name 'a_crlf_batch_file_passes_the_eol_check' `
+    -Why 'the positive half of the differential: identical text, CRLF, must be green' `
+    -Root $batEolOk -Doc (Join-Path $batEolOk 'doc-empty-table.md') -Expect 0
+
+Test-Case -Name 'a_bare_lf_batch_file_reddens' `
+    -Why 'the same characters with LF must redden, or .gitattributes pin could lapse unobserved' `
+    -Root $batEolBad -Doc (Join-Path $batEolBad 'doc-empty-table.md') -Expect 1 `
+    -MustSay @('hygiene.bat', 'bare-LF')
 
 # ---------------------------------------------------------------------------
 # 18  THE PROOF ON REAL DATA, both directions, IN ONE CASE.
