@@ -1,6 +1,6 @@
 # R3-T：表格控件族
 
-> 本轮产出：`TableModel` / `TreeTableModel` / `TableView` / `TablePager` 四个新类型，showcase 左侧新增「表格」分组共七页，测试 +26 例。
+> 本轮产出：`TableModel` / `TreeTableModel` / `TableView` / `TablePager` 四个新类型，showcase 左侧新增「表格」分组共七页，测试 +27 例。
 > 门禁状态：Release / Debug / ASan 三套构建与测试全绿，门覆盖 lint `0 UNARCHIVED`。
 
 ---
@@ -116,12 +116,26 @@ class TablePanel : public TableModelHolder, public Widget { ... };
 
 ---
 
+## 6.5 离屏复核抓到的两条（测试全绿之后才发现的）
+
+门禁绿了不等于看起来对。七个页面各渲染一张 PNG 之后，有两条是**测试永远抓不到、只有眼睛能抓到**的：
+
+**一、树的分组行画出了一个「关」状态的开关。** 分组行没有「投用」这个值，`tableFlag` 返回 `false` 是"没有值"的默认，而不是"值为假"——视图分不出这两者，就画了一个**看起来可操作、实则什么都不代表**的控件。比空白格更糟：空白格是诚实的。
+修法：`TableModel::tableCellPresent(row, col)`。树模型天然答得出——**节点在这一列存过值没有**。`Check` / `Switch` / `Progress` 三种字形单元格问一次，不存在就什么都不画，且**不画的格子也不可点**（否则就是同一个缺陷换顶帽子）。
+
+**二、`删除` 的红色是建页时从主题里抓下来的。** `CellAction` 原本带一个 `Color` 字段，示例写的是 `Theme::current().danger`——那是**建页那一刻恰好生效的皮肤**。切到浅色皮肤，每个删除链接都还是深色皮肤的红，落在白底行上。这个坑这个仓库已经付过一次学费（`ShowcaseWindow.cpp` 开头那段 NOTE 讲的就是标题栏）。
+修法：`CellAction` **只带语义不带颜色**（`Tone::Link / Danger / Muted`），颜色由视图在**绘制时**对着活着的主题解析。同一条毛病在树节点上也有一份（`setAccent(Theme::current().success)`），示例改用 `StatusTreeModel` 覆写 `tableAccent`，从状态词现算。
+
+两条都不是"样式问题"。第一条是**语义错误**，第二条是**已知会复发的缺陷族的第 N 次**。
+
+---
+
 ## 7. 证据
 
 | 项 | 数 | 说明 |
 |---|---|---|
-| 新增用例 | 26 | `test_table.cpp` 19 例 + `test_showcase_pages.cpp` 7 例 |
-| 全套用例 | 237 | 0 失败，Release / Debug / ASan 三套各跑一遍 |
+| 新增用例 | 27 | `test_table.cpp` 20 例 + `test_showcase_pages.cpp` 7 例 |
+| 全套用例 | 238 | 0 失败，Release / Debug / ASan 三套各跑一遍 |
 | 门覆盖 | 0 未归档 | 16 guarded / 98 archived |
 
 **其中一条是本文件的承重用例**：`table.only_the_visible_rows_are_pulled`。模型**记录自己被问了多少次**，视图走真实的 `Canvas → Painter → paintTree` 路径画一次，断言是**调用次数的上界**（20 万行 × 3 列 = 60 万，实测 < 200）。它会失败——`the_pulled_window_follows_the_scroll` 是它的补充：滚到底之后拉取的**仍然是同样少的行数，而且是末尾那些行**，否则"每次都拉 0..N"也能骗过前一条。
