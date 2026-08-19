@@ -394,3 +394,78 @@ GEEYOOU_TEST(showcase_pages, picking_an_icon_updates_the_preview_and_the_status_
   // whose preview was never added would have failed to find it.
   CHECK(findByStyleType(*page.content, "IconPreview") != nullptr);
 }
+
+// ============================================================ 表格族 =========
+//
+// Seven pages, and the SAME three properties -- there is nothing special about a
+// table page from the layout engine's point of view, which is the first thing
+// worth proving about a control this size.
+//
+// EVERY ONE OF THEM EXPECTS A NON-ZERO `unplaced`, and that number is a fact
+// about TableView rather than a defect: each table owns four resident editors
+// (LineEdit, SpinBox, ComboBox, MultiSelect) that are built in the constructor
+// and never given a geometry until somebody edits a cell.  Four per table, so
+// the count below IS the table count on that page, times four.  Passing the
+// number explicitly rather than relaxing the check keeps it honest in both
+// directions: a page that grew a table has to say so here, and an editor that
+// started being laid out when it should not be would show up as a shortfall.
+//
+// paintOnce afterwards for the reason stated above it: a page that is measured
+// but never painted has every onPaint compiled, instrumented and unexecuted --
+// and for these pages that would leave the cell painters, the frozen-pane seam,
+// the merge resolver and the empty-state overlay entirely unrun under ASan.
+
+GEEYOOU_TEST(showcase_pages, the_tables_basic_page_is_placed_sized_and_grown) {
+  Widget content;
+  const Size design = showcase::buildTablesBasicPage(&content);
+  // Three tables: the register, the empty one, and the busy one.
+  checkPage(ctx_, content, design, /*expectedUnplaced=*/12, /*minWidgets=*/20);
+  paintOnce(content, int(design.width), int(design.height));
+}
+
+GEEYOOU_TEST(showcase_pages, the_tables_edit_page_is_placed_sized_and_grown) {
+  Widget content;
+  const Size design = showcase::buildTablesEditPage(&content);
+  checkPage(ctx_, content, design, /*expectedUnplaced=*/4, /*minWidgets=*/10);
+  paintOnce(content, int(design.width), int(design.height));
+}
+
+GEEYOOU_TEST(showcase_pages, the_tables_paged_page_is_placed_sized_and_grown) {
+  Widget content;
+  const Size design = showcase::buildTablesPagedPage(&content);
+  checkPage(ctx_, content, design, /*expectedUnplaced=*/4, /*minWidgets=*/8);
+  paintOnce(content, int(design.width), int(design.height));
+}
+
+GEEYOOU_TEST(showcase_pages, the_tables_frozen_page_is_placed_sized_and_grown) {
+  Widget content;
+  const Size design = showcase::buildTablesFrozenPage(&content);
+  // Two tables: the frozen-pane one and the merged one.
+  checkPage(ctx_, content, design, /*expectedUnplaced=*/8, /*minWidgets=*/12);
+  paintOnce(content, int(design.width), int(design.height));
+}
+
+GEEYOOU_TEST(showcase_pages, the_tables_tree_page_is_placed_sized_and_grown) {
+  Widget content;
+  const Size design = showcase::buildTablesTreePage(&content);
+  checkPage(ctx_, content, design, /*expectedUnplaced=*/4, /*minWidgets=*/8);
+  paintOnce(content, int(design.width), int(design.height));
+}
+
+GEEYOOU_TEST(showcase_pages, the_tables_async_page_is_placed_sized_and_grown) {
+  Widget content;
+  const Size design = showcase::buildTablesAsyncPage(&content);
+  checkPage(ctx_, content, design, /*expectedUnplaced=*/4, /*minWidgets=*/6);
+  paintOnce(content, int(design.width), int(design.height));
+}
+
+// The one that would actually hurt if the pull model were not real: this builder
+// hands the view 200 000 rows, and the case measures, grows, shrinks and PAINTS
+// the page.  A view that walked its model would turn this case into a timeout
+// rather than a failure, which is its own kind of signal.
+GEEYOOU_TEST(showcase_pages, the_tables_big_page_is_placed_sized_and_grown) {
+  Widget content;
+  const Size design = showcase::buildTablesBigPage(&content);
+  checkPage(ctx_, content, design, /*expectedUnplaced=*/4, /*minWidgets=*/8);
+  paintOnce(content, int(design.width), int(design.height));
+}
