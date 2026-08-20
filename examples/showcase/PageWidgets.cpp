@@ -25,6 +25,7 @@
 #include "geeyoou/widget/Slider.hpp"
 #include "geeyoou/widget/SpinBox.hpp"
 #include "geeyoou/widget/ToggleSwitch.hpp"
+#include "i18n/I18n.hpp"
 
 namespace showcase {
 
@@ -56,7 +57,7 @@ Widget* band(Widget* parent, BoxLayout* into, std::uint16_t stretch = 0) {
   return w;
 }
 
-Label* caption(Widget* parent, BoxLayout* into, const char* s) {
+Label* caption(Widget* parent, BoxLayout* into, std::string s) {
   auto* l = parent->add<Label>();
   l->setText(s);
   l->addStyleClass("caption");
@@ -66,7 +67,7 @@ Label* caption(Widget* parent, BoxLayout* into, const char* s) {
   return l;
 }
 
-Label* rowCaption(Widget* parent, const char* s) {
+Label* rowCaption(Widget* parent, std::string s) {
   auto* l = parent->add<Label>();
   l->setText(s);
   l->addStyleClass("caption");
@@ -87,18 +88,18 @@ Size buildWidgetsPage(Widget* content) {
 
   // ---------------- 按钮与开关 ----------------
   auto* gButtons = upper->add<GroupBox>();
-  gButtons->setTitle("按钮与开关");
+  gButtons->setTitle(tr("按钮与开关"));
   upperRow->addWidget(gButtons, 1);
   BoxLayout* buttons = stack(gButtons, kItemGap);
 
   Widget* btnRow1 = band(gButtons, buttons);
   BoxLayout* btnRow1L = line(btnRow1, kItemGap);
   auto* btnNormal = btnRow1->add<PushButton>();
-  btnNormal->setText("普通按钮");
+  btnNormal->setText(tr("普通按钮"));
   btnRow1L->addWidget(btnNormal, 1);
 
   auto* btnLatch = btnRow1->add<PushButton>();
-  btnLatch->setText("手动/自动");
+  btnLatch->setText(tr("手动/自动"));
   btnLatch->setCheckable(true);
   btnLatch->setVariant(ButtonVariant::Warning);
   btnRow1L->addWidget(btnLatch, 1);
@@ -106,12 +107,12 @@ Size buildWidgetsPage(Widget* content) {
   Widget* btnRow2 = band(gButtons, buttons);
   BoxLayout* btnRow2L = line(btnRow2, kItemGap);
   auto* btnDisabled = btnRow2->add<PushButton>();
-  btnDisabled->setText("已禁用");
+  btnDisabled->setText(tr("已禁用"));
   btnDisabled->setEnabled(false);
   btnRow2L->addWidget(btnDisabled, 1);
 
   auto* swPump = btnRow2->add<ToggleSwitch>();
-  swPump->setText("进料泵");
+  swPump->setText(tr("进料泵"));
   swPump->setChecked(true);
   btnRow2L->addWidget(swPump, 1);
 
@@ -119,16 +120,16 @@ Size buildWidgetsPage(Widget* content) {
   buttons->addWidget(sep1);
 
   auto* cbInterlock = gButtons->add<CheckBox>();
-  cbInterlock->setText("启用安全联锁");
+  cbInterlock->setText(tr("启用安全联锁"));
   cbInterlock->setChecked(true);
   buttons->addWidget(cbInterlock);
 
   auto* cbLog = gButtons->add<CheckBox>();
-  cbLog->setText("记录历史曲线");
+  cbLog->setText(tr("记录历史曲线"));
   buttons->addWidget(cbLog);
 
   auto* cbOff = gButtons->add<CheckBox>();
-  cbOff->setText("远程写入（无权限）");
+  cbOff->setText(tr("远程写入（无权限）"));
   cbOff->setEnabled(false);
   buttons->addWidget(cbOff);
   // Everything above keeps its preferred height and the slack collects at the
@@ -137,27 +138,27 @@ Size buildWidgetsPage(Widget* content) {
 
   // ---------------- 单选与进度 ----------------
   auto* gMode = upper->add<GroupBox>();
-  gMode->setTitle("运行模式（单选组）");
+  gMode->setTitle(tr("运行模式（单选组）"));
   upperRow->addWidget(gMode, 1);
   BoxLayout* mode = stack(gMode, kItemGap);
 
   auto* rbStop = gMode->add<RadioButton>();
-  rbStop->setText("停机");
+  rbStop->setText(tr("停机"));
   mode->addWidget(rbStop);
 
   auto* rbManual = gMode->add<RadioButton>();
-  rbManual->setText("手动");
+  rbManual->setText(tr("手动"));
   rbManual->setChecked(true);
   mode->addWidget(rbManual);
 
   auto* rbAuto = gMode->add<RadioButton>();
-  rbAuto->setText("自动");
+  rbAuto->setText(tr("自动"));
   mode->addWidget(rbAuto);
 
   auto* sep2 = gMode->add<Separator>();
   mode->addWidget(sep2);
 
-  caption(gMode, mode, "批次进度");
+  caption(gMode, mode, tr("批次进度"));
   auto* pbBatch = gMode->add<ProgressBar>();
   pbBatch->setValue(40);
   mode->addWidget(pbBatch);
@@ -165,7 +166,7 @@ Size buildWidgetsPage(Widget* content) {
   auto* pbLevel = gMode->add<ProgressBar>();
   pbLevel->setValue(72);
   pbLevel->setBarColor(th.ok);
-  pbLevel->setText("料位 72%");
+  pbLevel->setText(tr("料位 72%"));
   mode->addWidget(pbLevel);
   mode->addStretch();
 
@@ -173,23 +174,28 @@ Size buildWidgetsPage(Widget* content) {
   // A grid rather than a box: label/field pairs are exactly what addRow is for,
   // and column 1 is the one that grows, so every SpinBox lines up.
   auto* gParam = upper->add<GroupBox>();
-  gParam->setTitle("参数设定");
+  gParam->setTitle(tr("参数设定"));
   upperRow->addWidget(gParam, 1);
   auto* param = gParam->setLayout<GridLayout>();
   param->setSpacing(kItemGap);
 
-  struct SpinSpec { const char* label; double lo, hi, val, step; int dec; const char* suffix; };
+  struct SpinSpec {
+    std::string label;
+    double lo, hi, val, step;
+    int dec;
+    const char* suffix;  // " °C" etc -- a unit, not prose
+  };
   const SpinSpec kSpins[] = {
-      {"目标温度", 0, 300, 165.0, 0.5, 1, " °C"},
-      {"压力上限", 0, 25, 8.5, 0.1, 2, " MPa"},
-      {"重复次数", 1, 999, 12, 1, 0, ""},
+      {tr("目标温度"), 0, 300, 165.0, 0.5, 1, " °C"},
+      {tr("压力上限"), 0, 25, 8.5, 0.1, 2, " MPa"},
+      {tr("重复次数"), 1, 999, 12, 1, 0, ""},
   };
 
   auto* status = content->add<Label>();  // declared early: the spin boxes report to it
   status->addStyleClass("caption");
   status->setPixelSize(12.0f);
-  status->setText("状态：就绪 · Tab / Shift+Tab 切换焦点，空格激活，方向键调值");
-  auto say = [status](const std::string& s) { status->setText("状态：" + s); };
+  status->setText(tr("状态：就绪 · Tab / Shift+Tab 切换焦点，空格激活，方向键调值"));
+  auto say = [status](const std::string& s) { status->setText(tr("状态：") + s); };
 
   for (int i = 0; i < 3; ++i) {
     auto* sp = gParam->add<SpinBox>();
@@ -213,7 +219,7 @@ Size buildWidgetsPage(Widget* content) {
   param->addWidget(sep3, 3, 0, 1, 2);
 
   auto* hint = gParam->add<Label>();
-  hint->setText("SpinBox：↑↓ 步进，PgUp/PgDn ×10，可直接键入数字");
+  hint->setText(tr("SpinBox：↑↓ 步进，PgUp/PgDn ×10，可直接键入数字"));
   hint->addStyleClass("caption");
   hint->setPixelSize(11.0f);
   hint->setAlign(HAlign::Left, VAlign::Top);
@@ -222,7 +228,7 @@ Size buildWidgetsPage(Widget* content) {
 
   // ---------------- 滑块 ----------------
   auto* gSlider = lower->add<GroupBox>();
-  gSlider->setTitle("设定值滑块");
+  gSlider->setTitle(tr("设定值滑块"));
   lowerRow->addWidget(gSlider, 2);
   auto* sliders = gSlider->setLayout<GridLayout>();
   sliders->setSpacing(kItemGap);
@@ -236,7 +242,7 @@ Size buildWidgetsPage(Widget* content) {
   auto* lblSpeed = gSlider->add<Label>();
   lblSpeed->setText("600 rpm");
   lblSpeed->setAlign(HAlign::Right, VAlign::Middle);
-  sliders->addWidget(rowCaption(gSlider, "搅拌转速"), 0, 0);
+  sliders->addWidget(rowCaption(gSlider, tr("搅拌转速")), 0, 0);
   sliders->addWidget(sldSpeed, 0, 1);
   sliders->addWidget(lblSpeed, 0, 2);
 
@@ -248,24 +254,24 @@ Size buildWidgetsPage(Widget* content) {
   auto* lblFlow = gSlider->add<Label>();
   lblFlow->setText("35 %");
   lblFlow->setAlign(HAlign::Right, VAlign::Middle);
-  sliders->addWidget(rowCaption(gSlider, "阀门开度"), 1, 0);
+  sliders->addWidget(rowCaption(gSlider, tr("阀门开度")), 1, 0);
   sliders->addWidget(sldFlow, 1, 1);
   sliders->addWidget(lblFlow, 1, 2);
 
   auto* sldOff = gSlider->add<Slider>();
   sldOff->setValue(50);
   sldOff->setEnabled(false);
-  sliders->addWidget(rowCaption(gSlider, "（禁用示例）"), 2, 0);
+  sliders->addWidget(rowCaption(gSlider, tr("（禁用示例）")), 2, 0);
   sliders->addWidget(sldOff, 2, 1);
 
   // ---------------- 联锁 ----------------
   auto* gLock = lower->add<GroupBox>();
-  gLock->setTitle("联锁：整组禁用");
+  gLock->setTitle(tr("联锁：整组禁用"));
   lowerRow->addWidget(gLock, 1);
   BoxLayout* lock = stack(gLock, kItemGap);
 
   auto* cbEnableBlock = gLock->add<CheckBox>();
-  cbEnableBlock->setText("允许修改下列参数");
+  cbEnableBlock->setText(tr("允许修改下列参数"));
   cbEnableBlock->setChecked(true);
   lock->addWidget(cbEnableBlock);
 
@@ -276,7 +282,7 @@ Size buildWidgetsPage(Widget* content) {
   BoxLayout* inner = stack(gInner, kItemGap);
 
   auto* swA = gInner->add<ToggleSwitch>();
-  swA->setText("旁路阀");
+  swA->setText(tr("旁路阀"));
   inner->addWidget(swA);
 
   auto* sldInner = gInner->add<Slider>();
@@ -291,14 +297,14 @@ Size buildWidgetsPage(Widget* content) {
   page->addWidget(status);
 
   // ---------------- signals ----------------
-  btnNormal->clicked.connect([say] { say("普通按钮被点击"); });
-  btnLatch->toggled.connect([say](bool on) { say(on ? "已切到自动" : "已切到手动"); });
-  swPump->toggled.connect([say](bool on) { say(on ? "进料泵 启动" : "进料泵 停止"); });
-  cbInterlock->toggled.connect([say](bool on) { say(on ? "安全联锁 开" : "安全联锁 关"); });
-  cbLog->toggled.connect([say](bool on) { say(on ? "开始记录曲线" : "停止记录曲线"); });
-  rbStop->toggled.connect([say](bool on) { if (on) say("模式 → 停机"); });
-  rbManual->toggled.connect([say](bool on) { if (on) say("模式 → 手动"); });
-  rbAuto->toggled.connect([say](bool on) { if (on) say("模式 → 自动"); });
+  btnNormal->clicked.connect([say] { say(tr("普通按钮被点击")); });
+  btnLatch->toggled.connect([say](bool on) { say(on ? tr("已切到自动") : tr("已切到手动")); });
+  swPump->toggled.connect([say](bool on) { say(on ? tr("进料泵 启动") : tr("进料泵 停止")); });
+  cbInterlock->toggled.connect([say](bool on) { say(on ? tr("安全联锁 开") : tr("安全联锁 关")); });
+  cbLog->toggled.connect([say](bool on) { say(on ? tr("开始记录曲线") : tr("停止记录曲线")); });
+  rbStop->toggled.connect([say](bool on) { if (on) say(tr("模式 → 停机")); });
+  rbManual->toggled.connect([say](bool on) { if (on) say(tr("模式 → 手动")); });
+  rbAuto->toggled.connect([say](bool on) { if (on) say(tr("模式 → 自动")); });
 
   sldSpeed->valueChanged.connect([lblSpeed, pbBatch](double v) {
     char buf[64];
