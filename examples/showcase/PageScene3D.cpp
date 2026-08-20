@@ -117,6 +117,7 @@ class SkidPanel : public SkidHolder, public Widget {
     buildParts();
     buildGeometry();
     skidScene_.addNode(skidMesh_.mesh());
+    buildAnnotations();
 
     view_ = add<View3D>();
     view_->setScene(&skidScene_);
@@ -131,6 +132,8 @@ class SkidPanel : public SkidHolder, public Widget {
   PartId motor() const { return motor_; }
   PartId valve() const { return valve_; }
   PartId exchanger() const { return exchanger_; }
+  PartId piping() const { return piping_; }
+  PartId skid() const { return skid_; }
 
   // "Everything is fine again" -- what the demo's reset button calls.
   void setNominal() {
@@ -166,12 +169,28 @@ class SkidPanel : public SkidHolder, public Widget {
     tick_ = 0;
 
     const double temp = app_->hub.lastValue(app_->chTemp);
+    const double flow = app_->hub.lastValue(app_->chFlow);
+
+    // The label carries the NUMBER; the colour carries the JUDGEMENT.  An
+    // operator reading a plant screen wants both, and wants them in the same
+    // place -- which is what a callout on the object is for.
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%.1f °C", temp);
+    skidScene_.setAnnotationValue(noteVessel_, buf);
+    std::snprintf(buf, sizeof(buf), "%.1f m³/h", flow);
+    skidScene_.setAnnotationValue(notePump_, buf);
+
+    // Also feed the heat-map mode, so switching to it shows something真实
+    // rather than a demo constant.
+    skidScene_.setPartValue(vessel_, float((temp - 90.0) / 90.0));
+    skidScene_.setPartValue(pump_, float(flow / 90.0));
+    view_->update();
+
     const PartState want = temp >= 158.0   ? PartState::Fault
                            : temp >= 148.0 ? PartState::Maintenance
                                            : PartState::Normal;
     if (want == skidScene_.partState(vessel_)) return;
     skidScene_.setPartState(vessel_, want);
-    view_->update();
     stateChanged.emit();
   }
 
@@ -180,7 +199,7 @@ class SkidPanel : public SkidHolder, public Widget {
     // Materials are ABSOLUTE colours -- steel is grey under every skin -- while
     // the STATE colours come from the theme at paint time.  The split is what
     // keeps the captured-theme bug from coming back through the back door.
-    skid_ = skidScene_.addPart("SKID-01", Color::rgb(0x5C, 0x66, 0x7A));
+    skid_ = skidScene_.addPart("SKID-01", Color::rgb(0x8A, 0x93, 0xA6));
     vessel_ = skidScene_.addPart("V-101 反应釜", Color::rgb(0x8E, 0x9B, 0xB2));
     motor_ = skidScene_.addPart("M-101 搅拌电机", Color::rgb(0x77, 0x84, 0x9B));
     pump_ = skidScene_.addPart("P-101 进料泵", Color::rgb(0x77, 0x84, 0x9B));
@@ -191,6 +210,26 @@ class SkidPanel : public SkidHolder, public Widget {
     skidScene_.setPartState(motor_, PartState::Running);
     skidScene_.setPartState(pump_, PartState::Running);
     skidScene_.setPartState(valve_, PartState::Running);
+  }
+
+  // Callouts.  The offset lifts each label clear of the body it names -- the
+  // anchor itself is the part's centre, which for a vessel is inside it.
+  void buildAnnotations() {
+    noteVessel_ = skidScene_.addAnnotation(vessel_, "V-101 反应釜", {0.0f, 1.6f, 0.0f});
+    notePump_ = skidScene_.addAnnotation(pump_, "P-101 进料泵", {0.0f, 0.9f, 0.0f});
+    noteValve_ = skidScene_.addAnnotation(valve_, "XV-101 进料阀", {0.0f, 1.1f, 0.0f});
+    noteExch_ = skidScene_.addAnnotation(exchanger_, "E-101 冷凝器", {0.0f, 1.0f, 0.0f});
+    skidScene_.setAnnotationValue(noteValve_, "开度 100%");
+    skidScene_.setAnnotationValue(noteExch_, "循环水 32 °C");
+
+    // Static values so the heat-map mode is meaningful before the first tick.
+    skidScene_.setPartValue(vessel_, 0.55f);
+    skidScene_.setPartValue(pump_, 0.40f);
+    skidScene_.setPartValue(valve_, 0.30f);
+    skidScene_.setPartValue(exchanger_, 0.18f);
+    skidScene_.setPartValue(motor_, 0.62f);
+    skidScene_.setPartValue(piping_, 0.35f);
+    skidScene_.setPartValue(skid_, 0.05f);
   }
 
   // EVERY CALL BELOW EMITS ONE CONVEX CLOSED BODY, AND NO TWO OF THEM OVERLAP.
@@ -305,6 +344,11 @@ class SkidPanel : public SkidHolder, public Widget {
   PartId valve_ = kNoPart;
   PartId exchanger_ = kNoPart;
   PartId piping_ = kNoPart;
+
+  AnnotationId noteVessel_ = kNoAnnotation;
+  AnnotationId notePump_ = kNoAnnotation;
+  AnnotationId noteValve_ = kNoAnnotation;
+  AnnotationId noteExch_ = kNoAnnotation;
 };
 
 // The part list beside the view, as a table.
@@ -401,8 +445,8 @@ Size buildScene3DPage(Widget* content, AppState& app) {
   auto* hint = gView->add<Label>();
   hint->addStyleClass("caption");
   hint->setPixelSize(11.0f);
-  hint->setText("软件渲染，无 GPU 依赖：变换、背面剔除与深度排序都在 CPU 上，"
-                "最后落到 Painter 的三角形填充");
+  hint->setText("软件渲染，无 GPU 依赖 · 视口有自己的中间调底色，"
+                "所以浅色皮肤下白色模型依然看得见");
   viewStack->addWidget(hint);
 
   // ------------------------------------------------------------ 侧面板 ---
@@ -479,6 +523,86 @@ Size buildScene3DPage(Widget* content, AppState& app) {
   });
   buttons2L->addWidget(btnMaint, 1);
 
+  // ---------------------------------------------------------- 着色模式 ---
+  //
+  // Three questions, three colourings.  Worth exposing as a control rather than
+  // as a build-time choice: an operator switches between "which one is red" and
+  // "where is it hot" several times in one shift.
+  auto* modeCaption = gSide->add<Label>();
+  modeCaption->addStyleClass("caption");
+  modeCaption->setPixelSize(11.0f);
+  modeCaption->setText("着色模式");
+  sideStack->addWidget(modeCaption);
+
+  Widget* modes = band(gSide, sideStack);
+  BoxLayout* modesL = line(modes, kItemGap);
+
+  auto* btnStatus = modes->add<PushButton>();
+  btnStatus->setText("按状态");
+  btnStatus->setVariant(ButtonVariant::Primary);
+  modesL->addWidget(btnStatus, 1);
+
+  auto* btnMaterial = modes->add<PushButton>();
+  btnMaterial->setText("按材质");
+  modesL->addWidget(btnMaterial, 1);
+
+  auto* btnHeat = modes->add<PushButton>();
+  btnHeat->setText("热力图");
+  modesL->addWidget(btnHeat, 1);
+
+  auto setMode = [view, btnStatus, btnMaterial, btnHeat](ColorMode m) {
+    view->setColorMode(m);
+    btnStatus->setVariant(m == ColorMode::Status ? ButtonVariant::Primary
+                                                 : ButtonVariant::Default);
+    btnMaterial->setVariant(m == ColorMode::Material ? ButtonVariant::Primary
+                                                     : ButtonVariant::Default);
+    btnHeat->setVariant(m == ColorMode::Value ? ButtonVariant::Primary
+                                              : ButtonVariant::Default);
+  };
+  btnStatus->clicked.connect([setMode] { setMode(ColorMode::Status); });
+  btnMaterial->clicked.connect([setMode] { setMode(ColorMode::Material); });
+  btnHeat->clicked.connect([setMode] { setMode(ColorMode::Value); });
+
+  // ---------------------------------------------------------- 部件上色 ---
+  auto* paintCaption = gSide->add<Label>();
+  paintCaption->addStyleClass("caption");
+  paintCaption->setPixelSize(11.0f);
+  paintCaption->setText("给选中部件上色（切到「按材质」查看）");
+  sideStack->addWidget(paintCaption);
+
+  Widget* swatches = band(gSide, sideStack);
+  BoxLayout* swatchesL = line(swatches, kItemGap);
+
+  struct Swatch {
+    const char* label;
+    Color color;
+  };
+  // ABSOLUTE colours, deliberately: a material is what a thing is painted, and
+  // that does not change when the skin does.  The status colours next door are
+  // the ones that follow the theme.
+  const Swatch kSwatches[] = {
+      {"钢灰", Color::rgb(0x9A, 0xA6, 0xB8)},
+      {"工程蓝", Color::rgb(0x3D, 0x7E, 0xC4)},
+      {"设备绿", Color::rgb(0x46, 0x9E, 0x72)},
+      {"安全橙", Color::rgb(0xD2, 0x86, 0x2E)},
+  };
+  for (const Swatch& sw : kSwatches) {
+    auto* b = swatches->add<PushButton>();
+    b->setText(sw.label);
+    const Color c = sw.color;
+    b->clicked.connect([view, scene, setMode, c, selected] {
+      const PartId id = view->selectedPart();
+      if (!scene->validPart(id)) {
+        selected->setText("先在三维视图里选中一个部件，再上色");
+        return;
+      }
+      scene->setPartMaterial(id, c);
+      setMode(ColorMode::Material);
+      selected->setText("已上色：" + scene->part(id).name);
+    });
+    swatchesL->addWidget(b, 1);
+  }
+
   Widget* toggles = band(gSide, sideStack);
   BoxLayout* togglesL = line(toggles, kItemGap);
 
@@ -487,6 +611,12 @@ Size buildScene3DPage(Widget* content, AppState& app) {
   swGrid->setChecked(true);
   swGrid->toggled.connect([view](bool on) { view->setGridVisible(on); });
   togglesL->addWidget(swGrid);
+
+  auto* swNotes = toggles->add<ToggleSwitch>();
+  swNotes->setText("标注");
+  swNotes->setChecked(true);
+  swNotes->toggled.connect([view](bool on) { view->setAnnotationsVisible(on); });
+  togglesL->addWidget(swNotes);
 
   auto* swHover = toggles->add<ToggleSwitch>();
   swHover->setText("悬停高亮");
