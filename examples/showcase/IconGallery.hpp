@@ -58,6 +58,7 @@
 #include "geeyoou/render/Painter.hpp"
 #include "geeyoou/render/Theme.hpp"
 #include "geeyoou/widget/Widget.hpp"
+#include "i18n/I18n.hpp"
 
 namespace showcase {
 
@@ -247,7 +248,7 @@ class IconGallery : public Widget {
 
     if (groups_.empty()) {
       p.drawText({r.center().x, kEmptyH * 0.5f},
-                 "没有匹配的图标 —— 试试 chevron / window / pump / 仪表",
+                 tr("没有匹配的图标 —— 试试 chevron / window / pump / 仪表"),
                  t.fontBody, t.textDim, geeyoou::HAlign::Center,
                  geeyoou::VAlign::Middle);
       return;
@@ -374,7 +375,7 @@ class IconGallery : public Widget {
     for (int i = 0; i < int(all_.size()); ++i) {
       const IconEntry& e = all_[std::size_t(i)];
       if (!matches(e)) continue;
-      const std::string cat = e.category.empty() ? std::string("未分类") : e.category;
+      const std::string cat = e.category.empty() ? std::string(tr("未分类")) : e.category;
       Group* g = nullptr;
       for (Group& x : groups_) {
         if (x.title == cat) { g = &x; break; }
@@ -401,7 +402,7 @@ class IconGallery : public Widget {
                geeyoou::VAlign::Middle);
 
     char buf[32];
-    std::snprintf(buf, sizeof(buf), "%d 个", int(g.items.size()));
+    std::snprintf(buf, sizeof(buf), tr("%d 个").c_str(), int(g.items.size()));
     const float nx = r.x() + geeyoou::measureText(g.title, t.fontBody).width + 8.0f;
     p.drawText({nx, cy + 1.0f}, buf, t.fontSmall, t.textDim, geeyoou::HAlign::Left,
                geeyoou::VAlign::Middle);
