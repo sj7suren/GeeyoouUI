@@ -49,6 +49,15 @@ void Scene3D::setPartState(PartId id, PartState s) {
   parts_[id].state = s;
 }
 
+void Scene3D::setPartValue(PartId id, float v) {
+  if (!validPart(id)) return;
+  parts_[id].value = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+}
+
+float Scene3D::partValue(PartId id) const {
+  return validPart(id) ? parts_[id].value : 0.0f;
+}
+
 PartState Scene3D::partState(PartId id) const {
   return validPart(id) ? parts_[id].state : PartState::Normal;
 }
@@ -86,6 +95,7 @@ std::size_t Scene3D::addNode(const Mesh& mesh, const Mat4& transform) {
   bodies_ += mesh.bodyCount();
   vertices_ += mesh.vertexCount();
   recomputeBounds();
+  recomputePartCenters();
   return nodes_.size() - 1;
 }
 
@@ -93,6 +103,7 @@ void Scene3D::setNodeTransform(std::size_t i, const Mat4& m) {
   if (i >= nodes_.size()) return;
   nodes_[i].transform = m;
   recomputeBounds();
+  recomputePartCenters();
 }
 
 void Scene3D::setNodeVisible(std::size_t i, bool on) {
@@ -100,13 +111,77 @@ void Scene3D::setNodeVisible(std::size_t i, bool on) {
   nodes_[i].visible = on;
 }
 
+Vec3 Scene3D::partCenter(PartId id) const {
+  if (id < partCenters_.size()) return partCenters_[id];
+  return bounds_.empty() ? Vec3{} : bounds_.center();
+}
+
+AnnotationId Scene3D::addAnnotation(PartId part, std::string title, Vec3 offset) {
+  Annotation a;
+  a.part = part;
+  a.title = std::move(title);
+  a.offset = offset;
+  notes_.push_back(std::move(a));
+  return AnnotationId(notes_.size() - 1);
+}
+
+const Scene3D::Annotation& Scene3D::annotation(AnnotationId id) const {
+  static const Annotation none = [] {
+    Annotation a;
+    a.visible = false;
+    return a;
+  }();
+  return validAnnotation(id) ? notes_[id] : none;
+}
+
+void Scene3D::setAnnotationText(AnnotationId id, std::string title,
+                                std::string value) {
+  if (!validAnnotation(id)) return;
+  notes_[id].title = std::move(title);
+  notes_[id].value = std::move(value);
+}
+
+void Scene3D::setAnnotationValue(AnnotationId id, std::string value) {
+  if (!validAnnotation(id)) return;
+  notes_[id].value = std::move(value);
+}
+
+void Scene3D::setAnnotationVisible(AnnotationId id, bool on) {
+  if (!validAnnotation(id)) return;
+  notes_[id].visible = on;
+}
+
 void Scene3D::clear() {
   nodes_.clear();
   parts_.clear();
+  notes_.clear();
+  partCenters_.clear();
   bounds_ = Bounds3{};
   triangles_ = 0;
   bodies_ = 0;
   vertices_ = 0;
+}
+
+// The average of a part's body centres, in world space.  Body centres rather
+// than vertices: a body already carries the centre its sorting sphere uses, so
+// this is O(bodies) instead of O(vertices) and needs no second definition of
+// "where is this thing".
+void Scene3D::recomputePartCenters() {
+  partCenters_.assign(parts_.size(), Vec3{});
+  std::vector<int> counts(parts_.size(), 0);
+  for (const Node& n : nodes_) {
+    const Body* bodies = n.mesh.bodies();
+    for (std::size_t bi = 0; bi < n.mesh.bodyCount(); ++bi) {
+      const PartId p = bodies[bi].part;
+      if (p >= parts_.size()) continue;
+      partCenters_[p] += n.transform.transformPoint(bodies[bi].center);
+      ++counts[p];
+    }
+  }
+  for (std::size_t i = 0; i < partCenters_.size(); ++i) {
+    if (counts[i] > 0) partCenters_[i] = partCenters_[i] * (1.0f / float(counts[i]));
+    else partCenters_[i] = bounds_.empty() ? Vec3{} : bounds_.center();
+  }
 }
 
 // The eight corners of each mesh's local box, pushed through that node's
