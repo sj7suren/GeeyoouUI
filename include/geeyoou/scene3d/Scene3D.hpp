@@ -55,6 +55,15 @@ enum class PartState : std::uint8_t {
   Disabled,     // not commissioned / not in service
 };
 
+// A callout: a line from a point on the model to a small label.
+//
+// It is SCENE data rather than view data, for the same reason the parts are:
+// what a piece of equipment is called does not change when you look at it from
+// a second viewport.  The anchor follows a PART, not a fixed coordinate, so a
+// node that is moved takes its labels with it.
+using AnnotationId = std::uint16_t;
+inline constexpr AnnotationId kNoAnnotation = 0xFFFF;
+
 class Scene3D {
  public:
   // The most triangles this class will accept.  Asserted in addNode rather than
@@ -71,8 +80,17 @@ class Scene3D {
     // stored, absolute colour and the state colours are not.  The distinction is
     // the whole reason both can coexist without the skin bug coming back.
     Color material = Color::rgb(0x9A, 0xA6, 0xB8);
+    float value = 0.0f;  // 0..1, for ColorMode::Value
     bool visible = true;
     TagId tag = TagId::Invalid;  // metadata only: what to open when this part is clicked
+  };
+
+  struct Annotation {
+    PartId part = kNoPart;
+    Vec3 offset;           // from the part's centre, in world units
+    std::string title;
+    std::string value;     // the live half; empty draws the title alone
+    bool visible = true;
   };
 
   struct Node {
@@ -91,6 +109,11 @@ class Scene3D {
   PartId findPart(const std::string& name) const;
 
   void setPartState(PartId id, PartState s);
+  // A scalar in 0..1 for the heat-map colour mode.  Kept next to the state
+  // rather than instead of it: "running" and "at 82% of its limit" are two
+  // different questions, and an operator switches between them.
+  void setPartValue(PartId id, float v);
+  float partValue(PartId id) const;
   PartState partState(PartId id) const;
   void setPartVisible(PartId id, bool on);
   void setPartMaterial(PartId id, Color c);
@@ -106,6 +129,23 @@ class Scene3D {
   void setNodeTransform(std::size_t i, const Mat4& m);
   void setNodeVisible(std::size_t i, bool on);
   void clear();
+
+  // Where a part IS, in world space: the centre of the bodies that carry it.
+  //
+  // Cached when geometry changes rather than computed per frame -- a label asks
+  // for it every frame and the answer cannot have moved since the last node
+  // edit.  Parts with no geometry answer with the scene centre, which puts a
+  // stray label somewhere visible instead of at the origin of the universe.
+  Vec3 partCenter(PartId id) const;
+
+  // --- annotations ----------------------------------------------------------
+  AnnotationId addAnnotation(PartId part, std::string title, Vec3 offset = {});
+  std::size_t annotationCount() const { return notes_.size(); }
+  const Annotation& annotation(AnnotationId id) const;
+  bool validAnnotation(AnnotationId id) const { return id < notes_.size(); }
+  void setAnnotationText(AnnotationId id, std::string title, std::string value);
+  void setAnnotationValue(AnnotationId id, std::string value);
+  void setAnnotationVisible(AnnotationId id, bool on);
 
   // Union of every node's mesh bounds, in WORLD space.  What View3D::frameAll
   // asks.  Recomputed only when the node list changes, not per frame.
@@ -127,9 +167,12 @@ class Scene3D {
 
  private:
   void recomputeBounds();
+  void recomputePartCenters();
 
   std::vector<Part> parts_;
   std::vector<Node> nodes_;
+  std::vector<Annotation> notes_;
+  std::vector<Vec3> partCenters_;
   Bounds3 bounds_;
   std::size_t triangles_ = 0;
   std::size_t bodies_ = 0;
