@@ -1,0 +1,64 @@
+name: Feature request
+description: A widget, an API, or a capability that is missing
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        中文完全可以。
+
+        Worth reading first: [`docs/architecture.md`](../blob/master/docs/architecture.md)
+        §4 lists what is **deliberately** not implemented and why. If your
+        request is on that list, say why the reasoning does not hold for your
+        case — that is a useful argument, not a rejected one.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to build
+      description: >
+        Describe the screen or the workflow, not the API you think you need.
+        The most useful feature requests this project gets are shaped like
+        "our operators have to ..." rather than "please add setFoo()".
+      placeholder: |
+        Our recipe screen has ~40 parameters that operators edit in place, and
+        they need to see which ones drifted from the loaded recipe. Today I
+        can colour a cell, but I cannot put a marker in the row header.
+    validations:
+      required: true
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: What are you doing today instead
+      description: >
+        If there is a workaround, this tells us how much the gap actually
+        costs. If there is none, say so.
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Roughly what kind of change is this
+      options:
+        - A new widget
+        - A capability on an existing widget
+        - Theme / skin / stylesheet
+        - Platform layer (a new backend, DPI, input)
+        - Data layer (queues, models, alarms)
+        - 3D / scene
+        - Not sure
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Constraints this project holds to
+      description: >
+        Not a quiz — just so we are working from the same premises. Tick the
+        ones you have considered.
+      options:
+        - label: It should not require a new third-party dependency
+        - label: It should not allocate on a per-frame path
+        - label: It should work under all four built-in skins, light ones included
+        - label: I have read §4 of docs/architecture.md
