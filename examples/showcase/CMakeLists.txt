@@ -3,6 +3,11 @@ add_executable(showcase
   Shell.cpp
   ShowcaseWindow.cpp
   PlantIcons.cpp
+  # i18n: the runtime, then one translation unit per language.  A new language
+  # is a new lang_xx_YY.cpp listed here plus one line in I18n.cpp's packs().
+  i18n/I18n.cpp
+  i18n/lang_zh_CN.cpp
+  i18n/lang_en_US.cpp
   PageWindow.cpp
   PageTheme.cpp
   PageIcons.cpp
