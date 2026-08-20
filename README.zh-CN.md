@@ -23,9 +23,14 @@
   <i>⭐ 如果你也希望 C++ 界有一个宽松协议的 Qt Widgets 替代品，点个 star 是最省事的表态方式。</i>
 </p>
 
-<!-- TODO: 在这里放一张 build\bin\showcase.exe 的截图或 GIF —— 这是整个 README 里
-     转化率最高的一块。建议路径：docs/images/showcase.png -->
-<!-- <p align="center"><img src="docs/images/showcase.png" width="860" alt="GeeyoouUI showcase"></p> -->
+<p align="center">
+  <img src="UI/cn/I.png" width="880" alt="GeeyoouUI 演示程序 —— 设备三维视图与实时部件表">
+</p>
+
+<p align="center">
+  <i>上面这张图里没有一个像素来自系统控件 —— 标题栏、三维视口、表格、开关，全是这个库画的。<br>
+  无 GPU、无 Qt、无资源文件。这就是 <code>build\bin\showcase.exe</code>。</i>
+</p>
 
 ---
 
@@ -50,12 +55,12 @@ GeeyoouUI 走的是另一条路：屏幕上每一个像素都是自己画的，�
 | **重绘模型** | ✅ 脏矩形增量（HMI 画面约 90% 像素是静止的） | 整控件重绘 |
 | **热路径分配** | ✅ 零分配 —— 实时数据走固定容量环形缓冲 | 通用取向 |
 | **换肤** | ✅ 皮肤注册表 + 一个主题色带动整套配色 + 类 QSS 选择器，运行时热切换 | QSS，逐控件 |
+| **布局** | ✅ `BoxLayout` / `GridLayout`，支持 stretch 权重、min/max 钳制、跨列；**也可以**用绝对坐标——组态画面本来就是这么画的 | 完整布局系统 |
 | **平台** | ❌ **目前仅 Windows。** 平台层是 12 个纯虚函数，X11/Cocoa 未实现 | Windows、macOS、Linux、移动、嵌入式 |
-| **布局引擎** | ❌ **只有绝对坐标**（v1 的有意取舍，见下） | 完整布局系统 |
 | **无障碍** | ❌ 未实现（无 UIA） | 成熟 |
 | **生态** | ❌ 30+ 控件，一个库 | 庞大 |
 
-**这张表请如实读。** 如果你现在就要 Linux、要布局引擎、要读屏支持，那就用 Qt——GeeyoouUI 只会浪费你的时间。如果你交付的是 Windows 操作站、画面本来就是按固定坐标组态的、而挡在你面前的正是那纸授权，那这个库就是为你写的。
+**这张表请如实读。** 如果你现在就要 Linux、要读屏支持，那就用 Qt——GeeyoouUI 只会浪费你的时间。如果你交付的是 Windows 操作站，而挡在你面前的正是那纸授权，那这个库就是为你写的。
 
 ## 快速开始
 
@@ -111,6 +116,7 @@ int main() {
 - **无 moc** — 信号槽用模板 + `std::function`，没有任何代码生成步骤
 - **脏矩形增量重绘** — HMI 画面 90% 的像素是静止的，不做全帧重绘
 - **热路径零分配** — 实时数据走固定容量环形缓冲，适配长期无人值守运行
+- **要布局有布局** — `BoxLayout` / `GridLayout` 带 stretch 与 min/max；画组态时也可以直接用绝对坐标，位置本身就是工艺语义
 - **平台层为纯虚接口** — v1 实现 Win32；X11 / Cocoa 只需补 12 个方法
 
 ## 演示程序
@@ -119,24 +125,62 @@ int main() {
 
 一个 admin console 式的外壳：左侧导航选页，内容区打开对应控件族。整个窗口是 `ShowcaseWindow : AppWindow`——没有 Windows 标题栏，左上角是图标 + 标题 + 副标题，右上角是通知 / 语言切换 / 账户下拉，再往右是自绘的最小化、最大化、关闭。
 
+<p align="center">
+  <img src="UI/cn/A.png" width="880" alt="演示程序外壳：导航栏、标题条、统计卡片与文字面板">
+</p>
+
+**共 18 个页面**，按演示的内容分组：
+
 | 页面 | 内容 | 顺带验证的东西 |
 |---|---|---|
 | 概览 | 库的构成、分层规模、未实现清单 | 多行 `Label`、实时统计卡片 |
 | 窗口外壳 | 标题栏高度 / 配色 / 图标 / 按钮显隐实时改 | 无边框窗口、`HitZone` 拖动区、窗口命令 |
 | 主题与皮肤 | 换皮肤 / 换主题色 / 现场编辑样式表 | 皮肤注册表、`@token`、选择器与级联 |
+| 图标库 | 全部内置与自定义图标，可搜索 | `IconRegistry`、尺寸对比、用法片段 |
 | HMI 监控 | 仪表 / 指示灯 / 实时趋势 | 整条渲染链路 + 中文文本 |
 | 运维控制台 | 报警列表 / 滚动表单 / 采集队列 | 拉取式 `ListView`、嵌套 `ScrollArea`、跨线程队列 |
+| 布局引擎 | stretch 权重、min/max 钳制、跨列——拖窗口边缘看实时反应 | `BoxLayout` / `GridLayout` 现场重排 |
 | 基础控件 | 按钮 / 开关 / 单选 / 滑块 / 数值设定 | 焦点遍历、整组禁用联锁 |
 | 输入与按钮 | 文本输入族、按钮变体、图标按钮 | IME 手工测试台（切中文输入法，候选窗应跟随光标） |
 | 下拉选择 | 单选/搜索/多选/树形/级联/菜单/日期 | 弹层冲出 `GroupBox` **与** `ScrollArea` 双重限制 |
+| **表格族** ×7 | 基础、行内编辑、分页、固定列+合并、树形、异步树形、20 万行 | 同一个 `TableView` 的七种性质——虚拟滚动、冻结几何、异步子节点 |
+| 设备三维视图 | 反应釜撑块，旋转/缩放/平移、点选部件、状态着色 | `View3D` 软件渲染，全程无 GPU |
 
 所有页面**共用同一个采集线程与 `DataHub`**——「HMI 监控」和「运维控制台」看到的是同一份实时数据，这本身就是"采集线程绝不触碰 Widget"这条规则的演示。
+
+**标题栏上的语言切换是真的。** 选一种语言，标题栏就地换文案，所有页面按 `examples/showcase/i18n/` 里的语言包重建——每种语言一个文件。本文与 [英文 README](README.md) 里的截图来自同一个二进制，只是语言不同。
+
+<p align="center">
+  <img src="UI/cn/F.png" width="880" alt="HMI 监控页：弧形仪表、状态指示灯与多通道实时趋势">
+</p>
+
+<p align="center">
+  <i>「HMI 监控」页：三个仪表、五个指示灯、一条三通道实时曲线，数据来自后台采集线程。</i>
+</p>
+
+<p align="center">
+  <img src="UI/cn/G.png" width="880" alt="运维控制台：实时值、参数表单与报警列表">
+</p>
+
+<p align="center">
+  <i>「运维控制台」看的是<b>同一份</b>数据。右侧报警列表是拉取式 <code>ListView</code>——
+  模型里存的是环形缓冲，视图只问看得见的那几十行。</i>
+</p>
 
 页面按需构建：没打开过的页面除了一条导航项之外不占任何资源；隐藏的页面因为 `animationTickTree` 跳过不可见子树，也自动停止周期性工作。
 
 ## 窗口层
 
 应用窗口继承 `AppWindow`（`widget/AppWindow.hpp`），它默认是**无边框窗口**：Windows 不再画标题栏、边框和主题色，标题栏由 `WindowHeader` 用同一套 `Painter` / `Theme` 画出来。
+
+<p align="center">
+  <img src="UI/cn/B.png" width="880" alt="窗口外壳页：标题栏度量、配色、图标与按钮显隐实时可改">
+</p>
+
+<p align="center">
+  <i>「窗口外壳」页驱动的就是它上方那条真标题栏。这里每一个滑块和下拉都对应一个
+  <code>WindowHeader</code> 的 setter —— 窗口 chrome 就是普通控件代码。</i>
+</p>
 
 ```cpp
 class PlantWindow : public AppWindow {
@@ -188,6 +232,31 @@ class PlantWindow : public AppWindow {
 
 需要 OS 原生边框时，把 `WindowOptions{.frameless = false}` 传给 `AppWindow` 的构造函数即可。
 
+## 布局 —— 用，或者有意不用
+
+一个控件最多挂一个 `Layout`，它只摆放这个控件的**直接子节点**，别的什么都不做：
+
+```cpp
+auto* row = panel->setLayout<BoxLayout>(Orientation::Horizontal);
+row->setSpacing(12);
+row->addWidget(fixed,   /*stretch*/ 0);   // 永远不动
+row->addWidget(elastic, /*stretch*/ 1);   // 吃掉余量
+row->addWidget(capped,  /*stretch*/ 2);   // 吃两倍余量，到 max 为止
+
+auto* form = box->setLayout<GridLayout>();
+form->addRow(tagLabel,  tagEdit);         // 标签列 + 字段列
+form->addRow(descLabel, descEdit);
+form->setColumnStretch(1, 1);             // 宽度都给字段列
+```
+
+尺寸提示带 `min` / `preferred` / `max` 三个值，所以窗口缩小时按 stretch 顺序回退到 `min`，放大时到 `max` 就停——下面这页就是演示，拖窗口边缘它会实时重排。
+
+<p align="center">
+  <img src="UI/cn/H.png" width="880" alt="布局引擎页：stretch 权重、min/max 钳制与跨列随窗口宽度实时反应">
+</p>
+
+**绝对坐标同样是一等公民。** `setGeometry()` 不是遗留写法：组态画面上，泵画在阀左边 40px 是**工艺语义**而不是排版，一个把它重排掉的布局引擎等于毁掉了信息。两种写法都受支持，演示程序两种都在用，理由记在 `docs/iterations/02-layout-engine.md`。
+
 ## 主题 / 皮肤 / 样式表
 
 三层能力，按需往上取，**能用下层解决就不要用上层**。
@@ -223,6 +292,24 @@ skins().apply("acme");
 `setAccent()` 只动**派生自品牌色**的 token（accent / primary / focusRing / 选区底色，以及填充按钮上的字色——按亮度自动选黑或白）。`ok` / `warn` / `alarm` **不动**：报警必须永远是报警色。
 
 `Window` 会自己订阅 `skins().changed` 并整窗重绘，业务代码不用管。
+
+<p align="center">
+  <img src="UI/cn/D.png" width="880" alt="同一个概览页，切到深色皮肤后的样子">
+</p>
+
+<p align="center">
+  <i>和本文开头「演示程序」那张<b>是同一个页面、同一份代码</b>，只是换了皮肤。<br>
+  没有一个控件收到过通知——取色发生在每次绘制时，所以整窗重绘一次就够了。</i>
+</p>
+
+<p align="center">
+  <img src="UI/cn/C.png" width="880" alt="主题与皮肤页：皮肤注册表、主题色、可现场编辑的样式表">
+</p>
+
+<p align="center">
+  <i>「主题与皮肤」页：左边选皮肤，中间点主题色，右边那个文本框里的样式表可以直接改了点「应用」。
+  下方的样本控件就是这些规则的作用对象。</i>
+</p>
 
 ### 3. 样式表（`StyleSheet`）—— 类 QSS 选择器
 
@@ -264,6 +351,15 @@ skins().reloadStyleSheet(qssText);     // 解析失败不抛异常，见下
 **已接入选择器的控件**：`PushButton` 族、`Label`、`GroupBox`、`LineEdit` 族、`CheckBox`、`RadioButton`、`ToggleSwitch`、`Slider`、`ProgressBar`、`Separator`、`WindowHeader`。其余控件只跟随 `Theme`——这是有意的取舍，理由见 `docs/architecture.md` §2.6。
 
 ## 控件清单
+
+<p align="center">
+  <img src="UI/cn/J.png" width="880" alt="基础控件页：按钮、开关、单选组、滑块、数值设定与整组禁用联锁">
+</p>
+
+<p align="center">
+  <i>右下角那组是<b>整组禁用联锁</b>：禁用 <code>GroupBox</code> 就禁用整棵子树，
+  不需要逐个控件去设。</i>
+</p>
 
 | 通用（`widget/`） | 说明 |
 |---|---|
@@ -313,9 +409,41 @@ skins().reloadStyleSheet(qssText);     // 解析失败不抛异常，见下
 
 **按钮变体**：`PushButton::setVariant()` 支持 `Default` / `Primary` / `Success` / `Warning` / `Danger` / `Ghost`，另有 `setIcon()`、`setLoading()`（转圈，需先调 `Window::enableAnimations()`）、`setCheckable()`（锁定态）。
 
+### 表格族：一个 `TableView`，七种性质
+
+<p align="center">
+  <img src="UI/cn/K.png" width="880" alt="基础表格：斑马纹、列排序、空状态与加载中状态">
+</p>
+
+<p align="center">
+  <i>空状态和加载态<b>都保留表头</b>——空的是数据，不是这张表。</i>
+</p>
+
+<p align="center">
+  <img src="UI/cn/L.png" width="880" alt="固定列与合并行：左右冻结列、中间横向滚动、区域列按连续段合并">
+</p>
+
+<p align="center">
+  <i>左两列和右侧操作列钉住不动，中间横向滚动。下半张是<b>合并行</b>：被覆盖的格子回答的是
+  「锚点在我上面几行」的负偏移，所以合并在二十万行上也是每格 O(1)。</i>
+</p>
+
+<p align="center">
+  <img src="UI/cn/Z.png" width="880" alt="树形表格：区域 → 设备类型 → 仪表 三级展开">
+</p>
+
+<p align="center">
+  <img src="UI/cn/X.png" width="880" alt="异步树形表格：展开时才取子节点，取的过程画在展开箭头上">
+</p>
+
+<p align="center">
+  <i>异步树的三态全在展开箭头上：折叠 / 转圈 / 重试标记。模型只发
+  <code>childrenRequested</code> 信号，<b>绝不自己去取</b>——失败了就停在重试标记上，不会自己轮询。</i>
+</p>
+
 ## 图标：内置 + 收集 + 扩展
 
-`render/Icon.hpp` 提供 **39 个内置矢量图标**，全部代码绘制：无资源文件、无图标字体、可主题着色、任意缩放（一份定义同时服务 14px 内联和 48px 标题栏）。
+`render/Icon.hpp` 提供 **38 个内置矢量图标**，全部代码绘制：无资源文件、无图标字体、可主题着色、任意缩放（一份定义同时服务 14px 内联和 48px 标题栏）。
 
 但内置集永远覆盖不了**领域**——配料车间要的是泵、阀、反应釜，不是通用 UI 图标。所以 `Icon` 不是一个封闭枚举，而是一个**句柄**：`IconRegistry` 从 `Icon::FirstCustom` 开始发放 id，注册进来的图标仍然是 `Icon` 值，因此**现有 19 个吃 `Icon` 的 API 全部原样可用**。
 
@@ -357,6 +485,16 @@ btn->setIcon(icons().find("thermometer"));
 
 示例见 `examples/showcase/PlantIcons.cpp`（9 个自定义图标，两种录入方式），效果在「窗口外壳」页底部。
 
+<p align="center">
+  <img src="UI/cn/E.png" width="880" alt="图标库页：全部内置与自定义图标，可按名字或分类搜索">
+</p>
+
+<p align="center">
+  <i>「图标库」页把 <code>icons().all()</code> 整个铺出来。左上角选中的那个以
+  16 / 24 / 32 / 48 px 画了四遍——<b>同一个 <code>Icon</code> 句柄</b>，没有 @2x 资源，
+  也没有 DPI 变体。</i>
+</p>
+
 ## 文本输入与键盘
 
 **中文输入**：输入框支持 IME，候选窗跟随光标；组合中的拼音由系统 IME 窗口绘制（未做内联预编辑，详见 `docs/architecture.md` §3.8）。
@@ -375,7 +513,7 @@ include/geeyoou/
               Theme.hpp      token 结构体
               Skin.hpp       皮肤注册表 + 主题色派生
               StyleSheet.hpp 类 QSS 选择器与级联
-              Icon.hpp       39 个内置矢量图标
+              Icon.hpp       38 个内置矢量图标
               IconRegistry.hpp  图标注册表 + IconCanvas 作画网格
               VectorPath.hpp    轮廓容器 + SVG path 解析
   widget/     AppWindow / WindowHeader   窗口层：无边框窗口与自绘 chrome
@@ -387,13 +525,12 @@ docs/         architecture.md — 设计决策与取舍，动手前先读
 
 ## 现状与路线图
 
-**v1 已跑通**：Win32 后端、Per-Monitor DPI v2、脏矩形、控件树、无边框窗口层、中文文本渲染。
+**v1 已跑通**：Win32 后端、Per-Monitor DPI v2、脏矩形、控件树、无边框窗口层、中文文本渲染、`BoxLayout` / `GridLayout` 布局引擎、`TableView` 族（冻结列、合并、异步树、20 万行虚拟滚动）、软件渲染的 `View3D`。
 
 **尚未实现**——有意推迟，理由见 `docs/architecture.md` 第 4 节：
 
 | | 为什么推迟 |
 |---|---|
-| 布局引擎 | v1 用绝对坐标，本来就符合组态画面的作图习惯 |
 | 无障碍（UIA） | 需要控件树先稳定下来 |
 | IME 内联预编辑 | 系统候选窗已经跟随光标，内联属于打磨项 |
 | X11 / Cocoa 后端 | 平台层就 12 个纯虚函数——移植范围已划清，只是还没开工 |
