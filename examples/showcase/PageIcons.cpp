@@ -41,6 +41,7 @@
 #include "geeyoou/widget/Label.hpp"
 #include "geeyoou/widget/ScrollArea.hpp"
 #include "geeyoou/widget/SearchBox.hpp"
+#include "i18n/I18n.hpp"
 
 namespace showcase {
 
@@ -121,7 +122,7 @@ class IconPreview : public Widget {
     const Theme& t = Theme::current();
     const Rect r = localRect();
     if (!has_) {
-      p.drawText({r.center().x, r.center().y}, "点击下面任意图标", t.fontBody,
+      p.drawText({r.center().x, r.center().y}, tr("点击下面任意图标"), t.fontBody,
                  t.textDim, HAlign::Center, VAlign::Middle);
       return;
     }
@@ -152,9 +153,9 @@ class IconPreview : public Widget {
     p.drawText({tx, 18.0f}, elide(entry_.name, avail, 17.0f), 17.0f, t.text,
                HAlign::Left, VAlign::Middle);
 
-    const std::string meta = (entry_.builtin ? std::string("内置 · Icon.hpp")
-                                             : std::string("自定义 · IconRegistry")) +
-                             "    分类：" + (entry_.category.empty() ? "—" : entry_.category);
+    const std::string meta = (entry_.builtin ? std::string(tr("内置 · Icon.hpp"))
+                                             : std::string(tr("自定义 · IconRegistry"))) +
+                             tr("    分类：") + (entry_.category.empty() ? "—" : entry_.category);
     p.drawText({tx, 40.0f}, elide(meta, avail, t.fontSmall), t.fontSmall,
                entry_.builtin ? t.textDim : t.accent, HAlign::Left, VAlign::Middle);
 
@@ -215,7 +216,7 @@ Label* note(Widget* parent, BoxLayout* into, const std::string& s) {
   return l;
 }
 
-GroupBox* panel(Widget* parent, BoxLayout* into, const char* title) {
+GroupBox* panel(Widget* parent, BoxLayout* into, std::string title) {
   auto* g = parent->add<GroupBox>();
   g->setTitle(title);
   into->addWidget(g);
@@ -242,8 +243,8 @@ Size buildIconsPage(Widget* content) {
   {
     char buf[192];
     std::snprintf(buf, sizeof(buf),
-                  "共 %d 个图标   ·   内置 %d（Icon.hpp）   ·   自定义 %d"
-                  "（IconRegistry 运行时注册）   ·   %d 个分类",
+                  tr("共 %d 个图标   ·   内置 %d（Icon.hpp）   ·   自定义 %d"
+                  "（IconRegistry 运行时注册）   ·   %d 个分类").c_str(),
                   int(all.size()), builtins, customs, categories);
     stats->setText(buf);
   }
@@ -255,7 +256,7 @@ Size buildIconsPage(Widget* content) {
   rowBox->setSpacing(12.0f);
 
   auto* search = row->add<SearchField>();
-  search->setPlaceholder("按名字或分类搜索：chevron / window / pump / 仪表");
+  search->setPlaceholder(tr("按名字或分类搜索：chevron / window / pump / 仪表"));
   rowBox->addWidget(search);
 
   auto* matched = row->add<Label>();
@@ -267,20 +268,20 @@ Size buildIconsPage(Widget* content) {
   page->addWidget(row);
 
   // ----------------------------------------------------- 选中图标的多尺寸 ---
-  GroupBox* gPreview = panel(content, page, "选中的图标 —— 一份定义，任意尺寸");
+  GroupBox* gPreview = panel(content, page, tr("选中的图标 —— 一份定义，任意尺寸"));
   BoxLayout* previewCol = stack(gPreview, 8.0f);
   note(gPreview, previewCol,
-       "同一个 Icon 句柄画四遍。矢量图标没有 @2x 资源，也没有 DPI 变体 —— "
-       "16px 的行内标记和 48px 的表头标记来自同一份 24x24 授权网格。");
+       tr("同一个 Icon 句柄画四遍。矢量图标没有 @2x 资源，也没有 DPI 变体 —— "
+       "16px 的行内标记和 48px 的表头标记来自同一份 24x24 授权网格。"));
   auto* preview = gPreview->add<IconPreview>();
   previewCol->addWidget(preview);
 
   // ------------------------------------------------------------- 图标画廊 ---
-  GroupBox* gGallery = panel(content, page, "图标画廊 —— icons().all() 的全部内容");
+  GroupBox* gGallery = panel(content, page, tr("图标画廊 —— icons().all() 的全部内容"));
   BoxLayout* galleryCol = stack(gGallery, 10.0f);
   note(gGallery, galleryCol,
-       "蓝底 + 右上角 ● 的是自定义图标（examples/showcase/PlantIcons.cpp 启动时注册），"
-       "其余是内置。点任意一格看它的多尺寸预览与写法。");
+       tr("蓝底 + 右上角 ● 的是自定义图标（examples/showcase/PlantIcons.cpp 启动时注册），"
+       "其余是内置。点任意一格看它的多尺寸预览与写法。"));
   auto* gallery = gGallery->add<IconGallery>();
   galleryCol->addWidget(gallery);
 
@@ -294,17 +295,17 @@ Size buildIconsPage(Widget* content) {
   // ------------------------------------------------------------------ 接线 ---
   gallery->onPicked = [preview, status](const IconEntry& e) {
     preview->setEntry(e);
-    status->setText("已选择 " + e.name + "（" +
-                    (e.builtin ? "内置" : "自定义") + " · " +
-                    (e.category.empty() ? "未分类" : e.category) +
-                    "）   用法：" + usageExpr(e) +
-                    (e.builtin ? "   或 icons().find(\"" + e.name + "\")" : ""));
+    status->setText(tr("已选择 ") + e.name + tr("（") +
+                    (e.builtin ? tr("内置") : tr("自定义")) + " · " +
+                    (e.category.empty() ? tr("未分类") : e.category) +
+                    tr("）   用法：") + usageExpr(e) +
+                    (e.builtin ? tr("   或 icons().find(\"") + e.name + "\")" : ""));
   };
   gallery->setEntries(all);
 
   const auto refreshCount = [gallery, matched] {
     char buf[64];
-    std::snprintf(buf, sizeof(buf), "显示 %d / %d", gallery->visibleCount(),
+    std::snprintf(buf, sizeof(buf), tr("显示 %d / %d").c_str(), gallery->visibleCount(),
                   gallery->total());
     matched->setText(buf);
   };
