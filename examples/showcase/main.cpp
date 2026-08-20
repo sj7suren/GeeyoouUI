@@ -113,6 +113,13 @@ int main() {
   shell->addPage("", "大数据量表格", "20 万行虚拟滚动 · 模型里一行都不存",
                  Icon::Upload, [](Widget* c) { return buildTablesBigPage(c); });
 
+  // 三维。One entry, because the control has one job: show a plant object and
+  // colour the part whose state changed.
+  shell->addPage("三维", "设备三维视图",
+                 "反应釜撑块 · 旋转/缩放/平移 · 点选部件 · 状态着色",
+                 Icon::Settings,
+                 [&app](Widget* c) { return buildScene3DPage(c, app); });
+
   shell->showPage(0);
 
   // Draining runs on a timer of its own rather than on a page's ticker: the
