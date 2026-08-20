@@ -1,0 +1,114 @@
+name: CI
+
+# What this reproduces, and why it is not just `verify.bat`.
+#
+# verify.bat is the local gate and it hard-codes VSROOT to a specific Visual
+# Studio install, which no hosted runner has.  So this workflow re-runs the same
+# six steps through CMake directly:
+#
+#   1  door-coverage lint (and the lint's own self-test)
+#   2  Release build          4  Debug build          6  ASan build
+#   3  Release tests          5  Debug tests             ASan tests
+#
+# The three build types are separate jobs rather than three steps in one, so a
+# red badge tells you WHICH leg broke without opening the log -- and so ASan,
+# which is the slow one, does not hold up the Release answer.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+# A push that lands while an earlier run is still going cancels that run: the
+# only interesting answer is about the current tip.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: door-coverage lint
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The checker proves itself before it is trusted to judge anything --
+      # a checker that fails open is worse than no checker, because it looks
+      # like one.  Same contract verify.bat enforces locally.
+      - name: lint self-test
+        shell: pwsh
+        run: ./tools/test-lint-door-coverage.ps1 -Quiet
+
+      - name: door coverage
+        shell: pwsh
+        run: ./tools/lint-door-coverage.ps1 -Quiet
+
+  build:
+    name: ${{ matrix.name }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # CMAKE_CXX_FLAGS is passed on all three rather than only on ASan, so
+          # there is no conditional expression to get wrong in the shell.
+          #
+          # /DWIN32 /D_WINDOWS /EHsc are NOT decoration: setting CMAKE_CXX_FLAGS
+          # on the command line REPLACES the defaults CMake would have supplied,
+          # so dropping them changes how the same code compiles.  Kept verbatim
+          # from build-asan.bat.  (Per-config flags such as CMAKE_CXX_FLAGS_DEBUG
+          # are a separate variable and are unaffected by this.)
+          - name: Release
+            dir: build
+            build_type: Release
+            cxx_flags: /DWIN32 /D_WINDOWS /EHsc
+          - name: Debug
+            dir: build-debug
+            build_type: Debug
+            cxx_flags: /DWIN32 /D_WINDOWS /EHsc
+          - name: ASan
+            dir: build-asan
+            build_type: RelWithDebInfo
+            cxx_flags: /DWIN32 /D_WINDOWS /EHsc /fsanitize=address /Zi
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Ninja + cl.exe, i.e. the same generator and compiler the local scripts
+      # use.  Pin these to a commit SHA if you want the supply chain nailed down;
+      # tags are used here for readability.
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - uses: seanmiddleditch/gha-setup-ninja@v5
+
+      - name: Configure
+        shell: cmd
+        run: >
+          cmake -G Ninja -S . -B ${{ matrix.dir }}
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+          -DCMAKE_CXX_FLAGS="${{ matrix.cxx_flags }}"
+
+      - name: Build
+        run: cmake --build ${{ matrix.dir }}
+
+      # detect_leaks=0 matches the local gate: this is a GUI toolkit whose
+      # widgets are owned by a tree that outlives main()'s teardown ordering,
+      # and leak detection there reports the design, not a defect.
+      - name: Test
+        shell: cmd
+        env:
+          ASAN_OPTIONS: continue_on_error=1:detect_leaks=0
+        run: ${{ matrix.dir }}\bin\geeyoou_tests.exe
+
+      # The showcase is a WIN32_EXECUTABLE with no console, so CI cannot run it
+      # meaningfully -- but it must at least still link.
+      - name: Showcase links
+        if: matrix.name == 'Release'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${{ matrix.dir }}/bin/showcase.exe")) {
+            throw "showcase.exe was not produced"
+          }
+          Write-Host "showcase.exe built"
