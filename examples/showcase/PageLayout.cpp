@@ -22,6 +22,7 @@
 #include "geeyoou/widget/LineEdit.hpp"
 #include "geeyoou/widget/PushButton.hpp"
 #include "geeyoou/widget/SpinBox.hpp"
+#include "i18n/I18n.hpp"
 
 namespace showcase {
 
@@ -110,7 +111,7 @@ BoxLayout* line(Widget* host, float spacing) {
   return b;
 }
 
-Label* note(Widget* parent, BoxLayout* into, const char* s) {
+Label* note(Widget* parent, BoxLayout* into, std::string s) {
   auto* l = parent->add<Label>();
   l->setText(s);
   l->addStyleClass("caption");
@@ -122,7 +123,7 @@ Label* note(Widget* parent, BoxLayout* into, const char* s) {
 
 // GroupBox reserves its border and title through layoutRect(); the margins here
 // are the author's own breathing room on top of that.
-GroupBox* panel(Widget* parent, BoxLayout* into, const char* title,
+GroupBox* panel(Widget* parent, BoxLayout* into, std::string title,
                 std::uint16_t stretch = 0) {
   auto* g = parent->add<GroupBox>();
   g->setTitle(title);
@@ -156,15 +157,15 @@ Size buildLayoutPage(Widget* content) {
   auto* probe = content->add<ResizeProbe>();
 
   // ------------------------------------------- 1. BoxLayout 的 stretch 权重 ---
-  GroupBox* gStretch = panel(content, page, "① BoxLayout —— 余量按 stretch 权重分");
+  GroupBox* gStretch = panel(content, page, tr("① BoxLayout —— 余量按 stretch 权重分"));
   BoxLayout* stretchCol = stack(gStretch, kItemGap);
   note(gStretch, stretchCol,
-       "四块的 preferred 都是 120。窗口变宽时，多出来的空间按 0 : 1 : 2 : 3 分 —— "
-       "第一块永远不动，最后一块长得最快。");
+       tr("四块的 preferred 都是 120。窗口变宽时，多出来的空间按 0 : 1 : 2 : 3 分 —— "
+       "第一块永远不动，最后一块长得最快。"));
 
   Widget* stretchRow = band(gStretch, stretchCol);
   BoxLayout* sr = line(stretchRow, kItemGap);
-  const struct { const char* cap; std::uint16_t w; Color c; } kStretch[] = {
+  const struct { std::string cap; std::uint16_t w; Color c; } kStretch[] = {
       {"stretch 0", 0, th.textDisabled},
       {"stretch 1", 1, th.accent},
       {"stretch 2", 2, th.ok},
@@ -177,29 +178,29 @@ Size buildLayoutPage(Widget* content) {
   }
 
   // ------------------------------------------ 2. SizeHint 的 min/pref/max ---
-  GroupBox* gHint = panel(content, page, "② SizeHint —— 缩小时谁先让，放大时谁先停");
+  GroupBox* gHint = panel(content, page, tr("② SizeHint —— 缩小时谁先让，放大时谁先停"));
   BoxLayout* hintCol = stack(gHint, kItemGap);
   note(gHint, hintCol,
-       "把窗口拖窄：可伸缩的先让到 min，固定的一步不退。再拖宽："
-       "有上限的到 240 就不长了，把余量让给旁边。");
+       tr("把窗口拖窄：可伸缩的先让到 min，固定的一步不退。再拖宽："
+       "有上限的到 240 就不长了，把余量让给旁边。"));
 
   Widget* hintRow = band(gHint, hintCol);
   BoxLayout* hr = line(hintRow, kItemGap);
   auto* swFixed = hintRow->add<Swatch>();
-  swFixed->set("固定 140", th.textDisabled, fixed(140.0f, 56.0f));
+  swFixed->set(tr("固定 140"), th.textDisabled, fixed(140.0f, 56.0f));
   hr->addWidget(swFixed, 0);
 
   auto* swElastic = hintRow->add<Swatch>();
-  swElastic->set("min 80 / 无上限", th.accent,
+  swElastic->set(tr("min 80 / 无上限"), th.accent,
                  elastic(80.0f, 160.0f, kUnbounded, 56.0f));
   hr->addWidget(swElastic, 1);
 
   auto* swCapped = hintRow->add<Swatch>();
-  swCapped->set("上限 240", th.alarm, elastic(80.0f, 160.0f, 240.0f, 56.0f));
+  swCapped->set(tr("上限 240"), th.alarm, elastic(80.0f, 160.0f, 240.0f, 56.0f));
   hr->addWidget(swCapped, 1);
 
   // ------------------------------------------------- 3. GridLayout 跨列 ---
-  GroupBox* gGrid = panel(content, page, "③ GridLayout —— 跨列与列对齐");
+  GroupBox* gGrid = panel(content, page, tr("③ GridLayout —— 跨列与列对齐"));
   auto* grid = gGrid->setLayout<GridLayout>();
   // Just breathing room -- GroupBox already reserves its border and title in
   // layoutRect(), so adding the title height here would count it twice.
@@ -207,11 +208,11 @@ Size buildLayoutPage(Widget* content) {
   grid->setSpacing(kItemGap);
 
   auto* spanCell = gGrid->add<Swatch>();
-  spanCell->set("跨 3 列", th.accent.withAlpha(120),
+  spanCell->set(tr("跨 3 列"), th.accent.withAlpha(120),
                 elastic(200.0f, 420.0f, kUnbounded, 34.0f));
   grid->addWidget(spanCell, 0, 0, 1, 3);
 
-  const char* kCols[] = {"第 1 列", "第 2 列", "第 3 列"};
+  std::string kCols[] = {tr("第 1 列"), tr("第 2 列"), tr("第 3 列")};
   for (int c = 0; c < 3; ++c) {
     auto* cell = gGrid->add<Swatch>();
     cell->set(kCols[c], th.panelBorder, elastic(70.0f, 120.0f, kUnbounded, 46.0f));
@@ -222,13 +223,13 @@ Size buildLayoutPage(Widget* content) {
   grid->setColumnStretch(2, 1);
 
   // ---------------------------------------------------- 4. addRow 表单 ---
-  GroupBox* gForm = panel(content, page, "④ GridLayout::addRow —— 参数表单");
+  GroupBox* gForm = panel(content, page, tr("④ GridLayout::addRow —— 参数表单"));
   auto* form = gForm->setLayout<GridLayout>();
   form->setMargins({0.0f, 0.0f, 0.0f, 0.0f});
   form->setSpacing(kItemGap);
 
-  const char* kRows[] = {"设备位号", "工程描述", "Modbus 地址"};
-  const char* kVals[] = {"TI-101", "反应釜内温度", "40001"};
+  std::string kRows[] = {tr("设备位号"), tr("工程描述"), tr("Modbus 地址")};
+  std::string kVals[] = {"TI-101", tr("反应釜内温度"), "40001"};
   for (int i = 0; i < 3; ++i) {
     auto* lab = gForm->add<Label>();
     lab->setText(kRows[i]);
@@ -243,11 +244,11 @@ Size buildLayoutPage(Widget* content) {
   // 标签列不跟着长，字段列吃掉全部余量 —— 这正是 addRow 默认给的形状。
 
   // -------------------------------------------------- 5. 对照组：绝对坐标 ---
-  GroupBox* gAbs = panel(content, page, "⑤ 对照组 —— 绝对坐标（不会响应缩放）");
+  GroupBox* gAbs = panel(content, page, tr("⑤ 对照组 —— 绝对坐标（不会响应缩放）"));
   BoxLayout* absCol = stack(gAbs, kItemGap);
   note(gAbs, absCol,
-       "下面三块用 setGeometry 摆死。窗口怎么拉，它们纹丝不动 —— "
-       "这不是 bug，组态画面（P&ID / 罐区）就该是这样，位置是工艺含义。");
+       tr("下面三块用 setGeometry 摆死。窗口怎么拉，它们纹丝不动 —— "
+       "这不是 bug，组态画面（P&ID / 罐区）就该是这样，位置是工艺含义。"));
 
   // Deliberately NOT given a layout: its children keep the coordinates below,
   // which is the entire point of the control group.
@@ -261,7 +262,7 @@ Size buildLayoutPage(Widget* content) {
   absHost->setGeometry({0.0f, 0.0f, 3.0f * 162.0f - 12.0f, 56.0f});
   for (int i = 0; i < 3; ++i) {
     auto* sw = absHost->add<Swatch>();
-    sw->set("固定坐标", th.panel.lerp(th.text, 0.18f), fixed(150.0f, 48.0f));
+    sw->set(tr("固定坐标"), th.panel.lerp(th.text, 0.18f), fixed(150.0f, 48.0f));
     sw->setGeometry({float(i) * 162.0f, 4.0f, 150.0f, 48.0f});
   }
   absCol->addWidget(absHost);
@@ -276,14 +277,19 @@ Size buildLayoutPage(Widget* content) {
   auto refresh = [readout, content, swFixed, swElastic, swCapped] {
     const Rect r = content->geometry();
     const LayoutOverflow& of = content->lastLayoutOverflow();
+    // Named, and passed as .c_str(): tr() returns std::string, and handing a
+    // std::string to a varargs function is undefined behaviour, not a
+    // conversion.  It compiled and it printed garbage.
+    const std::string note = of.any()
+                                 ? tr("空间不足：已按 min 截断（LayoutOverflow）")
+                                 : tr("空间充足");
     char buf[256];
     std::snprintf(buf, sizeof(buf),
-                  "内容区 %d x %d px    ·    固定 %d / 可伸缩 %d / 有上限 %d    ·    %s",
+                  tr("内容区 %d x %d px    ·    固定 %d / 可伸缩 %d / 有上限 %d    ·    %s").c_str(),
                   int(r.width() + 0.5f), int(r.height() + 0.5f),
                   int(swFixed->geometry().width() + 0.5f),
                   int(swElastic->geometry().width() + 0.5f),
-                  int(swCapped->geometry().width() + 0.5f),
-                  of.any() ? "空间不足：已按 min 截断（LayoutOverflow）" : "空间充足");
+                  int(swCapped->geometry().width() + 0.5f), note.c_str());
     readout->setText(buf);
   };
   probe->onResized = refresh;
