@@ -22,6 +22,7 @@
 #include "geeyoou/widget/SearchBox.hpp"
 #include "geeyoou/widget/Separator.hpp"
 #include "geeyoou/widget/TextArea.hpp"
+#include "i18n/I18n.hpp"
 
 namespace showcase {
 
@@ -55,7 +56,7 @@ Widget* band(Widget* parent, BoxLayout* into, std::uint16_t stretch = 0) {
 
 // A caption above the control it names.  The spacing between the two is set on
 // the box by the caller (kCaptionGap), so this only makes the label.
-Label* caption(Widget* parent, BoxLayout* into, const char* s) {
+Label* caption(Widget* parent, BoxLayout* into, std::string s) {
   auto* l = parent->add<Label>();
   l->setText(s);
   l->addStyleClass("caption");
@@ -77,32 +78,32 @@ Size buildInputsPage(Widget* content) {
   auto* status = content->add<Label>();
   status->addStyleClass("caption");
   status->setPixelSize(12.0f);
-  status->setText("状态：就绪 · Ctrl+A/C/V 可用，可直接输入中文");
-  auto say = [status](const std::string& s) { status->setText("状态：" + s); };
+  status->setText(tr("状态：就绪 · Ctrl+A/C/V 可用，可直接输入中文"));
+  auto say = [status](const std::string& s) { status->setText(tr("状态：") + s); };
 
   // ---------------- 文本输入 ----------------
   auto* gText = upper->add<GroupBox>();
-  gText->setTitle("文本输入");
+  gText->setTitle(tr("文本输入"));
   upperRow->addWidget(gText, 1);
   BoxLayout* text = stack(gText, kCaptionGap);
 
-  caption(gText, text, "普通输入框");
+  caption(gText, text, tr("普通输入框"));
   auto* edName = gText->add<LineEdit>();
-  edName->setPlaceholder("请输入配方名称");
+  edName->setPlaceholder(tr("请输入配方名称"));
   text->addWidget(edName);
   text->addSpacing(kItemGap);
 
-  caption(gText, text, "带清除按钮 + 长度上限 12 字");
+  caption(gText, text, tr("带清除按钮 + 长度上限 12 字"));
   auto* edLimited = gText->add<LineEdit>();
-  edLimited->setPlaceholder("最多 12 个字符（中文也按字算）");
+  edLimited->setPlaceholder(tr("最多 12 个字符（中文也按字算）"));
   edLimited->setClearButtonEnabled(true);
   edLimited->setMaxLength(12);
   text->addWidget(edLimited);
   text->addSpacing(kItemGap);
 
-  caption(gText, text, "搜索框");
+  caption(gText, text, tr("搜索框"));
   auto* edSearch = gText->add<SearchBox>();
-  edSearch->setPlaceholder("搜索位号 / 报警内容");
+  edSearch->setPlaceholder(tr("搜索位号 / 报警内容"));
   text->addWidget(edSearch);
   text->addSpacing(kItemGap);
 
@@ -114,23 +115,23 @@ Size buildInputsPage(Widget* content) {
 
   Widget* passCol1 = band(passRow, passRowL, 1);
   BoxLayout* passCol1L = stack(passCol1, kCaptionGap);
-  caption(passCol1, passCol1L, "密码框（无眼睛）");
+  caption(passCol1, passCol1L, tr("密码框（无眼睛）"));
   auto* edPass1 = passCol1->add<PasswordEdit>();
-  edPass1->setPlaceholder("操作员密码");
+  edPass1->setPlaceholder(tr("操作员密码"));
   edPass1->setText("secret123");
   passCol1L->addWidget(edPass1);
 
   Widget* passCol2 = band(passRow, passRowL, 1);
   BoxLayout* passCol2L = stack(passCol2, kCaptionGap);
-  caption(passCol2, passCol2L, "密码框（可切换可见）");
+  caption(passCol2, passCol2L, tr("密码框（可切换可见）"));
   auto* edPass2 = passCol2->add<PasswordEdit>();
-  edPass2->setPlaceholder("工程师密码");
+  edPass2->setPlaceholder(tr("工程师密码"));
   edPass2->setRevealEnabled(true);
   edPass2->setText("engineer");
   passCol2L->addWidget(edPass2);
   text->addSpacing(kItemGap);
 
-  caption(gText, text, "校验失败态 / 只读态");
+  caption(gText, text, tr("校验失败态 / 只读态"));
   Widget* stateRow = band(gText, text);
   BoxLayout* stateRowL = line(stateRow, kItemGap);
   auto* edInvalid = stateRow->add<LineEdit>();
@@ -139,49 +140,49 @@ Size buildInputsPage(Widget* content) {
   stateRowL->addWidget(edInvalid, 1);
 
   auto* edReadOnly = stateRow->add<LineEdit>();
-  edReadOnly->setText("PLC-01 (只读)");
+  edReadOnly->setText(tr("PLC-01 (只读)"));
   edReadOnly->setReadOnly(true);
   stateRowL->addWidget(edReadOnly, 1);
   text->addStretch();
 
   // ---------------- 多行文本 ----------------
   auto* gArea = upper->add<GroupBox>();
-  gArea->setTitle("多行文本框");
+  gArea->setTitle(tr("多行文本框"));
   upperRow->addWidget(gArea, 1);
   BoxLayout* area = stack(gArea, kCaptionGap);
 
-  caption(gArea, area, "软换行 · 上下键跨行 · 滚轮滚动 · Ctrl+A 全选");
+  caption(gArea, area, tr("软换行 · 上下键跨行 · 滚轮滚动 · Ctrl+A 全选"));
   auto* edArea = gArea->add<TextArea>();
   edArea->setText(
-      "交接班记录：\n"
+      tr("交接班记录：\n"
       "1. 08:20 进料泵 P-101 启动，流量稳定在 52 m³/h。\n"
       "2. 09:05 釜内温度到达设定值 165 °C，转入保温阶段。\n"
       "3. 10:30 泄压阀 V-303 手动排空一次，压力由 8.2 降至 5.1 MPa。\n"
-      "4. 11:00 巡检未发现异常，交接完毕。");
+      "4. 11:00 巡检未发现异常，交接完毕。"));
   // The one item on this page that should absorb spare height: a shift note is
   // as long as the shift was.
   area->addWidget(edArea, 1);
   area->addSpacing(kItemGap);
 
-  caption(gArea, area, "占位符 / 只读");
+  caption(gArea, area, tr("占位符 / 只读"));
   Widget* areaRow = band(gArea, area);
   BoxLayout* areaRowL = line(areaRow, kItemGap);
   auto* areaEmpty = areaRow->add<TextArea>();
-  areaEmpty->setPlaceholder("在此填写备注…");
+  areaEmpty->setPlaceholder(tr("在此填写备注…"));
   areaRowL->addWidget(areaEmpty, 1);
 
   auto* areaRO = areaRow->add<TextArea>();
-  areaRO->setText("此栏由系统写入，不可编辑。");
+  areaRO->setText(tr("此栏由系统写入，不可编辑。"));
   areaRO->setReadOnly(true);
   areaRowL->addWidget(areaRO, 1);
 
   // ---------------- 按钮变体 ----------------
   auto* gBtn = lower->add<GroupBox>();
-  gBtn->setTitle("按钮变体");
+  gBtn->setTitle(tr("按钮变体"));
   lowerRow->addWidget(gBtn, 2);
   BoxLayout* btn = stack(gBtn, kItemGap);
 
-  struct VariantSpec { const char* label; ButtonVariant v; };
+  struct VariantSpec { std::string label; ButtonVariant v; };
   const VariantSpec kVariants[] = {
       {"Default", ButtonVariant::Default}, {"Primary", ButtonVariant::Primary},
       {"Success", ButtonVariant::Success}, {"Warning", ButtonVariant::Warning},
@@ -196,38 +197,38 @@ Size buildInputsPage(Widget* content) {
     variantRowL->addWidget(b, 1);
   }
 
-  caption(gBtn, btn, "带图标 · 禁用 · loading");
+  caption(gBtn, btn, tr("带图标 · 禁用 · loading"));
   Widget* actionRow = band(gBtn, btn);
   BoxLayout* actionRowL = line(actionRow, kItemGap);
 
   auto* bSave = actionRow->add<PushButton>();
-  bSave->setText("保存");
+  bSave->setText(tr("保存"));
   bSave->setIcon(Icon::Save);
   bSave->setVariant(ButtonVariant::Primary);
   actionRowL->addWidget(bSave);
 
   auto* bDelete = actionRow->add<PushButton>();
-  bDelete->setText("删除");
+  bDelete->setText(tr("删除"));
   bDelete->setIcon(Icon::Trash);
   bDelete->setVariant(ButtonVariant::Danger);
   actionRowL->addWidget(bDelete);
 
   auto* bDisabled = actionRow->add<PushButton>();
-  bDisabled->setText("已禁用");
+  bDisabled->setText(tr("已禁用"));
   bDisabled->setIcon(Icon::Lock);
   bDisabled->setVariant(ButtonVariant::Success);
   bDisabled->setEnabled(false);
   actionRowL->addWidget(bDisabled);
 
   auto* bLoading = actionRow->add<PushButton>();
-  bLoading->setText("下发参数");
+  bLoading->setText(tr("下发参数"));
   bLoading->setIcon(Icon::Upload);
   bLoading->setVariant(ButtonVariant::Primary);
-  bLoading->setLoadingText("下发中…");
+  bLoading->setLoadingText(tr("下发中…"));
   actionRowL->addWidget(bLoading);
 
   auto* bLatch = actionRow->add<PushButton>();
-  bLatch->setText("锁定");
+  bLatch->setText(tr("锁定"));
   bLatch->setVariant(ButtonVariant::Warning);
   bLatch->setCheckable(true);
   actionRowL->addWidget(bLatch);
@@ -239,7 +240,7 @@ Size buildInputsPage(Widget* content) {
 
   // ---------------- 图标按钮 ----------------
   auto* gIcon = lower->add<GroupBox>();
-  gIcon->setTitle("图标按钮");
+  gIcon->setTitle(tr("图标按钮"));
   lowerRow->addWidget(gIcon, 1);
   BoxLayout* icons = stack(gIcon, kItemGap);
 
@@ -287,23 +288,23 @@ Size buildInputsPage(Widget* content) {
 
   // ---------------- signals ----------------
   edName->textChanged.connect([say](const std::string& s) {
-    say("配方名称 = \"" + s + "\"");
+    say(tr("配方名称 = \"") + s + "\"");
   });
   edLimited->textChanged.connect([say](const std::string& s) {
-    say("受限字段 = \"" + s + "\"");
+    say(tr("受限字段 = \"") + s + "\"");
   });
   edSearch->searchRequested.connect([say](const std::string& s) {
-    say("执行搜索：\"" + s + "\"");
+    say(tr("执行搜索：\"") + s + "\"");
   });
   edArea->textChanged.connect([say, edArea](const std::string&) {
-    say("交接班记录已修改，共 " + std::to_string(edArea->lineCount()) + " 显示行");
+    say(tr("交接班记录已修改，共 ") + std::to_string(edArea->lineCount()) + tr(" 显示行"));
   });
-  bSave->clicked.connect([say] { say("已保存"); });
-  bDelete->clicked.connect([say] { say("已删除"); });
-  bLatch->toggled.connect([say](bool on) { say(on ? "画面已锁定" : "画面已解锁"); });
+  bSave->clicked.connect([say] { say(tr("已保存")); });
+  bDelete->clicked.connect([say] { say(tr("已删除")); });
+  bLatch->toggled.connect([say](bool on) { say(on ? tr("画面已锁定") : tr("画面已解锁")); });
   bLoading->clicked.connect([bLoading, say] {
     bLoading->setLoading(true);
-    say("参数下发中…（点击“锁定”可解除）");
+    say(tr("参数下发中…（点击“锁定”可解除）"));
   });
   bLatch->clicked.connect([bLoading] { bLoading->setLoading(false); });
 
