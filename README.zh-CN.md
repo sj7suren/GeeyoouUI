@@ -12,6 +12,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/sj7suren/GeeyoouUI/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/sj7suren/GeeyoouUI/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg">
   <img alt="C++20" src="https://img.shields.io/badge/C%2B%2B-20-00599C.svg">
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20(Win32)-lightgrey.svg">
@@ -56,7 +57,7 @@ GeeyoouUI 走的是另一条路：屏幕上每一个像素都是自己画的，�
 | **热路径分配** | ✅ 零分配 —— 实时数据走固定容量环形缓冲 | 通用取向 |
 | **换肤** | ✅ 皮肤注册表 + 一个主题色带动整套配色 + 类 QSS 选择器，运行时热切换 | QSS，逐控件 |
 | **布局** | ✅ `BoxLayout` / `GridLayout`，支持 stretch 权重、min/max 钳制、跨列；**也可以**用绝对坐标——组态画面本来就是这么画的 | 完整布局系统 |
-| **平台** | ❌ **目前仅 Windows。** 平台层是 12 个纯虚函数，X11/Cocoa 未实现 | Windows、macOS、Linux、移动、嵌入式 |
+| **平台** | ❌ **目前仅 Windows。** 平台层是 21 个纯虚函数（分属两个接口），X11/Cocoa 未实现 | Windows、macOS、Linux、移动、嵌入式 |
 | **无障碍** | ❌ 未实现（无 UIA） | 成熟 |
 | **生态** | ❌ 30+ 控件，一个库 | 庞大 |
 
@@ -117,7 +118,7 @@ int main() {
 - **脏矩形增量重绘** — HMI 画面 90% 的像素是静止的，不做全帧重绘
 - **热路径零分配** — 实时数据走固定容量环形缓冲，适配长期无人值守运行
 - **要布局有布局** — `BoxLayout` / `GridLayout` 带 stretch 与 min/max；画组态时也可以直接用绝对坐标，位置本身就是工艺语义
-- **平台层为纯虚接口** — v1 实现 Win32；X11 / Cocoa 只需补 12 个方法
+- **平台层为纯虚接口** — v1 实现 Win32；X11 / Cocoa 只需补 21 个方法，其中大半是一行实现
 
 ## 演示程序
 
@@ -533,7 +534,7 @@ docs/         architecture.md — 设计决策与取舍，动手前先读
 |---|---|
 | 无障碍（UIA） | 需要控件树先稳定下来 |
 | IME 内联预编辑 | 系统候选窗已经跟随光标，内联属于打磨项 |
-| X11 / Cocoa 后端 | 平台层就 12 个纯虚函数——移植范围已划清，只是还没开工 |
+| X11 / Cocoa 后端 | 平台层 21 个纯虚函数（分属两个接口）——移植范围已划清，只是还没开工 |
 
 后续计划见 `docs/roadmap.md`。
 
@@ -541,7 +542,7 @@ docs/         architecture.md — 设计决策与取舍，动手前先读
 
 欢迎 issue 和 PR，尤其是这几类：
 
-- **X11 或 Cocoa 后端** —— 实现 `platform/Platform.hpp` 的 12 个方法，整套控件即可跟上
+- **X11 或 Cocoa 后端** —— 实现 `platform/Platform.hpp` 的 21 个方法（大半很琐碎），整套控件即可跟上
 - **领域图标包** —— 泵、阀、断路器、输送带；有 `addSvgPath` 在，成本很低
 - **皮肤** —— 一个皮肤 = `Theme` + 一段样式表，一个文件就能发布
 - **来自真实车间的 bug 报告** —— 这类最有价值
