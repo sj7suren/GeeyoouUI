@@ -26,6 +26,7 @@
 #include "geeyoou/widget/Label.hpp"
 #include "geeyoou/widget/PushButton.hpp"
 #include "geeyoou/widget/TreeTableModel.hpp"
+#include "i18n/I18n.hpp"
 
 namespace showcase {
 
@@ -54,7 +55,7 @@ Widget* band(Widget* parent, BoxLayout* into, std::uint16_t stretch = 0) {
   return w;
 }
 
-Label* caption(Widget* parent, BoxLayout* into, const char* s) {
+Label* caption(Widget* parent, BoxLayout* into, std::string s) {
   auto* l = parent->add<Label>();
   l->setText(s);
   l->addStyleClass("caption");
@@ -86,11 +87,11 @@ class SyntheticModel : public TableModel {
         std::snprintf(buf, sizeof(buf), "TAG-%06d", row + 1);
         return buf;
       case 2:
-        std::snprintf(buf, sizeof(buf), "采集点 %d 号", row + 1);
+        std::snprintf(buf, sizeof(buf), tr("采集点 %d 号").c_str(), row + 1);
         return buf;
       case 3: {
-        static const char* areas[] = {"一号反应区", "二号反应区", "罐区",
-                                      "公用工程", "码头"};
+        static std::string areas[] = {tr("一号反应区"), tr("二号反应区"), tr("罐区"),
+                                      tr("公用工程"), tr("码头")};
         return areas[row % 5];
       }
       case 4: {
@@ -98,7 +99,7 @@ class SyntheticModel : public TableModel {
         return buf;
       }
       case 5:
-        return (row % 17 == 0) ? "故障" : ((row % 5 == 0) ? "维护" : "运行");
+        return (row % 17 == 0) ? tr("故障") : ((row % 5 == 0) ? tr("维护") : tr("运行"));
       default:
         return {};
     }
@@ -156,21 +157,21 @@ class AsyncTreePanel : public TreeModelHolder, public Widget {
 
     std::vector<TableView::Column> cols;
     TableView::Column name;
-    name.title = "设备 / 位号";
+    name.title = tr("设备 / 位号");
     name.width = 300.0f;
     name.kind = CellKind::Tree;
     cols.push_back(name);
-    cols.push_back(textColumn("类型", 110.0f));
-    cols.push_back(kindColumn("状态", 90.0f, CellKind::Chip));
-    cols.push_back(kindColumn("投用", 78.0f, CellKind::Switch));
+    cols.push_back(textColumn(tr("类型"), 110.0f));
+    cols.push_back(kindColumn(tr("状态"), 90.0f, CellKind::Chip));
+    cols.push_back(kindColumn(tr("投用"), 78.0f, CellKind::Switch));
     table_->setColumns(cols);
     table_->setSelectionMode(TableView::SelectionMode::Single);
 
     // Four stations, none of them loaded.  A lazy branch draws a normal
     // collapsed expander -- the operator cannot tell, and should not have to.
-    const char* stations[] = {"1# 反应釜", "2# 反应釜", "3# 罐区", "4# 公用工程"};
-    for (const char* s : stations) {
-      const auto id = tree_.addNode(TreeTableModel::kRootNode, {s, "站点", "运行", ""});
+    std::string stations[] = {tr("1# 反应釜"), tr("2# 反应釜"), tr("3# 罐区"), tr("4# 公用工程")};
+    for (const std::string& s : stations) {
+      const auto id = tree_.addNode(TreeTableModel::kRootNode, {s, tr("站点"), tr("运行"), ""});
       tree_.setLazy(id, true);
     }
     tree_.structureChanged.connect([this] { table_->rowsReset(); });
@@ -208,7 +209,7 @@ class AsyncTreePanel : public TreeModelHolder, public Widget {
  private:
   void request(TreeTableModel::NodeId id) {
     pending_.push_back(id);
-    statusChanged.emit("已请求子节点，等待返回…（模拟 700ms 网络往返）");
+    statusChanged.emit(tr("已请求子节点，等待返回…（模拟 700ms 网络往返）"));
     if (timer_ != 0) return;
     // A repeating timer drained one request per tick, rather than one timer per
     // request: ids are not reused and a timer per request would have to be
@@ -230,7 +231,7 @@ class AsyncTreePanel : public TreeModelHolder, public Widget {
     ++served_;
     if (served_ % 4 == 0) {
       tree_.finishLoad(id, false);
-      statusChanged.emit("读取失败 —— 分支保留重试标记，不会自己重发");
+      statusChanged.emit(tr("读取失败 —— 分支保留重试标记，不会自己重发"));
       return;
     }
 
@@ -241,14 +242,14 @@ class AsyncTreePanel : public TreeModelHolder, public Widget {
       std::snprintf(tag, sizeof(tag), "%s · TI-%03d", prefix.c_str(), 101 + i);
       const bool ok = (i != 3);
       const auto child = tree_.addNode(
-          id, {tag, i % 2 ? "压力" : "温度", ok ? "运行" : "维护", ""});
+          id, {tag, i % 2 ? tr("压力") : tr("温度"), ok ? tr("运行") : tr("维护"), ""});
       tree_.setFlag(child, 3, ok);
       // One grandchild per child, itself lazy: the point is that depth is not
       // special-cased anywhere.
       if (i == 0) tree_.setLazy(child, true);
     }
     tree_.finishLoad(id, true);
-    statusChanged.emit("子节点已送达，分支自动展开");
+    statusChanged.emit(tr("子节点已送达，分支自动展开"));
   }
 
   TableView* table_ = nullptr;
@@ -268,7 +269,7 @@ Size buildTablesFrozenPage(Widget* content) {
   BoxLayout* topRow = line(top, kPanelGap);
 
   auto* gFrozen = top->add<GroupBox>();
-  gFrozen->setTitle("固定列 · 左侧两列与右侧操作列钉住，中间横向滚动");
+  gFrozen->setTitle(tr("固定列 · 左侧两列与右侧操作列钉住，中间横向滚动"));
   topRow->addWidget(gFrozen, 1);
   BoxLayout* frozenStack = stack(gFrozen, kItemGap);
 
@@ -283,23 +284,23 @@ Size buildTablesFrozenPage(Widget* content) {
 
   std::vector<TableView::Column> cols;
   cols.push_back(kindColumn("#", 46.0f, CellKind::Index));
-  cols.push_back(textColumn("位号", 110.0f, true));
+  cols.push_back(textColumn(tr("位号"), 110.0f, true));
   // Flexible, so a wide window fills the middle band instead of leaving a
   // stripe of empty grid between the last column and the frozen pane -- the one
   // thing a table with nothing but fixed columns always looks like on a 1676px
   // screen.
-  cols.push_back(textColumn("名称", 0.0f));
-  cols.push_back(textColumn("区域", 130.0f));
-  cols.push_back(textColumn("类型", 100.0f));
-  cols.push_back(textColumn("标签", 160.0f));
-  TableView::Column range = textColumn("量程", 100.0f);
+  cols.push_back(textColumn(tr("名称"), 0.0f));
+  cols.push_back(textColumn(tr("区域"), 130.0f));
+  cols.push_back(textColumn(tr("类型"), 100.0f));
+  cols.push_back(textColumn(tr("标签"), 160.0f));
+  TableView::Column range = textColumn(tr("量程"), 100.0f);
   range.align = HAlign::Right;
   cols.push_back(range);
-  cols.push_back(kindColumn("完成度", 160.0f, CellKind::Progress));
-  cols.push_back(kindColumn("状态", 90.0f, CellKind::Chip));
-  TableView::Column ops = kindColumn("操作", 120.0f, CellKind::Actions);
-  ops.actions = {CellAction("edit", "编辑"),
-                 CellAction("delete", "删除", CellAction::Tone::Danger)};
+  cols.push_back(kindColumn(tr("完成度"), 160.0f, CellKind::Progress));
+  cols.push_back(kindColumn(tr("状态"), 90.0f, CellKind::Chip));
+  TableView::Column ops = kindColumn(tr("操作"), 120.0f, CellKind::Actions);
+  ops.actions = {CellAction("edit", tr("编辑")),
+                 CellAction("delete", tr("删除"), CellAction::Tone::Danger)};
   cols.push_back(ops);
 
   t->setColumns(cols);
@@ -311,14 +312,14 @@ Size buildTablesFrozenPage(Widget* content) {
   frozenStack->addWidget(panel, 1);
 
   caption(gFrozen, frozenStack,
-          "Shift + 滚轮横向滚动 · 冻结列上出现的那道边影只在真的有内容藏在下面时才画");
+          tr("Shift + 滚轮横向滚动 · 冻结列上出现的那道边影只在真的有内容藏在下面时才画"));
 
   // ---------------- 合并单元格 ----------------
   Widget* bottom = band(content, page, /*stretch=*/1);
   BoxLayout* bottomRow = line(bottom, kPanelGap);
 
   auto* gMerge = bottom->add<GroupBox>();
-  gMerge->setTitle("合并行 · 区域列按连续段合并");
+  gMerge->setTitle(tr("合并行 · 区域列按连续段合并"));
   bottomRow->addWidget(gMerge, 1);
   BoxLayout* mergeStack = stack(gMerge, kItemGap);
 
@@ -332,19 +333,19 @@ Size buildTablesFrozenPage(Widget* content) {
   mergeModel->setMergeArea(true);
 
   std::vector<TableView::Column> mcols;
-  TableView::Column area = textColumn("区域", 140.0f);
+  TableView::Column area = textColumn(tr("区域"), 140.0f);
   area.align = HAlign::Center;
   mcols.push_back(area);
-  mcols.push_back(textColumn("位号", 120.0f));
-  mcols.push_back(textColumn("名称", 0.0f));
-  mcols.push_back(kindColumn("状态", 90.0f, CellKind::Chip));
+  mcols.push_back(textColumn(tr("位号"), 120.0f));
+  mcols.push_back(textColumn(tr("名称"), 0.0f));
+  mcols.push_back(kindColumn(tr("状态"), 90.0f, CellKind::Chip));
   mt->setColumns(mcols);
   mt->setMergingEnabled(true);
   mt->rowsReset();
   mergeStack->addWidget(mergePanel, 1);
 
   caption(gMerge, mergeStack,
-          "被覆盖的格子回答的是「锚点在我上面几行」的负偏移 —— 所以合并在二十万行上也是每格 O(1)");
+          tr("被覆盖的格子回答的是「锚点在我上面几行」的负偏移 —— 所以合并在二十万行上也是每格 O(1)"));
 
   return content->sizeHint().preferred;
 }
@@ -357,7 +358,7 @@ Size buildTablesTreePage(Widget* content) {
   BoxLayout* topRow = line(top, kPanelGap);
 
   auto* g = top->add<GroupBox>();
-  g->setTitle("树形表格 · 区域 → 设备类型 → 仪表");
+  g->setTitle(tr("树形表格 · 区域 → 设备类型 → 仪表"));
   topRow->addWidget(g, 1);
   BoxLayout* gStack = stack(g, kItemGap);
 
@@ -367,18 +368,18 @@ Size buildTablesTreePage(Widget* content) {
 
   // Built from the SAME sixty records the flat pages show: a tree is a different
   // way of walking one register, not a second register.
-  const char* areas[] = {"一号反应区", "二号反应区", "罐区", "公用工程"};
-  for (const char* areaName : areas) {
+  std::string areas[] = {tr("一号反应区"), tr("二号反应区"), tr("罐区"), tr("公用工程")};
+  for (const std::string& areaName : areas) {
     const auto areaNode =
         raw->addNode(TreeTableModel::kRootNode, {areaName, "", "", ""});
 
-    const char* types[] = {"温度", "压力", "流量", "液位", "阀门"};
-    for (const char* typeName : types) {
+    std::string types[] = {tr("温度"), tr("压力"), tr("流量"), tr("液位"), tr("阀门")};
+    for (const std::string& typeName : types) {
       TreeTableModel::NodeId typeNode = TreeTableModel::kInvalidNode;
       for (const Device& d : demoDevices()) {
         if (d.area != areaName || d.type != typeName) continue;
         if (typeNode == TreeTableModel::kInvalidNode) {
-          typeNode = raw->addNode(areaNode, {std::string(typeName) + "仪表", "", "", ""});
+          typeNode = raw->addNode(areaNode, {std::string(typeName) + tr("仪表"), "", "", ""});
         }
         const auto leaf = raw->addNode(typeNode, {d.tag, d.name, d.status, ""});
         raw->setFlag(leaf, 3, d.running);
@@ -392,13 +393,13 @@ Size buildTablesTreePage(Widget* content) {
 
   std::vector<TableView::Column> cols;
   TableView::Column name;
-  name.title = "层级 / 位号";
+  name.title = tr("层级 / 位号");
   name.width = 320.0f;
   name.kind = CellKind::Tree;
   cols.push_back(name);
-  cols.push_back(textColumn("名称", 0.0f));
-  cols.push_back(kindColumn("状态", 90.0f, CellKind::Chip));
-  cols.push_back(kindColumn("投用", 78.0f, CellKind::Switch));
+  cols.push_back(textColumn(tr("名称"), 0.0f));
+  cols.push_back(kindColumn(tr("状态"), 90.0f, CellKind::Chip));
+  cols.push_back(kindColumn(tr("投用"), 78.0f, CellKind::Switch));
   t->setColumns(cols);
   t->setSelectionMode(TableView::SelectionMode::Single);
   t->rowsReset();
@@ -414,13 +415,13 @@ Size buildTablesTreePage(Widget* content) {
   rowsLabel->setPixelSize(11.0f);
 
   auto refresh = [t, raw, rowsLabel] {
-    rowsLabel->setText("当前可见行：" + std::to_string(raw->tableRowCount()) +
-                       " / 节点总数：" + std::to_string(raw->nodeCount() - 1));
+    rowsLabel->setText(tr("当前可见行：") + std::to_string(raw->tableRowCount()) +
+                       tr(" / 节点总数：") + std::to_string(raw->nodeCount() - 1));
     t->rowsReset();
   };
 
   auto* btnExpand = buttons->add<PushButton>();
-  btnExpand->setText("全部展开");
+  btnExpand->setText(tr("全部展开"));
   btnExpand->clicked.connect([raw, refresh] {
     raw->expandAll();
     refresh();
@@ -428,7 +429,7 @@ Size buildTablesTreePage(Widget* content) {
   buttonRow->addWidget(btnExpand);
 
   auto* btnCollapse = buttons->add<PushButton>();
-  btnCollapse->setText("全部折叠");
+  btnCollapse->setText(tr("全部折叠"));
   btnCollapse->clicked.connect([raw, refresh] {
     raw->collapseAll();
     refresh();
@@ -449,7 +450,7 @@ Size buildTablesAsyncPage(Widget* content) {
   BoxLayout* topRow = line(top, kPanelGap);
 
   auto* g = top->add<GroupBox>();
-  g->setTitle("异步加载子节点 · 展开时才去取，取的过程画在展开箭头上");
+  g->setTitle(tr("异步加载子节点 · 展开时才去取，取的过程画在展开箭头上"));
   topRow->addWidget(g, 1);
   BoxLayout* gStack = stack(g, kItemGap);
 
@@ -459,7 +460,7 @@ Size buildTablesAsyncPage(Widget* content) {
   auto* status = g->add<Label>();
   status->addStyleClass("caption");
   status->setPixelSize(11.0f);
-  status->setText("点开任意一个站点：箭头变成转圈，约 700ms 后子节点到达");
+  status->setText(tr("点开任意一个站点：箭头变成转圈，约 700ms 后子节点到达"));
   gStack->addWidget(status);
   panel->statusChanged.connect(
       [status](const std::string& s) { status->setText(s); });
@@ -468,7 +469,7 @@ Size buildTablesAsyncPage(Widget* content) {
   note->addStyleClass("caption");
   note->setPixelSize(11.0f);
   note->setText(
-      "每第四次请求故意失败 —— 分支变成重试标记，再点一次才会重发，不会自己轮询");
+      tr("每第四次请求故意失败 —— 分支变成重试标记，再点一次才会重发，不会自己轮询"));
   gStack->addWidget(note);
 
   return content->sizeHint().preferred;
@@ -482,7 +483,7 @@ Size buildTablesBigPage(Widget* content) {
   BoxLayout* topRow = line(top, kPanelGap);
 
   auto* g = top->add<GroupBox>();
-  g->setTitle("大数据量 · 200 000 行，模型里一行都没有存");
+  g->setTitle(tr("大数据量 · 200 000 行，模型里一行都没有存"));
   topRow->addWidget(g, 1);
   BoxLayout* gStack = stack(g, kItemGap);
 
@@ -492,15 +493,15 @@ Size buildTablesBigPage(Widget* content) {
 
   std::vector<TableView::Column> cols;
   cols.push_back(kindColumn("#", 78.0f, CellKind::Index));
-  cols.push_back(textColumn("位号", 120.0f, true));
-  cols.push_back(textColumn("名称", 0.0f));
-  cols.push_back(textColumn("区域", 120.0f));
-  TableView::Column value = textColumn("瞬时值", 110.0f);
+  cols.push_back(textColumn(tr("位号"), 120.0f, true));
+  cols.push_back(textColumn(tr("名称"), 0.0f));
+  cols.push_back(textColumn(tr("区域"), 120.0f));
+  TableView::Column value = textColumn(tr("瞬时值"), 110.0f);
   value.align = HAlign::Right;
   cols.push_back(value);
-  cols.push_back(kindColumn("状态", 90.0f, CellKind::Chip));
-  cols.push_back(kindColumn("完成度", 150.0f, CellKind::Progress));
-  cols.push_back(kindColumn("投用", 78.0f, CellKind::Switch));
+  cols.push_back(kindColumn(tr("状态"), 90.0f, CellKind::Chip));
+  cols.push_back(kindColumn(tr("完成度"), 150.0f, CellKind::Progress));
+  cols.push_back(kindColumn(tr("投用"), 78.0f, CellKind::Switch));
   t->setColumns(cols);
   t->setSelectionMode(TableView::SelectionMode::Multi);
   t->rowsReset();
@@ -510,17 +511,17 @@ Size buildTablesBigPage(Widget* content) {
   BoxLayout* buttonRow = line(buttons, kItemGap);
 
   auto* btnTop = buttons->add<PushButton>();
-  btnTop->setText("回到顶部");
+  btnTop->setText(tr("回到顶部"));
   btnTop->clicked.connect([t] { t->scrollToTop(); });
   buttonRow->addWidget(btnTop);
 
   auto* btnEnd = buttons->add<PushButton>();
-  btnEnd->setText("跳到末行");
+  btnEnd->setText(tr("跳到末行"));
   btnEnd->clicked.connect([t] { t->scrollToBottom(); });
   buttonRow->addWidget(btnEnd);
 
   auto* btnMid = buttons->add<PushButton>();
-  btnMid->setText("定位到第 100 000 行");
+  btnMid->setText(tr("定位到第 100 000 行"));
   btnMid->clicked.connect([t] { t->setCurrentCell(99999, 1); });
   buttonRow->addWidget(btnMid);
 
@@ -528,7 +529,7 @@ Size buildTablesBigPage(Widget* content) {
   note->addStyleClass("caption");
   note->setPixelSize(11.0f);
   note->setText(
-      "拖到任意位置都不会卡：一次绘制只向模型问看得见的那二十来行");
+      tr("拖到任意位置都不会卡：一次绘制只向模型问看得见的那二十来行"));
   buttonRow->addWidget(note, 1);
 
   return content->sizeHint().preferred;
