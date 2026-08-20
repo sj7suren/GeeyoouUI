@@ -24,7 +24,7 @@ class ShowcaseWindow : public geeyoou::AppWindow {
 
   Shell* shell() { return shell_; }
 
-  // Header widgets, exposed so the "窗口外壳" page can drive them live.
+  // Header widgets, exposed so the 窗口外壳 page can drive them live.
   geeyoou::HeaderMenu* languageMenu() { return language_; }
   geeyoou::HeaderMenu* bellMenu() { return bell_; }
   geeyoou::HeaderAvatar* accountMenu() { return account_; }
@@ -50,6 +50,11 @@ class ShowcaseWindow : public geeyoou::AppWindow {
   // Re-derives the chrome colours that are computed FROM the theme rather than
   // read straight out of it.  Must run again on every skin change.
   void applyHeaderTheme();
+  // (Re-)labels everything in the header from the current language.  Runs in
+  // the constructor and again on every language change -- the header is the
+  // one part of the UI that is NOT rebuilt, because it is what you click to
+  // change the language in the first place.
+  void applyHeaderTexts();
 
   Shell* shell_ = nullptr;
   geeyoou::HeaderMenu* bell_ = nullptr;
