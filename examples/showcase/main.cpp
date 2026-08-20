@@ -18,6 +18,7 @@
 #include "ShowcaseWindow.hpp"
 #include "geeyoou/platform/Platform.hpp"
 #include "geeyoou/render/Theme.hpp"
+#include "i18n/I18n.hpp"
 
 using namespace geeyoou;
 using namespace showcase;
@@ -57,9 +58,9 @@ int main() {
   // `app.alarmSink = nullptr;` before returning.  That patch is gone: getting
   // the order right removes the whole class of problem instead of one instance.
   AppState app;
-  app.chFlow = app.hub.addChannel("进料流量", "m³/h");
-  app.chTemp = app.hub.addChannel("釜内温度", "°C");
-  app.chPress = app.hub.addChannel("系统压力", "MPa");
+  app.chFlow = app.hub.addChannel(tr("进料流量"), "m³/h");
+  app.chTemp = app.hub.addChannel(tr("釜内温度"), "°C");
+  app.chPress = app.hub.addChannel(tr("系统压力"), "MPa");
   app.startAcquisition();
 
   // Frameless, own title bar, own window buttons -- see ShowcaseWindow.cpp.
@@ -69,6 +70,16 @@ int main() {
   win.enableAnimations(30);
 
   Shell* shell = win.shell();
+
+  // The ops page installs a sink that captures a widget living inside it, so
+  // the sink has to go before the shell destroys that page on a language
+  // change.  Nothing re-arms it here: the rebuilt ops page installs its own,
+  // and until it does, raise() falls back to the backlog it already had for
+  // "alarm raised before the page existed".
+  //
+  // The connection is dropped on purpose -- `app` and `shell` both live in
+  // main()'s frame, and the frame outlives the event loop.
+  (void)shell->pagesAboutToRebuild.connect([&app] { app.alarmSink = nullptr; });
 
   shell->addPage("总览", "概览", "库的构成、分层规模与未实现清单", Icon::Info,
                  [&app](Widget* c) { return buildOverviewPage(c, app); });
@@ -142,7 +153,7 @@ int main() {
       r.timestampMs = nowMs();
       r.severity = AlarmSeverity::Critical;
       r.tag = "PI-201";
-      r.message = "系统压力超过高限";
+      r.message = tr("系统压力超过高限");
       std::snprintf(buf, sizeof(buf), "%.2f MPa", press);
       r.value = buf;
       app.raise(std::move(r));
@@ -156,7 +167,7 @@ int main() {
       r.timestampMs = nowMs();
       r.severity = AlarmSeverity::High;
       r.tag = "TI-102";
-      r.message = "釜内温度进入预警区";
+      r.message = tr("釜内温度进入预警区");
       std::snprintf(buf, sizeof(buf), "%.1f °C", temp);
       r.value = buf;
       app.raise(std::move(r));
@@ -168,7 +179,7 @@ int main() {
       r.timestampMs = nowMs();
       r.severity = AlarmSeverity::Low;
       r.tag = "SYS";
-      r.message = "Modbus 从站响应超时，已重试";
+      r.message = tr("Modbus 从站响应超时，已重试");
       r.value = "-";
       app.raise(std::move(r));
     }
