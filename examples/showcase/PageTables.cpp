@@ -21,6 +21,7 @@
 #include "geeyoou/widget/Label.hpp"
 #include "geeyoou/widget/PushButton.hpp"
 #include "geeyoou/widget/ToggleSwitch.hpp"
+#include "i18n/I18n.hpp"
 
 namespace showcase {
 
@@ -49,7 +50,7 @@ Widget* band(Widget* parent, BoxLayout* into, std::uint16_t stretch = 0) {
   return w;
 }
 
-Label* caption(Widget* parent, BoxLayout* into, const char* s) {
+Label* caption(Widget* parent, BoxLayout* into, std::string s) {
   auto* l = parent->add<Label>();
   l->setText(s);
   l->addStyleClass("caption");
@@ -63,10 +64,10 @@ Label* caption(Widget* parent, BoxLayout* into, const char* s) {
 std::vector<TableView::Column> registerColumns() {
   std::vector<TableView::Column> cols;
   cols.push_back(kindColumn("#", 48.0f, CellKind::Index));
-  cols.push_back(textColumn("位号", 110.0f, /*sortable=*/true));
-  cols.push_back(textColumn("名称", 0.0f, /*sortable=*/true));  // takes the slack
-  cols.push_back(textColumn("区域", 120.0f, /*sortable=*/true));
-  cols.push_back(kindColumn("状态", 90.0f, CellKind::Chip));
+  cols.push_back(textColumn(tr("位号"), 110.0f, /*sortable=*/true));
+  cols.push_back(textColumn(tr("名称"), 0.0f, /*sortable=*/true));  // takes the slack
+  cols.push_back(textColumn(tr("区域"), 120.0f, /*sortable=*/true));
+  cols.push_back(kindColumn(tr("状态"), 90.0f, CellKind::Chip));
   return cols;
 }
 
@@ -93,7 +94,7 @@ Size buildTablesBasicPage(Widget* content) {
   BoxLayout* upperRow = line(upper, kPanelGap);
 
   auto* gMain = upper->add<GroupBox>();
-  gMain->setTitle("普通表格 · 斑马纹 / 列排序 / 行选择");
+  gMain->setTitle(tr("普通表格 · 斑马纹 / 列排序 / 行选择"));
   upperRow->addWidget(gMain, 1);
   BoxLayout* mainStack = stack(gMain, kItemGap);
 
@@ -109,7 +110,7 @@ Size buildTablesBasicPage(Widget* content) {
   auto* mainNote = gMain->add<Label>();
   mainNote->addStyleClass("caption");
   mainNote->setPixelSize(11.0f);
-  mainNote->setText("点击表头排序（升 / 降 / 取消三态）· Ctrl 加选 · Shift 连选");
+  mainNote->setText(tr("点击表头排序（升 / 降 / 取消三态）· Ctrl 加选 · Shift 连选"));
   mainStack->addWidget(mainNote);
 
   // Sorting is the MODEL's job; the view only moved its indicator.  Doing it
@@ -129,44 +130,44 @@ Size buildTablesBasicPage(Widget* content) {
     }
     main->rowsReset();
     mainNote->setText(order == SortOrder::None
-                          ? "已取消排序 —— 顺序回到模型给出的原始顺序"
-                          : "排序由模型完成，视图只移动了表头的指示符");
+                          ? tr("已取消排序 —— 顺序回到模型给出的原始顺序")
+                          : tr("排序由模型完成，视图只移动了表头的指示符"));
   });
 
   // ---------------- 开关面板 ----------------
   auto* gStyle = upper->add<GroupBox>();
-  gStyle->setTitle("样式开关");
+  gStyle->setTitle(tr("样式开关"));
   upperRow->addWidget(gStyle, 0);
   BoxLayout* styleStack = stack(gStyle, kItemGap);
 
-  caption(gStyle, styleStack, "改的是表格属性，不是主题");
+  caption(gStyle, styleStack, tr("改的是表格属性，不是主题"));
 
   auto* swZebra = gStyle->add<ToggleSwitch>();
-  swZebra->setText("奇偶行变色");
+  swZebra->setText(tr("奇偶行变色"));
   swZebra->setChecked(true);
   swZebra->toggled.connect([main](bool on) { main->setAlternatingRows(on); });
   styleStack->addWidget(swZebra);
 
   auto* swGrid = gStyle->add<ToggleSwitch>();
-  swGrid->setText("网格线");
+  swGrid->setText(tr("网格线"));
   swGrid->setChecked(true);
   swGrid->toggled.connect([main](bool on) { main->setGridVisible(on, on); });
   styleStack->addWidget(swGrid);
 
   auto* swHover = gStyle->add<ToggleSwitch>();
-  swHover->setText("悬停高亮");
+  swHover->setText(tr("悬停高亮"));
   swHover->setChecked(true);
   swHover->toggled.connect([main](bool on) { main->setHoverHighlight(on); });
   styleStack->addWidget(swHover);
 
   auto* swHeader = gStyle->add<ToggleSwitch>();
-  swHeader->setText("显示表头");
+  swHeader->setText(tr("显示表头"));
   swHeader->setChecked(true);
   swHeader->toggled.connect([main](bool on) { main->setHeaderVisible(on); });
   styleStack->addWidget(swHeader);
 
   auto* swDense = gStyle->add<ToggleSwitch>();
-  swDense->setText("紧凑行高");
+  swDense->setText(tr("紧凑行高"));
   swDense->toggled.connect(
       [main](bool on) { main->setRowHeight(on ? 26.0f : 34.0f); });
   styleStack->addWidget(swDense);
@@ -176,7 +177,7 @@ Size buildTablesBasicPage(Widget* content) {
   BoxLayout* lowerRow = line(lower, kPanelGap);
 
   auto* gEmpty = lower->add<GroupBox>();
-  gEmpty->setTitle("空状态");
+  gEmpty->setTitle(tr("空状态"));
   lowerRow->addWidget(gEmpty, 1);
   BoxLayout* emptyStack = stack(gEmpty, kItemGap);
 
@@ -185,14 +186,14 @@ Size buildTablesBasicPage(Widget* content) {
   emptyPanel->setDesignHeight(200.0f);
   TableView* emptyTable = emptyPanel->table();
   emptyTable->setColumns(registerColumns());
-  emptyTable->setEmptyText("没有匹配的仪表", "放宽筛选条件，或检查所选区域");
+  emptyTable->setEmptyText(tr("没有匹配的仪表"), tr("放宽筛选条件，或检查所选区域"));
   emptyTable->rowsReset();
   emptyStack->addWidget(emptyPanel, 1);
 
-  caption(gEmpty, emptyStack, "表头仍然在：空的是数据，不是这张表");
+  caption(gEmpty, emptyStack, tr("表头仍然在：空的是数据，不是这张表"));
 
   auto* gLoading = lower->add<GroupBox>();
-  gLoading->setTitle("加载中");
+  gLoading->setTitle(tr("加载中"));
   lowerRow->addWidget(gLoading, 1);
   BoxLayout* loadStack = stack(gLoading, kItemGap);
 
@@ -208,14 +209,14 @@ Size buildTablesBasicPage(Widget* content) {
   Widget* loadRow = band(gLoading, loadStack);
   BoxLayout* loadRowL = line(loadRow, kItemGap);
   auto* swLoad = loadRow->add<ToggleSwitch>();
-  swLoad->setText("忙碌");
+  swLoad->setText(tr("忙碌"));
   swLoad->setChecked(true);
   swLoad->toggled.connect([loadTable](bool on) { loadTable->setLoading(on); });
   loadRowL->addWidget(swLoad);
   auto* loadNote = loadRow->add<Label>();
   loadNote->addStyleClass("caption");
   loadNote->setPixelSize(11.0f);
-  loadNote->setText("行仍在下面：刷新不该让操作员丢失位置");
+  loadNote->setText(tr("行仍在下面：刷新不该让操作员丢失位置"));
   loadRowL->addWidget(loadNote, 1);
 
   return content->sizeHint().preferred;
@@ -229,7 +230,7 @@ Size buildTablesEditPage(Widget* content) {
   BoxLayout* topRow = line(top, kPanelGap);
 
   auto* g = top->add<GroupBox>();
-  g->setTitle("行内编辑 · 行内下拉 / 多选 / 数值 / 开关 / 勾选 / 进度条 / 操作");
+  g->setTitle(tr("行内编辑 · 行内下拉 / 多选 / 数值 / 开关 / 勾选 / 进度条 / 操作"));
   topRow->addWidget(g, 1);
   BoxLayout* gStack = stack(g, kItemGap);
 
@@ -247,30 +248,30 @@ Size buildTablesEditPage(Widget* content) {
   cols.push_back(kindColumn("", 42.0f, CellKind::Selector));
   cols.push_back(kindColumn("#", 44.0f, CellKind::Index));
 
-  TableView::Column tag = textColumn("位号", 110.0f);
+  TableView::Column tag = textColumn(tr("位号"), 110.0f);
   tag.editable = true;
   tag.editor = CellEditor::Text;
   cols.push_back(tag);
 
-  TableView::Column type = textColumn("类型", 110.0f);
+  TableView::Column type = textColumn(tr("类型"), 110.0f);
   type.editable = true;
   type.editor = CellEditor::Select;
-  type.options = {SelectItem("温度", "温度"), SelectItem("压力", "压力"),
-                  SelectItem("流量", "流量"), SelectItem("液位", "液位"),
-                  SelectItem("阀门", "阀门")};
+  type.options = {SelectItem(tr("温度"), tr("温度")), SelectItem(tr("压力"), tr("压力")),
+                  SelectItem(tr("流量"), tr("流量")), SelectItem(tr("液位"), tr("液位")),
+                  SelectItem(tr("阀门"), tr("阀门"))};
   cols.push_back(type);
 
   // Flexible, so the SLACK goes to text rather than to the progress bar: a
   // 230-pixel bar is not more informative than a 180-pixel one, and the tag list
   // is the column that actually gets truncated.
-  TableView::Column tags = textColumn("标签", 0.0f);
+  TableView::Column tags = textColumn(tr("标签"), 0.0f);
   tags.editable = true;
   tags.editor = CellEditor::MultiSelect;
-  tags.options = {SelectItem("关键", "关键"), SelectItem("联锁", "联锁"),
-                  SelectItem("常规", "常规"), SelectItem("备用", "备用")};
+  tags.options = {SelectItem(tr("关键"), tr("关键")), SelectItem(tr("联锁"), tr("联锁")),
+                  SelectItem(tr("常规"), tr("常规")), SelectItem(tr("备用"), tr("备用"))};
   cols.push_back(tags);
 
-  TableView::Column range = textColumn("量程", 100.0f);
+  TableView::Column range = textColumn(tr("量程"), 100.0f);
   range.align = HAlign::Right;
   range.editable = true;
   range.editor = CellEditor::Number;
@@ -280,13 +281,13 @@ Size buildTablesEditPage(Widget* content) {
   range.decimals = 0;
   cols.push_back(range);
 
-  cols.push_back(kindColumn("完成度", 180.0f, CellKind::Progress));
-  cols.push_back(kindColumn("投用", 78.0f, CellKind::Switch));
-  cols.push_back(kindColumn("复核", 66.0f, CellKind::Check));
+  cols.push_back(kindColumn(tr("完成度"), 180.0f, CellKind::Progress));
+  cols.push_back(kindColumn(tr("投用"), 78.0f, CellKind::Switch));
+  cols.push_back(kindColumn(tr("复核"), 66.0f, CellKind::Check));
 
-  TableView::Column ops = kindColumn("操作", 130.0f, CellKind::Actions);
-  ops.actions = {CellAction("edit", "编辑"),
-                 CellAction("delete", "删除", CellAction::Tone::Danger)};
+  TableView::Column ops = kindColumn(tr("操作"), 130.0f, CellKind::Actions);
+  ops.actions = {CellAction("edit", tr("编辑")),
+                 CellAction("delete", tr("删除"), CellAction::Tone::Danger)};
   cols.push_back(ops);
 
   t->setColumns(cols);
@@ -297,18 +298,18 @@ Size buildTablesEditPage(Widget* content) {
   auto* log = g->add<Label>();
   log->addStyleClass("caption");
   log->setPixelSize(11.0f);
-  log->setText("单击选中一格，再单击它进入编辑 · 回车提交，Esc 还原本格原值");
+  log->setText(tr("单击选中一格，再单击它进入编辑 · 回车提交，Esc 还原本格原值"));
   gStack->addWidget(log);
 
   // THE SIGNALS ARE THE POINT of this page: everything below proves that the
   // painted cells are wired to real events, not decoration.
   t->cellEdited.connect([log](int row, int col, const std::string& v) {
-    log->setText("已提交：第 " + std::to_string(row + 1) + " 行，第 " +
-                 std::to_string(col + 1) + " 列 → " + v);
+    log->setText(tr("已提交：第 ") + std::to_string(row + 1) + tr(" 行，第 ") +
+                 std::to_string(col + 1) + tr(" 列 → ") + v);
   });
   t->cellToggled.connect([log](int row, int col, bool on) {
-    log->setText("已切换：第 " + std::to_string(row + 1) + " 行，第 " +
-                 std::to_string(col + 1) + " 列 → " + (on ? "开" : "关"));
+    log->setText(tr("已切换：第 ") + std::to_string(row + 1) + tr(" 行，第 ") +
+                 std::to_string(col + 1) + tr(" 列 → ") + (on ? tr("开") : tr("关")));
   });
   t->actionTriggered.connect([log, t](int row, const std::string& id) {
     if (id == "delete") {
@@ -320,33 +321,33 @@ Size buildTablesEditPage(Widget* content) {
         // caches about it -- selection, current cell, an open editor -- has to be
         // rechecked in one place.
         t->rowsReset();
-        log->setText("已删除：" + tagText + "（模型删的行，视图只是重新问了一次行数）");
+        log->setText(tr("已删除：") + tagText + tr("（模型删的行，视图只是重新问了一次行数）"));
         return;
       }
     }
-    log->setText("操作：第 " + std::to_string(row + 1) + " 行 → " + id);
+    log->setText(tr("操作：第 ") + std::to_string(row + 1) + tr(" 行 → ") + id);
   });
 
   Widget* bottom = band(content, page);
   BoxLayout* bottomRow = line(bottom, kItemGap);
 
   auto* btnSelectAll = bottom->add<PushButton>();
-  btnSelectAll->setText("全选");
+  btnSelectAll->setText(tr("全选"));
   btnSelectAll->clicked.connect([t] { t->selectAllRows(); });
   bottomRow->addWidget(btnSelectAll);
 
   auto* btnClear = bottom->add<PushButton>();
-  btnClear->setText("清空选择");
+  btnClear->setText(tr("清空选择"));
   btnClear->clicked.connect([t] { t->clearSelection(); });
   bottomRow->addWidget(btnClear);
 
   auto* selInfo = bottom->add<Label>();
   selInfo->addStyleClass("caption");
   selInfo->setPixelSize(11.0f);
-  selInfo->setText("已选 0 行");
+  selInfo->setText(tr("已选 0 行"));
   bottomRow->addWidget(selInfo, 1);
   t->selectionChanged.connect([t, selInfo] {
-    selInfo->setText("已选 " + std::to_string(t->selectedRows().size()) + " 行");
+    selInfo->setText(tr("已选 ") + std::to_string(t->selectedRows().size()) + tr(" 行"));
   });
 
   return content->sizeHint().preferred;
@@ -360,7 +361,7 @@ Size buildTablesPagedPage(Widget* content) {
   BoxLayout* topRow = line(top, kPanelGap);
 
   auto* g = top->add<GroupBox>();
-  g->setTitle("分页表格 · 分页移动的是模型的窗口，不是视图的能力");
+  g->setTitle(tr("分页表格 · 分页移动的是模型的窗口，不是视图的能力"));
   topRow->addWidget(g, 1);
   BoxLayout* gStack = stack(g, kItemGap);
 
@@ -398,7 +399,7 @@ Size buildTablesPagedPage(Widget* content) {
   note->addStyleClass("caption");
   note->setPixelSize(11.0f);
   note->setText(
-      "分页与虚拟滚动不是二选一：视图永远只画看得见的行，分页只决定它拿到哪一段");
+      tr("分页与虚拟滚动不是二选一：视图永远只画看得见的行，分页只决定它拿到哪一段"));
   gStack->addWidget(note);
 
   return content->sizeHint().preferred;
