@@ -2,6 +2,7 @@
 
 #include "geeyoou/render/IconRegistry.hpp"
 #include "geeyoou/render/Painter.hpp"
+#include "i18n/I18n.hpp"
 
 namespace showcase {
 
@@ -25,7 +26,7 @@ void registerPlantIcons() {
             g.line(15.0f, 17.4f, 15.0f, 20.0f);
             g.line(5.5f, 20.0f, 18.5f, 20.0f);
           },
-          "设备");
+          tr("设备"));
 
   reg.add("valve",
           [](Painter&, const IconCanvas& g) {
@@ -35,14 +36,14 @@ void registerPlantIcons() {
             g.line(12.0f, 12.0f, 12.0f, 5.0f);
             g.line(8.0f, 4.0f, 16.0f, 4.0f);  // handwheel
           },
-          "设备");
+          tr("设备"));
 
   reg.add("tank",
           [](Painter&, const IconCanvas& g) {
             g.roundRect(5.0f, 3.0f, 14.0f, 18.0f, 6.0f);
             g.line(6.0f, 14.0f, 18.0f, 14.0f);  // level
           },
-          "设备");
+          tr("设备"));
 
   // ------------------------------------------------------------ SVG 路径 ---
   //
@@ -54,26 +55,26 @@ void registerPlantIcons() {
   // V/v C/c S/s A/a Z.
   reg.addSvgPath("thermometer",
                  "M14 14.8V4a2 2 0 0 0-4 0v10.8a4 4 0 1 0 4 0z",
-                 PathStyle::Stroke, 24.0f, "仪表");
+                 PathStyle::Stroke, 24.0f, tr("仪表"));
 
   reg.addSvgPath("droplet", "M12 2.7l5.7 5.7a8 8 0 1 1-11.4 0z",
-                 PathStyle::Stroke, 24.0f, "仪表");
+                 PathStyle::Stroke, 24.0f, tr("仪表"));
 
   reg.addSvgPath("zap", "M13 2L3 14h9l-1 8L21 10h-9l1-8z", PathStyle::Stroke,
-                 24.0f, "仪表");
+                 24.0f, tr("仪表"));
 
   reg.addSvgPath("activity", "M22 12h-4l-3 9L9 3l-3 9H2", PathStyle::Stroke,
-                 24.0f, "仪表");
+                 24.0f, tr("仪表"));
 
   // Cubic + smooth-cubic, the two commands a hand-rolled parser usually gets
   // wrong -- Blend2D reflects the control point for `s` itself.
   reg.addSvgPath("flow", "M2 12c2-4 4-4 6 0s4 4 6 0 4-4 6 0", PathStyle::Stroke,
-                 24.0f, "仪表");
+                 24.0f, tr("仪表"));
 
   // A FILLED path, to prove the stroke/fill distinction actually matters:
   // rendering this one as a stroke would give a hairline outline, not a solid.
   reg.addSvgPath("marker", "M12 2a7 7 0 0 0-7 7c0 5.3 7 13 7 13s7-7.7 7-13a7 7 0 0 0-7-7z",
-                 PathStyle::Fill, 24.0f, "仪表");
+                 PathStyle::Fill, 24.0f, tr("仪表"));
 }
 
 }  // namespace showcase
