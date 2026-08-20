@@ -115,4 +115,10 @@ if(GEEYOOU_BUILD_EXAMPLES)
   # ONE entry point.  Every former standalone example is now a page inside the
   # showcase shell -- see examples/showcase/Pages.hpp.
   add_subdirectory(examples/showcase)
+
+  # The exception, and it earns it: the tutorial is the ONE thing a newcomer is
+  # supposed to be able to read top-to-bottom and run, without first
+  # understanding a page/shell architecture.  It also generates the tutorial's
+  # own figures, so the docs cannot drift from the code.
+  add_subdirectory(examples/tutorial)
 endif()
