@@ -114,10 +114,35 @@ class Shell : public Widget {
 
   // `builder` runs the first time the page is shown, not at registration --
   // an unopened page costs nothing but its nav entry.
+  //
+  // `section`, `title` and `subtitle` are the CHINESE ORIGINALS, i.e. the
+  // translation keys -- not display text.  The shell runs them through tr()
+  // every time it draws the nav or the title strip, which is what lets
+  // rebuildPages() re-label everything without the caller re-registering.
   void addPage(std::string section, std::string title, std::string subtitle,
                Icon icon, PageBuilder builder);
   void showPage(int index);
   int currentPage() const { return current_; }
+
+  // Destroys every built page and builds the current one again.
+  //
+  // This is how a language change takes effect.  Nothing cheaper works: the
+  // page builders bake their strings into Labels at construction time, so
+  // there is no "re-translate the existing tree" pass to run -- the tree IS
+  // the translation.  The cost is that page-local state (scroll offset, typed
+  // values, which row was selected) goes with it, which is the honest
+  // consequence of rebuilding and not worth hiding behind partial restores.
+  void rebuildPages();
+
+  // Emitted by rebuildPages() BEFORE any page is destroyed.
+  //
+  // This exists for the subscriptions that point INTO a page from outside it.
+  // Two of them exist in this showcase -- AppState::alarmSink, which holds a
+  // widget from the ops page, and ShowcaseWindow::headerAction, which pages
+  // connect their activity logs to -- and both were harmless only for as long
+  // as pages were never destroyed.  The moment rebuilding became possible they
+  // turned into real use-after-frees, so the owners cut them here.
+  Signal<> pagesAboutToRebuild;
 
   Sidebar* sidebar() { return sidebar_; }
   TitleBar* titleBar() { return titleBar_; }
@@ -127,6 +152,7 @@ class Shell : public Widget {
 
  private:
   struct Page {
+    // Chinese originals = translation keys.  See addPage().
     std::string section;
     std::string title;
     std::string subtitle;
@@ -135,6 +161,8 @@ class Shell : public Widget {
     ScrollArea* host = nullptr;  // created lazily on first show
   };
 
+  // Rebuilds the sidebar model from pages_, translating as it goes.
+  void refreshNav();
   void relayout();
 
   Sidebar* sidebar_ = nullptr;
