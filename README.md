@@ -85,6 +85,12 @@ Then run the showcase:
 build\bin\showcase.exe
 ```
 
+> **New here?** Start with the step-by-step tutorial:
+> **[Build a reactor monitoring screen in 30 minutes](docs/tutorial/README.zh-CN.md)**
+> — from an empty window to gauges, status lamps and a live trend chart, with a
+> figure at every step and code you can compile as you read.
+> *(Currently Simplified Chinese; the code and figures are language-neutral.)*
+
 ## Hello, world
 
 ```cpp
