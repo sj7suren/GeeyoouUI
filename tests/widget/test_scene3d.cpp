@@ -27,6 +27,8 @@
 #include "geeyoou/render/Canvas.hpp"
 #include "geeyoou/render/Offscreen.hpp"
 #include "geeyoou/render/Painter.hpp"
+#include "geeyoou/render/Skin.hpp"
+#include "geeyoou/render/Theme.hpp"
 #include "geeyoou/scene3d/Camera.hpp"
 #include "geeyoou/scene3d/Mesh.hpp"
 #include "geeyoou/scene3d/Scene3D.hpp"
@@ -61,6 +63,39 @@ void paintOnce(geeyoou::Widget& w, int width, int height) {
   w.paintTree(p, all, all);
   canvas.end();
 }
+
+// The same paint, but the pixels are kept.
+OffscreenImage renderToImage(geeyoou::Widget& w, int width, int height) {
+  OffscreenImage img(width, height, 1.0f);
+  const Rect all(0.0f, 0.0f, float(width), float(height));
+  Canvas canvas;
+  if (!canvas.begin(img.surface(), all)) return img;
+  Painter p = canvas.painter();
+  w.paintTree(p, all, all);
+  canvas.end();
+  return img;
+}
+
+float luma(std::uint32_t argb) {
+  const float r = float((argb >> 16) & 0xFF);
+  const float g = float((argb >> 8) & 0xFF);
+  const float b = float(argb & 0xFF);
+  return 0.299f * r + 0.587f * g + 0.114f * b;
+}
+
+// Swaps the process-wide theme for the duration of a case and puts it back.
+// Theme::current() is a global by design (render/Theme.hpp), so a case that
+// changed it and returned would silently recolour every case after it.
+class ThemeSwap {
+ public:
+  explicit ThemeSwap(const geeyoou::Theme& t) : saved_(geeyoou::Theme::current()) {
+    geeyoou::Theme::current() = t;
+  }
+  ~ThemeSwap() { geeyoou::Theme::current() = saved_; }
+
+ private:
+  geeyoou::Theme saved_;
+};
 
 }  // namespace
 
@@ -317,6 +352,218 @@ GEEYOOU_TEST(scene3d, a_closed_convex_body_submits_at_most_half_its_faces) {
 
   CHECK(v.lastDrawnFaces() > 0);
   CHECK(v.lastDrawnFaces() <= 6);  // 12 faces, never more than three quads visible
+}
+
+// ========================================================== contrast ========
+//
+// THE CASE THAT PINS THE DEFECT A USER REPORTED, in the terms they reported it:
+// "the background is white and a white model cannot be seen".
+//
+// Two separate mistakes produced that, and this asserts both are gone:
+//
+//   1. the viewport used Theme::field as its ground, and `field` is #FFFFFF
+//      under the light skin;
+//   2. shading mixed unlit faces towards Theme::background -- so under a light
+//      skin the SHADOWS WENT WHITE, which is the opposite of what shading is.
+//
+// A picture comparison would not do: a golden PNG changes with every font and
+// every palette tweak.  What is asserted is the PROPERTY -- there is contrast --
+// as a number, under both skins.
+namespace {
+struct ContrastProbe {
+  float backdrop = 0.0f;  // a pixel of viewport with no model on it
+  float model = 0.0f;     // a pixel in the middle of a big model
+};
+
+ContrastProbe probeContrast() {
+  MeshBuilder b;
+  // Deliberately WHITE, which is the case the user hit: a light model is the
+  // one a white ground cannot show.
+  b.addBox({0.0f, 0.0f, 0.0f}, {2.0f, 2.0f, 2.0f}, 0);
+
+  Scene3D s;
+  s.addPart("white", Color::rgb(0xFF, 0xFF, 0xFF));
+  s.addNode(b.mesh());
+
+  View3D v;
+  v.setScene(&s);
+  v.setGridVisible(false);
+  v.setAnnotationsVisible(false);
+  v.setGeometry({0.0f, 0.0f, 400.0f, 300.0f});
+
+  const OffscreenImage img = renderToImage(v, 400, 300);
+  ContrastProbe out;
+  out.backdrop = luma(img.pixel(12, 12));    // a corner: viewport, no model
+  out.model = luma(img.pixel(200, 150));     // the centre: on the box
+  return out;
+}
+}  // namespace
+
+GEEYOOU_TEST(scene3d, a_white_model_is_visible_under_a_light_skin) {
+  ThemeSwap swap(geeyoou::lightTheme());
+  const ContrastProbe p = probeContrast();
+
+  // The viewport is NOT the theme's white field.  It has a mid-tone of its own,
+  // the way every modelling tool's 3D view does, and for the same reason.
+  CHECK(p.backdrop < 226.0f);
+  CHECK(p.backdrop > 90.0f);
+  // ...and the model separates from it by an amount an eye can find.
+  CHECK((p.model > p.backdrop ? p.model - p.backdrop : p.backdrop - p.model) > 22.0f);
+}
+
+GEEYOOU_TEST(scene3d, a_white_model_is_visible_under_a_dark_skin) {
+  ThemeSwap swap(geeyoou::darkTheme());
+  const ContrastProbe p = probeContrast();
+
+  CHECK(p.backdrop < 90.0f);
+  CHECK((p.model > p.backdrop ? p.model - p.backdrop : p.backdrop - p.model) > 40.0f);
+}
+
+// Shading DARKENS.  Under a light skin the first version brightened it, so a
+// model lost the very shading that tells a box from a hexagon.
+GEEYOOU_TEST(scene3d, shading_darkens_under_every_skin) {
+  for (int pass = 0; pass < 2; ++pass) {
+    ThemeSwap swap(pass == 0 ? geeyoou::lightTheme() : geeyoou::darkTheme());
+
+    MeshBuilder b;
+    b.addBox({0.0f, 0.0f, 0.0f}, {2.0f, 2.0f, 2.0f}, 0);
+    Scene3D s;
+    s.addPart("mid", Color::rgb(0x9A, 0xA6, 0xB8));
+    s.addNode(b.mesh());
+
+    View3D v;
+    v.setScene(&s);
+    v.setGridVisible(false);
+    v.setAnnotationsVisible(false);
+    v.setGeometry({0.0f, 0.0f, 400.0f, 300.0f});
+    const OffscreenImage img = renderToImage(v, 400, 300);
+
+    // Every pixel of the model must be no brighter than its own material: the
+    // light adds nothing, it only takes away.  A generous tolerance because the
+    // ambient term and antialiasing both land on the boundary pixels.
+    const float material = luma(0x009AA6B8u);
+    float brightest = 0.0f;
+    for (int y = 120; y < 180; ++y) {
+      for (int x = 160; x < 240; ++x) {
+        const float l = luma(img.pixel(x, y));
+        if (l > brightest) brightest = l;
+      }
+    }
+    CHECK(brightest <= material + 2.0f);
+  }
+}
+
+// ===================================================== colour + labels ======
+
+GEEYOOU_TEST(scene3d, the_colour_mode_changes_what_is_drawn) {
+  MeshBuilder b;
+  b.addBox({0.0f, 0.0f, 0.0f}, {2.0f, 2.0f, 2.0f}, 0);
+
+  Scene3D s;
+  const PartId part = s.addPart("thing", Color::rgb(0x9A, 0xA6, 0xB8));
+  s.addNode(b.mesh());
+  s.setPartState(part, PartState::Fault);
+  s.setPartValue(part, 0.05f);  // cold end of the ramp, nothing like the fault red
+
+  View3D v;
+  v.setScene(&s);
+  v.setGridVisible(false);
+  v.setAnnotationsVisible(false);
+  v.setGeometry({0.0f, 0.0f, 400.0f, 300.0f});
+
+  v.setColorMode(geeyoou::ColorMode::Status);
+  const std::uint32_t statusPx = renderToImage(v, 400, 300).pixel(200, 150);
+  v.setColorMode(geeyoou::ColorMode::Material);
+  const std::uint32_t materialPx = renderToImage(v, 400, 300).pixel(200, 150);
+  v.setColorMode(geeyoou::ColorMode::Value);
+  const std::uint32_t valuePx = renderToImage(v, 400, 300).pixel(200, 150);
+
+  // Three questions, three answers.  If any two of these matched, the mode
+  // switch would be a control that does nothing.
+  CHECK(statusPx != materialPx);
+  CHECK(statusPx != valuePx);
+  CHECK(materialPx != valuePx);
+}
+
+GEEYOOU_TEST(scene3d, a_part_centre_sits_inside_the_part) {
+  MeshBuilder b;
+  b.addBox({4.0f, 1.0f, -2.0f}, {2.0f, 2.0f, 2.0f}, 0);
+
+  Scene3D s;
+  const PartId part = s.addPart("box");
+  s.addNode(b.mesh());
+
+  // A label anchors to this, so a centre that answered the world origin would
+  // put every callout in the same wrong place.
+  const Vec3 c = s.partCenter(part);
+  CHECK_NEAR(c.x, 4.0f, 0.01);
+  CHECK_NEAR(c.y, 1.0f, 0.01);
+  CHECK_NEAR(c.z, -2.0f, 0.01);
+}
+
+GEEYOOU_TEST(scene3d, an_annotation_follows_the_node_it_is_anchored_to) {
+  MeshBuilder b;
+  b.addBox({0.0f, 0.0f, 0.0f}, {2.0f, 2.0f, 2.0f}, 0);
+
+  Scene3D s;
+  const PartId part = s.addPart("box");
+  const std::size_t node = s.addNode(b.mesh());
+  const geeyoou::AnnotationId note = s.addAnnotation(part, "V-101", {0.0f, 2.0f, 0.0f});
+
+  CHECK(s.validAnnotation(note));
+  CHECK_EQ(s.annotation(note).title, std::string("V-101"));
+  CHECK_NEAR(s.partCenter(part).x, 0.0f, 0.01);
+
+  // Move the node; the anchor has to move with it, or a label ends up naming
+  // empty space.
+  s.setNodeTransform(node, Mat4::translation({7.0f, 0.0f, 0.0f}));
+  CHECK_NEAR(s.partCenter(part).x, 7.0f, 0.01);
+
+  s.setAnnotationValue(note, "152.4 °C");
+  CHECK_EQ(s.annotation(note).value, std::string("152.4 °C"));
+
+  // An id nobody handed out is inert, like every other bad id in this class.
+  s.setAnnotationValue(9999, "nope");
+  CHECK(!s.validAnnotation(9999));
+  CHECK(!s.annotation(9999).visible);
+}
+
+GEEYOOU_TEST(scene3d, annotations_cost_nothing_while_they_are_off) {
+  MeshBuilder b;
+  b.addBox({0.0f, 0.0f, 0.0f}, {2.0f, 2.0f, 2.0f}, 0);
+
+  Scene3D s;
+  const PartId part = s.addPart("box");
+  s.addNode(b.mesh());
+  // Just clear of the box.  Deliberately modest: an offset that put the anchor
+  // outside the framed view would make this a case about framing.
+  s.addAnnotation(part, "V-101", {0.0f, 0.9f, 0.0f});
+
+  View3D v;
+  v.setScene(&s);
+  v.setGridVisible(false);
+  v.setGeometry({0.0f, 0.0f, 400.0f, 300.0f});
+
+  v.setAnnotationsVisible(false);
+  const OffscreenImage without = renderToImage(v, 400, 300);
+  v.setAnnotationsVisible(true);
+  const OffscreenImage with = renderToImage(v, 400, 300);
+
+  // Counted over the WHOLE image rather than probed at one coordinate: where a
+  // label lands depends on the camera, and a case that guessed the spot would be
+  // testing the framing rather than the feature.
+  int changed = 0;
+  for (int y = 0; y < 300; ++y) {
+    for (int x = 0; x < 400; ++x) {
+      if (without.pixel(x, y) != with.pixel(x, y)) ++changed;
+    }
+  }
+  // Something was drawn -- a leader line, a box and two lines of text is
+  // hundreds of pixels...
+  CHECK(changed > 200);
+  // ...and turning them off put every one of those pixels back, which is what
+  // "costs nothing while off" has to mean.
+  CHECK(changed < 400 * 300 / 4);
 }
 
 // PROPERTY 2.  The frame buffers are sized by setScene and indexed by onPaint.
