@@ -25,6 +25,7 @@ add_executable(geeyoou_tests
   widget/test_size_hints.cpp
   widget/test_showcase_pages.cpp
   widget/test_icon_gallery.cpp
+  widget/test_i18n.cpp
   widget/test_r2_safety.cpp
   widget/test_r2_remediation.cpp
   widget/test_rem3_doors.cpp
@@ -75,6 +76,18 @@ add_executable(geeyoou_tests
   # mutating the process-wide registry, so they own restoring/accounting for the
   # icon count other cases observe.
   ${CMAKE_SOURCE_DIR}/examples/showcase/PlantIcons.cpp
+
+  # i18n, for the same reason as everything above it: every page compiled into
+  # this binary calls tr(), so the runtime and the language packs are not
+  # optional extras here -- without them the test binary does not link.
+  #
+  # It also means the packs are compiled at /W4 /permissive- and are reachable
+  # from a test, which is the only way a missing translation or a format string
+  # whose "%d" went missing in translation can be caught by anything other than
+  # a person looking at the running application in the wrong language.
+  ${CMAKE_SOURCE_DIR}/examples/showcase/i18n/I18n.cpp
+  ${CMAKE_SOURCE_DIR}/examples/showcase/i18n/lang_zh_CN.cpp
+  ${CMAKE_SOURCE_DIR}/examples/showcase/i18n/lang_en_US.cpp
 )
 
 target_link_libraries(geeyoou_tests PRIVATE geeyoou::geeyoou)
