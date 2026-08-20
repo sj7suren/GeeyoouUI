@@ -20,6 +20,7 @@
 #include "geeyoou/widget/PushButton.hpp"
 #include "geeyoou/widget/ScrollArea.hpp"
 #include "geeyoou/widget/SpinBox.hpp"
+#include "i18n/I18n.hpp"
 
 namespace showcase {
 
@@ -47,7 +48,7 @@ Widget* band(Widget* parent, BoxLayout* into, std::uint16_t stretch = 0) {
   return w;
 }
 
-Label* rowCaption(Widget* parent, const char* s) {
+Label* rowCaption(Widget* parent, std::string s) {
   auto* l = parent->add<Label>();
   l->setText(s);
   l->addStyleClass("caption");
@@ -65,14 +66,14 @@ Size buildOpsPage(Widget* content, AppState& app) {
 
   // ---------------- 实时值 ----------------
   auto* gLive = leftCol->add<GroupBox>();
-  gLive->setTitle("实时值（来自采集线程）");
+  gLive->setTitle(tr("实时值（来自采集线程）"));
   left->addWidget(gLive);
   auto* live = gLive->setLayout<GridLayout>();
   live->setSpacing(kItemGap);
   live->setColumnStretch(1, 1);  // the readouts take the width, the names do not
 
   Label* liveLabels[3];
-  const char* names[3] = {"进料流量", "釜内温度", "系统压力"};
+  const std::string names[3] = {tr("进料流量"), tr("釜内温度"), tr("系统压力")};
   for (int i = 0; i < 3; ++i) {
     liveLabels[i] = gLive->add<Label>();
     liveLabels[i]->setAlign(HAlign::Right, VAlign::Middle);
@@ -84,7 +85,7 @@ Size buildOpsPage(Widget* content, AppState& app) {
   auto* queueStat = gLive->add<Label>();
   queueStat->addStyleClass("caption");
   queueStat->setPixelSize(11.0f);
-  queueStat->setText("队列：0 待处理 / 0 丢弃");
+  queueStat->setText(tr("队列：0 待处理 / 0 丢弃"));
   live->addWidget(queueStat, 3, 0, 1, 2);
 
   // ---------------- 参数表单（ScrollArea） ----------------
@@ -92,7 +93,7 @@ Size buildOpsPage(Widget* content, AppState& app) {
   // the parameter rows, the outer one scrolls the page.  They do not fight,
   // because the wheel is consumed by the deepest widget that handles it.
   auto* gForm = leftCol->add<GroupBox>();
-  gForm->setTitle("参数表单（ScrollArea）");
+  gForm->setTitle(tr("参数表单（ScrollArea）"));
   left->addWidget(gForm, 1);
   BoxLayout* form = stack(gForm, kItemGap);
 
@@ -113,7 +114,7 @@ Size buildOpsPage(Widget* content, AppState& app) {
   const int kParams = 20;
   for (int i = 0; i < kParams; ++i) {
     char name[64];
-    std::snprintf(name, sizeof(name), "参数 P-%02d", i + 1);
+    std::snprintf(name, sizeof(name), tr("参数 P-%02d").c_str(), i + 1);
     auto* lbl = scroll->content()->add<Label>();
     lbl->setText(name);
     lbl->addStyleClass("caption");
@@ -128,7 +129,7 @@ Size buildOpsPage(Widget* content, AppState& app) {
 
   // ---------------- 报警列表 ----------------
   auto* gAlarm = content->add<GroupBox>();
-  gAlarm->setTitle("报警列表（ListView 拉取式模型）");
+  gAlarm->setTitle(tr("报警列表（ListView 拉取式模型）"));
   page->addWidget(gAlarm, 2);
   BoxLayout* alarmBox = stack(gAlarm, kItemGap);
 
@@ -141,21 +142,21 @@ Size buildOpsPage(Widget* content, AppState& app) {
   auto* alarmStat = alarmTools->add<Label>();
   alarmStat->addStyleClass("caption");
   alarmStat->setPixelSize(11.0f);
-  alarmStat->setText("未确认 0 / 活动 0");
+  alarmStat->setText(tr("未确认 0 / 活动 0"));
   tools->addWidget(alarmStat, 1);
 
   auto* showAck = alarmTools->add<CheckBox>();
-  showAck->setText("显示已确认");
+  showAck->setText(tr("显示已确认"));
   showAck->setChecked(true);
   tools->addWidget(showAck);
 
   auto* ackBtn = alarmTools->add<PushButton>();
-  ackBtn->setText("确认");
+  ackBtn->setText(tr("确认"));
   ackBtn->setVariant(ButtonVariant::Primary);
   tools->addWidget(ackBtn);
 
   auto* ackAllBtn = alarmTools->add<PushButton>();
-  ackAllBtn->setText("全部确认");
+  ackAllBtn->setText(tr("全部确认"));
   tools->addWidget(ackAllBtn);
 
   ackBtn->clicked.connect([alarms] {
@@ -183,10 +184,10 @@ Size buildOpsPage(Widget* content, AppState& app) {
                     app.hub.channelUnit(i).c_str());
       liveLabels[i]->setText(buf);
     }
-    std::snprintf(buf, sizeof(buf), "队列：%zu 待处理 / %zu 丢弃", app.hub.pending(),
+    std::snprintf(buf, sizeof(buf), tr("队列：%zu 待处理 / %zu 丢弃").c_str(), app.hub.pending(),
                   app.hub.droppedCount());
     queueStat->setText(buf);
-    std::snprintf(buf, sizeof(buf), "未确认 %d / 活动 %d",
+    std::snprintf(buf, sizeof(buf), tr("未确认 %d / 活动 %d").c_str(),
                   alarms->unacknowledgedCount(), alarms->activeCount());
     alarmStat->setText(buf);
   };
