@@ -1,0 +1,15 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Port to X11 or Cocoa
+    url: https://github.com/sj7suren/GeeyoouUI/issues/1
+    about: >
+      The highest-value contribution available — 12 pure virtual methods, with
+      the Win32 implementation as a worked example. Start here.
+  - name: Questions and ideas (Discussions)
+    url: https://github.com/sj7suren/GeeyoouUI/discussions
+    about: >
+      "How do I do X", "is this a good fit for my HMI", showing what you built.
+      中文提问同样欢迎.
+  - name: Security report
+    url: https://github.com/sj7suren/GeeyoouUI/security/advisories/new
+    about: Please do not file security problems as public issues.
