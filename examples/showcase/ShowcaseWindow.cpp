@@ -5,6 +5,7 @@
 #include "geeyoou/render/Skin.hpp"
 #include "geeyoou/render/StyleSheet.hpp"
 #include "geeyoou/render/Theme.hpp"
+#include "i18n/I18n.hpp"
 
 namespace showcase {
 
@@ -21,7 +22,7 @@ const char* kBaseStyleSheet =
 }  // namespace
 
 ShowcaseWindow::ShowcaseWindow()
-    : AppWindow("GeeyoouUI 控件库演示", 1320, 860) {
+    : AppWindow(tr("GeeyoouUI 控件库演示"), 1320, 860) {
   // Before any widget asks for one: the pack has to be registered while ids are
   // still being handed out, not after something has already stored an Icon.
   registerPlantIcons();
@@ -36,68 +37,57 @@ ShowcaseWindow::ShowcaseWindow()
   h->setIcon(Icon::Settings);
   h->setIconBadge(true);
   h->setIconSize(18.0f);
-  h->setTitle("GeeyoouUI");
-  h->setSubtitle("工控 HMI 控件库 · 演示工程");
   h->setTitleFontSize(14.0f);
 
   // ------------------------------------------------- 通知 / 语言 / 账户 ---
   // Added left-to-right, so the account block ends up nearest the corner.
+  // Only the WIRING is here; every string comes from applyHeaderTexts() below,
+  // which runs again whenever the language changes.
   bell_ = h->addTrailingItem<HeaderMenu>(38.0f);
   bell_->setIcon(Icon::Bell);
   bell_->setShowChevron(false);
   bell_->setBadgeCount(3);
-  bell_->setItems({
-      MenuItem("PI-201 系统压力超高限", "alarm-press", Icon::Warning),
-      MenuItem("TI-102 釜内温度预警", "alarm-temp", Icon::Warning),
-      MenuItem("Modbus 从站响应超时", "alarm-comm", Icon::Info),
-      MenuItem::sep(),
-      MenuItem("全部标记为已读", "ack-all", Icon::Check),
-  });
   bell_->triggered.connect([this](const std::string& id) {
     if (id == "ack-all") bell_->setBadgeCount(0);
-    headerAction.emit("通知菜单：" + id);
+    headerAction.emit(tr("通知菜单：") + id);
   });
 
   language_ = h->addTrailingItem<HeaderMenu>(0.0f);
   language_->setIcon(Icon::Globe);
-  language_->setText("简体中文");
-  language_->setItems({
-      MenuItem("简体中文", "zh-CN"),
-      MenuItem("English", "en-US"),
-      MenuItem("日本語", "ja-JP"),
-  });
-  language_->triggeredIndex.connect([this](int i) {
-    // The menu's own label is the switcher's state -- exactly the affordance a
-    // web admin console uses, and it needs no separate indicator.
-    const auto& items = language_->items();
-    if (i < 0 || i >= int(items.size())) return;
-    language_->setText(items[std::size_t(i)].text);
-    header()->setTrailingItemWidth(language_, language_->preferredWidth());
-    headerAction.emit("语言切换：" + items[std::size_t(i)].text);
-  });
-  h->setTrailingItemWidth(language_, language_->preferredWidth());
+  // The menu index IS the language index -- applyHeaderTexts() builds the item
+  // list straight from the pack list, in order, so there is no id-to-language
+  // lookup table to keep in step with i18n/I18n.cpp.
+  language_->triggeredIndex.connect([](int i) { setLang(i); });
 
   h->addTrailingGap(6.0f);
   account_ = h->addTrailingItem<HeaderAvatar>(0.0f);
-  account_->setInitials("张");
-  account_->setName("张工");
-  account_->setCaption("值班工程师");
-  account_->setItems({
-      MenuItem("个人资料", "profile", Icon::User),
-      MenuItem("偏好设置", "prefs", Icon::Settings),
-      MenuItem("操作日志", "audit", Icon::Copy),
-      MenuItem::sep(),
-      MenuItem("退出登录", "logout", Icon::Logout),
-  });
   account_->triggered.connect(
-      [this](const std::string& id) { headerAction.emit("账户菜单：" + id); });
-  h->setTrailingItemWidth(account_, account_->preferredWidth());
+      [this](const std::string& id) { headerAction.emit(tr("账户菜单：") + id); });
 
   // ------------------------------------------------------------- 内容区 ---
   // setContent keeps the shell sized to the content area, so the shell never
   // learns that a title bar exists above it.
   shell_ = setContent<Shell>();
   shell_->sidebar()->setBrandVisible(false);
+
+  // ---------------------------------------------------------------- 语言 ---
+  applyHeaderTexts();
+
+  // A language change re-labels the header in place and rebuilds every page.
+  // The header is deliberately NOT rebuilt: it holds the menu the click came
+  // from, and destroying that mid-emit is exactly the D7 violation
+  // core/Signal.hpp refuses to make safe.
+  conns_ += langChanged().connect([this] {
+    applyHeaderTexts();
+    shell_->rebuildPages();
+  });
+
+  // The showcase's cross-page subscription: pages connect their activity logs
+  // to headerAction, capturing a Label that lives inside the page.  Before the
+  // shell destroys those pages, drop the lot -- otherwise the next header click
+  // writes into a freed Label.  Pages re-subscribe as they are rebuilt.
+  conns_ += shell_->pagesAboutToRebuild.connect(
+      [this] { headerAction.disconnectAll(); });
 
   // ---------------------------------------------------------------- 样式 ---
   applyHeaderTheme();
@@ -109,6 +99,46 @@ ShowcaseWindow::ShowcaseWindow()
     applyHeaderTheme();
     composeStyleSheet();
   });
+}
+
+void ShowcaseWindow::applyHeaderTexts() {
+  WindowHeader* h = header();
+  setTitle(tr("GeeyoouUI 控件库演示"));
+  h->setTitle("GeeyoouUI");  // the product mark is not translated
+  h->setSubtitle(tr("工控 HMI 控件库 · 演示工程"));
+
+  bell_->setItems({
+      MenuItem(tr("PI-201 系统压力超高限"), "alarm-press", Icon::Warning),
+      MenuItem(tr("TI-102 釜内温度预警"), "alarm-temp", Icon::Warning),
+      MenuItem(tr("Modbus 从站响应超时"), "alarm-comm", Icon::Info),
+      MenuItem::sep(),
+      MenuItem(tr("全部标记为已读"), "ack-all", Icon::Check),
+  });
+
+  // Language names are NOT translated: a language always writes its own name in
+  // itself.  Someone looking for 简体中文 in an English UI is looking for those
+  // four characters, and "Simplified Chinese" is no use to them.
+  std::vector<MenuItem> langs;
+  const int n = langCount();
+  langs.reserve(std::size_t(n));
+  for (int i = 0; i < n; ++i) langs.push_back(MenuItem(langNativeName(i), langId(i)));
+  language_->setItems(std::move(langs));
+  // The menu's own label is the switcher's state -- exactly the affordance a
+  // web admin console uses, and it needs no separate indicator.
+  language_->setText(langNativeName(lang()));
+  h->setTrailingItemWidth(language_, language_->preferredWidth());
+
+  account_->setInitials(tr("张"));
+  account_->setName(tr("张工"));
+  account_->setCaption(tr("值班工程师"));
+  account_->setItems({
+      MenuItem(tr("个人资料"), "profile", Icon::User),
+      MenuItem(tr("偏好设置"), "prefs", Icon::Settings),
+      MenuItem(tr("操作日志"), "audit", Icon::Copy),
+      MenuItem::sep(),
+      MenuItem(tr("退出登录"), "logout", Icon::Logout),
+  });
+  h->setTrailingItemWidth(account_, account_->preferredWidth());
 }
 
 void ShowcaseWindow::applyHeaderTheme() {
