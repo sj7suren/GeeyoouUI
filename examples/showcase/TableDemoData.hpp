@@ -21,6 +21,7 @@
 #include "geeyoou/widget/TableView.hpp"
 #include "geeyoou/widget/TreeTableModel.hpp"
 #include "geeyoou/widget/Widget.hpp"
+#include "i18n/I18n.hpp"
 
 namespace showcase {
 
@@ -71,37 +72,51 @@ enum class Field {
   Actions,
 };
 
-// Sixty instruments across four areas.  Built once, on first use, and handed out
-// by reference: the tables never copy it, which is the property the whole design
+// Sixty instruments across four areas.  Built on first use and handed out by
+// reference: the tables never copy it, which is the property the whole design
 // is about.
+//
+// REBUILT when the language changes.  It used to be a `static ... = [] {...}()`
+// that ran exactly once, which is the same trap as a namespace-scope const
+// array: the rows would keep whatever language was current the first time a
+// table page was opened, and rebuilding the PAGE would not touch them.
+//
+// The vector OBJECT is reused rather than replaced, so the reference every
+// caller holds stays valid; only the contents change.  Callers are being
+// rebuilt at that moment anyway, so nobody is mid-iteration.
 inline std::vector<Device>& demoDevices() {
-  static std::vector<Device> rows = [] {
-    const char* areas[] = {"一号反应区", "二号反应区", "罐区", "公用工程"};
-    const char* types[] = {"温度", "压力", "流量", "液位", "阀门"};
-    const char* states[] = {"运行", "停机", "维护", "故障"};
-    const char* tagSets[] = {"关键", "关键, 联锁", "常规", "常规, 备用", "联锁"};
+  static std::vector<Device> rows;
+  static int builtFor = -1;
+  if (builtFor == lang()) return rows;
+  builtFor = lang();
 
-    std::vector<Device> v;
-    v.reserve(60);
-    for (int i = 0; i < 60; ++i) {
-      Device d;
-      char buf[64];
-      std::snprintf(buf, sizeof(buf), "%s-%03d", i % 2 ? "PI" : "TI", 101 + i);
-      d.tag = buf;
-      d.type = types[i % 5];
-      d.name = d.type + "变送器 " + std::to_string(101 + i);
-      d.area = areas[(i / 15) % 4];
-      // Deliberately uneven: three quarters running is what a plant looks like,
-      // and a demo where every row is green shows nothing about the colours.
-      d.status = states[(i * 7) % 11 < 7 ? 0 : (i % 3 + 1)];
-      d.running = d.status == "运行";
-      d.progress = double((i * 17) % 101) / 100.0;
-      d.range = 20.0 + double((i * 13) % 380);
-      d.tags = tagSets[i % 5];
-      v.push_back(std::move(d));
-    }
-    return v;
-  }();
+  const std::string areas[] = {tr("一号反应区"), tr("二号反应区"),
+                               tr("罐区"), tr("公用工程")};
+  const std::string types[] = {tr("温度"), tr("压力"), tr("流量"), tr("液位"),
+                               tr("阀门")};
+  const std::string states[] = {tr("运行"), tr("停机"), tr("维护"), tr("故障")};
+  const std::string tagSets[] = {tr("关键"), tr("关键, 联锁"), tr("常规"),
+                                 tr("常规, 备用"), tr("联锁")};
+
+  rows.clear();
+  rows.reserve(60);
+  for (int i = 0; i < 60; ++i) {
+    Device d;
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%s-%03d", i % 2 ? "PI" : "TI", 101 + i);
+    d.tag = buf;
+    d.type = types[i % 5];
+    d.name = d.type + tr("变送器 ") + std::to_string(101 + i);
+    d.area = areas[(i / 15) % 4];
+    // Deliberately uneven: three quarters running is what a plant looks like,
+    // and a demo where every row is green shows nothing about the colours.
+    d.status = states[(i * 7) % 11 < 7 ? 0 : (i % 3 + 1)];
+    d.running = d.status == tr("运行");
+    d.progress = double((i * 17) % 101) / 100.0;
+    d.range = 20.0 + double((i * 13) % 380);
+    d.tags = tagSets[i % 5];
+    rows.push_back(std::move(d));
+  }
   return rows;
 }
 
@@ -109,9 +124,9 @@ inline std::vector<Device>& demoDevices() {
 // the model, so a plant that recolours "维护" changes one function.
 inline Color statusColor(const std::string& s) {
   const Theme& t = Theme::current();
-  if (s == "运行") return t.success;
-  if (s == "故障") return t.danger;
-  if (s == "维护") return t.warn;
+  if (s == tr("运行")) return t.success;
+  if (s == tr("故障")) return t.danger;
+  if (s == tr("维护")) return t.warn;
   return t.textDim;
 }
 
@@ -220,7 +235,7 @@ class DeviceModel : public TableModel {
     // col < 0 is the row's severity bar.  Only a fault earns one: a bar on every
     // row is a bar that says nothing.
     if (col < 0) {
-      return d->status == "故障" ? Theme::current().danger : Color::rgba(0, 0, 0, 0);
+      return d->status == tr("故障") ? Theme::current().danger : Color::rgba(0, 0, 0, 0);
     }
     return field(col) == Field::Status ? statusColor(d->status)
                                        : Color::rgba(0, 0, 0, 0);
@@ -275,7 +290,7 @@ class DeviceModel : public TableModel {
         // The status chip is DERIVED from the switch, so flipping one has to
         // move the other -- two cells showing contradictory truths is the
         // classic symptom of state kept in two places.
-        d->status = on ? "运行" : "停机";
+        d->status = on ? tr("运行") : tr("停机");
         return true;
       case Field::Picked: d->picked = on; return true;
       default: return false;
