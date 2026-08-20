@@ -23,9 +23,14 @@
   <i>⭐ If a permissively-licensed alternative to Qt Widgets is something you want to exist, a star is the cheapest way to say so.</i>
 </p>
 
-<!-- TODO: drop a screenshot or GIF of build\bin\showcase.exe here — it is the single
-     highest-leverage thing in this file. Suggested: docs/images/showcase.png -->
-<!-- <p align="center"><img src="docs/images/showcase.png" width="860" alt="GeeyoouUI showcase"></p> -->
+<p align="center">
+  <img src="UI/en/0.png" width="880" alt="GeeyoouUI showcase — 3D equipment view with a live part table">
+</p>
+
+<p align="center">
+  <i>Every pixel above is drawn by this library — the title bar, the 3D viewport, the table, the switches.<br>
+  No GPU, no Qt, no resource files. This is <code>build\bin\showcase.exe</code>.</i>
+</p>
 
 ---
 
@@ -52,15 +57,14 @@ comply with and nothing to deploy beyond your own executable.
 | **Repaint model** | ✅ Dirty-rect incremental (HMI screens are ~90% static pixels) | Full-widget repaints |
 | **Hot path allocations** | ✅ Zero — live data goes through fixed-capacity ring buffers | General purpose |
 | **Skinning** | ✅ Skin registry + one accent color drives the palette + QSS-like selectors, hot-swap at runtime | QSS, per-widget |
+| **Layout** | ✅ `BoxLayout` / `GridLayout` with stretch, min/max and column spans — **or** absolute coordinates, which is how mimic screens are authored | Full layout system |
 | **Platforms** | ❌ **Windows only today.** Platform layer is 12 pure virtuals; X11/Cocoa unimplemented | Windows, macOS, Linux, mobile, embedded |
-| **Layout engine** | ❌ **Absolute coordinates only** (deliberate for v1 — see below) | Full layout system |
 | **Accessibility** | ❌ Not implemented (no UIA) | Mature |
 | **Ecosystem** | ❌ 30+ widgets, one library | Enormous |
 
-**Read that table honestly.** If you need Linux today, a layout engine, or screen-reader
-support, use Qt — GeeyoouUI will waste your time. If you ship a Windows operator station,
-want fixed-coordinate mimic screens anyway (which is how configuration/SCADA screens are
-authored), and the license is the thing standing in your way, this is built exactly for you.
+**Read that table honestly.** If you need Linux today or screen-reader support, use Qt —
+GeeyoouUI will waste your time. If you ship a Windows operator station and the license is the
+thing standing in your way, this is built exactly for you.
 
 ## Quick start
 
@@ -122,6 +126,8 @@ compiler.
 - **Dirty-rect incremental repaint** — 90% of an HMI screen is static; don't redraw the frame
 - **Zero allocation on hot paths** — live data flows through fixed-capacity ring buffers,
   suited to unattended long-running operation
+- **Layout when you want it** — `BoxLayout` / `GridLayout` with stretch and min/max, or plain
+  absolute coordinates when the screen is a mimic and position carries process meaning
 - **Platform layer is a pure interface** — v1 implements Win32; X11 / Cocoa need 12 methods
 
 ## The showcase app
@@ -133,20 +139,35 @@ The whole window is a `ShowcaseWindow : AppWindow` — no Windows title bar; ico
 subtitle top-left, notifications / language switch / account dropdown top-right, then
 self-drawn minimize, maximize and close.
 
+<p align="center">
+  <img src="UI/en/a.png" width="880" alt="The showcase shell: navigation rail, title strip, stat cards and text panels">
+</p>
+
+**18 pages**, grouped by what they demonstrate:
+
 | Page | Content | What it also proves |
 |---|---|---|
-| Overview | Library composition, layer sizes, the not-implemented list | Multi-line `Label`, live stat cards |
-| Window shell | Title bar height / colors / icon / button visibility, edited live | Frameless window, `HitZone` drag regions, window commands |
-| Themes & skins | Switch skin / accent color / edit the stylesheet in place | Skin registry, `@token`, selectors and cascade |
-| HMI monitoring | Gauges / status LEDs / live trends | The whole render pipeline + CJK text |
-| Operations console | Alarm list / scrolling form / acquisition queue | Pull-model `ListView`, nested `ScrollArea`, cross-thread queue |
-| Basic widgets | Buttons / switches / radios / sliders / spin boxes | Focus traversal, group-wide disable interlock |
-| Input & buttons | Text input family, button variants, icon buttons | IME test bench (switch to a CJK IME; the candidate window should track the caret) |
-| Selection | Single / searchable / multi / tree / cascader / menu / date | Popups escaping **both** `GroupBox` and `ScrollArea` clipping |
+| At a Glance | Library composition, layer sizes, the not-implemented list | Multi-line `Label`, live stat cards |
+| Window Shell | Title bar height / colours / icon / button visibility, edited live | Frameless window, `HitZone` drag regions, window commands |
+| Theme and Skins | Switch skin / accent colour / edit the stylesheet in place | Skin registry, `@token`, selectors and cascade |
+| Icon Library | All built-in and custom icons, searchable | `IconRegistry`, size comparison, usage snippets |
+| HMI Monitor | Gauges / status LEDs / live trends | The whole render pipeline + CJK text |
+| Ops Console | Alarm list / scrolling form / acquisition queue | Pull-model `ListView`, nested `ScrollArea`, cross-thread queue |
+| Layout Engine | Stretch weights, min/max clamping, column spans — resize and watch | `BoxLayout` / `GridLayout` reacting live |
+| Basic Widgets | Buttons / switches / radios / sliders / spin boxes | Focus traversal, group-wide disable interlock |
+| Inputs and Buttons | Text input family, button variants, icon buttons | IME test bench (switch to a CJK IME; the candidate window should track the caret) |
+| Selects | Single / searchable / multi / tree / cascader / menu / date | Popups escaping **both** `GroupBox` and `ScrollArea` clipping |
+| **Tables** ×7 | Basic, inline editing, paged, frozen + spans, tree, async tree, 200 000 rows | One `TableView`, seven properties — virtualisation, frozen geometry, async child load |
+| 3D Equipment View | Reactor skid, orbit/zoom/pan, click-to-pick, status colouring | `View3D` software rendering, no GPU anywhere |
 
-Every page **shares one acquisition thread and one `DataHub`** — "HMI monitoring" and
-"Operations console" observe the same live data, which is itself the demonstration of the rule
+Every page **shares one acquisition thread and one `DataHub`** — "HMI Monitor" and
+"Ops Console" observe the same live data, which is itself the demonstration of the rule
 that *the acquisition thread never touches a Widget*.
+
+**The language switch in the title bar is real.** Picking a language re-labels the header and
+rebuilds every page from the translation tables in `examples/showcase/i18n/` — one file per
+language. The screenshots in this file and in [the Chinese README](README.zh-CN.md) are the
+same binary, taken in the two languages.
 
 Pages are built on demand: a page you never opened costs nothing beyond its nav entry, and a
 hidden page stops its periodic work automatically because `animationTickTree` skips invisible
@@ -157,6 +178,15 @@ subtrees.
 Application windows derive from `AppWindow` (`widget/AppWindow.hpp`), which is **frameless by
 default**: Windows no longer paints the title bar, border or accent color — `WindowHeader`
 paints it with the same `Painter` / `Theme` as everything else.
+
+<p align="center">
+  <img src="UI/en/c.png" width="880" alt="Window Shell page: title bar metrics, colours, icon and button visibility edited live">
+</p>
+
+<p align="center">
+  <i>The "Window Shell" page drives the real title bar above it. Every slider and dropdown here
+  is a <code>WindowHeader</code> setter — the chrome is ordinary widget code.</i>
+</p>
 
 ```cpp
 class PlantWindow : public AppWindow {
@@ -212,6 +242,37 @@ system menu and border resizing all keep working. You write no drag logic at all
 
 Need the native OS frame? Pass `WindowOptions{.frameless = false}` to the `AppWindow`
 constructor.
+
+## Layout — or deliberately without one
+
+A widget hands its content rectangle to at most one `Layout`, which places that widget's
+**direct children** and nothing else:
+
+```cpp
+auto* row = panel->setLayout<BoxLayout>(Orientation::Horizontal);
+row->setSpacing(12);
+row->addWidget(fixed,    /*stretch*/ 0);   // never moves
+row->addWidget(elastic,  /*stretch*/ 1);   // takes the slack
+row->addWidget(capped,   /*stretch*/ 2);   // takes twice as much, up to its max
+
+auto* form = box->setLayout<GridLayout>();
+form->addRow(tagLabel,  tagEdit);          // label column + field column
+form->addRow(descLabel, descEdit);
+form->setColumnStretch(1, 1);              // the fields take the width
+```
+
+Size hints carry `min` / `preferred` / `max`, so shrinking falls back to `min` in stretch
+order and growing stops at `max` — the page below is the demonstration, and it reflows while
+you drag the window edge.
+
+<p align="center">
+  <img src="UI/en/d.png" width="880" alt="Layout Engine page: stretch weights, min/max clamping and column spans reacting to the window width">
+</p>
+
+**Absolute coordinates remain first-class.** `setGeometry()` is not a legacy path: on a mimic
+screen a pump drawn 40 px left of a valve is *process semantics*, not typography, and a layout
+engine that reflows it has destroyed information. Both styles are supported, both are used by
+the showcase, and `docs/iterations/02-layout-engine.md` records why.
 
 ## Theme / Skin / StyleSheet
 
@@ -302,6 +363,16 @@ family, `CheckBox`, `RadioButton`, `ToggleSwitch`, `Slider`, `ProgressBar`, `Sep
 
 ## Widget catalog
 
+<p align="center">
+  <img src="UI/en/e.png" width="880" alt="Basic Table page: zebra stripes, column sort, empty state and loading state">
+</p>
+
+<p align="center">
+  <i><code>TableView</code> paints every cell itself — ordinals, chips, switches, progress bars,
+  action links. The empty and loading states keep the header, because what is empty is the
+  data, not the table.</i>
+</p>
+
 | General (`widget/`) | Purpose |
 |---|---|
 | `Label` | Text with horizontal/vertical alignment; follows theme and stylesheet unless you `setColor()` |
@@ -352,9 +423,19 @@ family, `CheckBox`, `RadioButton`, `ToggleSwitch`, `Slider`, `ProgressBar`, `Sep
 `Warning` / `Danger` / `Ghost`, plus `setIcon()`, `setLoading()` (spinner — call
 `Window::enableAnimations()` first) and `setCheckable()` (latching).
 
+<p align="center">
+  <img src="UI/en/select.png" width="880" alt="Selects page: searchable dropdown open over its group box, plus multi-select, cascader and date picker">
+</p>
+
+<p align="center">
+  <i>The open dropdown is the load-bearing detail: it is parented to the <b>Window</b>, so it
+  escapes both the <code>GroupBox</code> that owns the field and the <code>ScrollArea</code>
+  the page sits in. Neither clip applies to it.</i>
+</p>
+
 ## Icons: built in, collected, extended
 
-`render/Icon.hpp` ships **39 built-in vector icons**, all drawn in code: no resource files, no
+`render/Icon.hpp` ships **38 built-in vector icons**, all drawn in code: no resource files, no
 icon font, themeable, scale-free (one definition serves a 14px inline glyph and a 48px title bar).
 
 But a built-in set can never cover **your domain** — a batching plant needs pumps, valves and
@@ -430,7 +511,7 @@ include/geeyoou/
               Theme.hpp      token struct
               Skin.hpp       skin registry + accent derivation
               StyleSheet.hpp QSS-like selectors and cascade
-              Icon.hpp       39 built-in vector icons
+              Icon.hpp       38 built-in vector icons
               IconRegistry.hpp  icon registry + IconCanvas drawing grid
               VectorPath.hpp    outline container + SVG path parser
   widget/     AppWindow / WindowHeader   window layer: frameless window and self-drawn chrome
@@ -443,13 +524,14 @@ docs/         architecture.md — design decisions and trade-offs; read before y
 ## Status & roadmap
 
 **Working in v1**: the Win32 backend, Per-Monitor DPI v2, dirty rectangles, the widget tree, the
-frameless window layer, CJK text rendering.
+frameless window layer, CJK text rendering, the `BoxLayout` / `GridLayout` engine, the
+`TableView` family (frozen panes, spans, async tree loading, 200 000-row virtualisation) and
+the software-rendered `View3D`.
 
 **Not implemented yet** — deliberately deferred, reasoning in `docs/architecture.md` §4:
 
 | | Why it's deferred |
 |---|---|
-| Layout engine | v1 uses absolute coordinates, which is how mimic/configuration screens are authored anyway |
 | Accessibility (UIA) | Needs the widget tree to stabilize first |
 | Inline IME pre-edit | The system candidate window already tracks the caret; inline editing is polish |
 | X11 / Cocoa backends | The platform layer is 12 pure virtuals — the port is scoped, not started |
