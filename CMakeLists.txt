@@ -59,6 +59,9 @@ set(GEEYOOU_SOURCES
   src/widget/MenuButton.cpp
   src/widget/Cascader.cpp
   src/widget/DatePicker.cpp
+  src/scene3d/Mesh.cpp
+  src/scene3d/Scene3D.cpp
+  src/scene3d/View3D.cpp
   src/hmi/StatusLed.cpp
   src/hmi/Gauge.cpp
   src/hmi/TrendChart.cpp
