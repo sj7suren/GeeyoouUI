@@ -4,6 +4,7 @@
 
 #include "geeyoou/render/Painter.hpp"
 #include "geeyoou/render/Theme.hpp"
+#include "i18n/I18n.hpp"
 
 namespace showcase {
 namespace {
@@ -107,8 +108,8 @@ void Sidebar::onPaint(Painter& p, const Rect&) {
     if (!collapsed_) {
       p.drawText({54.0f, 24.0f}, "GeeyoouUI", t.fontBody, t.text, HAlign::Left,
                  VAlign::Top);
-      p.drawText({54.0f, 40.0f}, "控件库演示", t.fontSmall, t.textDim, HAlign::Left,
-                 VAlign::Top);
+      p.drawText({54.0f, 40.0f}, tr("控件库演示"), t.fontSmall, t.textDim,
+                 HAlign::Left, VAlign::Top);
     }
     p.strokeLine({12.0f, kRailTop - 10.0f}, {r.width() - 12.0f, kRailTop - 10.0f},
                  t.panelBorder, 1.0f);
@@ -273,15 +274,22 @@ void Shell::addPage(std::string section, std::string title, std::string subtitle
   pg.builder = std::move(builder);
   pages_.push_back(std::move(pg));
 
-  // The sidebar's model is DERIVED from pages_ and rebuilt wholesale each time.
-  // Cheap for a handful of pages, and it removes any chance of the nav drifting
-  // out of sync with the page list.
+  refreshNav();
+}
+
+// The sidebar's model is DERIVED from pages_ and rebuilt wholesale each time.
+// Cheap for a handful of pages, and it removes any chance of the nav drifting
+// out of sync with the page list -- or, now, out of sync with the language.
+void Shell::refreshNav() {
   std::vector<Sidebar::Item> items;
   items.reserve(pages_.size());
   for (const Page& p : pages_) {
     Sidebar::Item it;
-    it.section = p.section;
-    it.title = p.title;
+    // Translate here rather than at registration: pages_ holds keys, the
+    // sidebar holds display text, and this is the seam between them.  An empty
+    // section stays empty -- tr("") would be a lookup for a key nobody has.
+    it.section = p.section.empty() ? std::string() : tr(p.section);
+    it.title = tr(p.title);
     it.icon = p.icon;
     items.push_back(std::move(it));
   }
@@ -308,9 +316,32 @@ void Shell::showPage(int index) {
   }
   pg.host->setVisible(true);
   sidebar_->setCurrent(index);
-  titleBar_->setTitle(pg.title, pg.subtitle);
+  titleBar_->setTitle(tr(pg.title), tr(pg.subtitle));
   relayout();
   update();
+}
+
+void Shell::rebuildPages() {
+  // FIRST, before a single page widget dies: let the outside world drop the
+  // pointers it holds into these trees.  Doing this after the destruction
+  // would be the use-after-free this signal exists to prevent.
+  pagesAboutToRebuild.emit();
+
+  const int keep = current_ >= 0 ? current_ : 0;
+
+  // Drop every built page.  clearChildren() destroys them last-first and tells
+  // the Window about each node on the way out, so focus/hover/mouse-grab
+  // pointers aimed into these trees are cleared rather than left dangling.
+  for (Page& pg : pages_) pg.host = nullptr;
+  pageArea_->clearChildren();
+
+  // showPage() early-outs when the index is unchanged, and the page it would
+  // skip no longer exists -- so forget which page we were on before asking for
+  // it again.
+  current_ = -1;
+
+  refreshNav();
+  showPage(keep);
 }
 
 void Shell::onGeometryChanged() { relayout(); }
