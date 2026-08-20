@@ -1,0 +1,85 @@
+name: Bug report
+description: Something renders wrong, behaves wrong, or crashes
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        中文完全可以，不必翻译成英文。
+
+        Before filing: this toolkit is **Windows-only** today. X11/Cocoa are
+        scoped but unimplemented, so "does not build on Linux" is expected —
+        see [CONTRIBUTING.md](../blob/master/CONTRIBUTING.md) if you want to
+        help change that.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+      placeholder: |
+        The status chip in a frozen column kept the dark-skin colour after
+        switching to the light skin. Expected it to follow the theme like
+        every other cell.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: >
+        A `main()` that builds against the library is ideal. A description of
+        which showcase page and which clicks is also fine — the showcase is
+        the shared vocabulary here.
+      placeholder: |
+        1. Run build\bin\showcase.exe
+        2. Open "Frozen Columns and Spans"
+        3. Go to "Theme and Skins", apply the light skin
+        4. Return to the table -- the chips are still dark
+    validations:
+      required: true
+
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version and DPI scaling
+      placeholder: "Windows 10 Pro 22H2, 150% scaling, single monitor"
+    validations:
+      required: true
+
+  - type: input
+    id: skin
+    attributes:
+      label: Active skin
+      description: dark / light / contrast / amber, or your own
+      placeholder: "light"
+
+  - type: dropdown
+    id: build
+    attributes:
+      label: Which build did you see it in
+      multiple: true
+      options:
+        - Release (build.bat)
+        - Debug (build-debug.bat)
+        - ASan (build-asan.bat)
+    validations:
+      required: true
+
+  - type: textarea
+    id: asan
+    attributes:
+      label: ASan output, if you have it
+      description: >
+        For anything that smells like a lifetime or memory bug, `build-asan.bat`
+        then run the binary. ASan finds in seconds what a control room finds in
+        weeks — this section is the single most useful thing you can paste.
+      render: text
+
+  - type: input
+    id: commit
+    attributes:
+      label: Commit
+      description: "`git rev-parse --short HEAD`"
+      placeholder: "6b1a632"
