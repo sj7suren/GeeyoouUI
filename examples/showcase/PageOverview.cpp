@@ -10,6 +10,7 @@
 #include "geeyoou/widget/GroupBox.hpp"
 #include "geeyoou/widget/Label.hpp"
 #include "geeyoou/widget/ProgressBar.hpp"
+#include "i18n/I18n.hpp"
 
 namespace showcase {
 
@@ -59,11 +60,11 @@ class StatTile : public Widget {
   Color accent_;
 };
 
-Label* para(Widget* parent, float x, float y, float w, float h, const char* s,
+Label* para(Widget* parent, float x, float y, float w, float h, std::string s,
             float size = 12.0f) {
   auto* l = parent->add<Label>();
   l->setGeometry({x, y, w, h});
-  l->setText(s);
+  l->setText(std::move(s));
   l->addStyleClass("caption");
   l->setPixelSize(size);
   l->setAlign(HAlign::Left, VAlign::Top);
@@ -77,12 +78,12 @@ Size buildOverviewPage(Widget* content, AppState& app) {
   const Theme& th = Theme::current();
 
   // ---------------- stat tiles ----------------
-  struct TileSpec { Icon icon; const char* caption; const char* value; Color accent; };
+  struct TileSpec { Icon icon; std::string caption; const char* value; Color accent; };
   const TileSpec kTiles[] = {
-      {Icon::Check, "控件总数", "32", th.accent},
-      {Icon::Settings, "代码行数", "13.6k", th.ok},
-      {Icon::Warning, "上行依赖", "0", th.warn},
-      {Icon::Refresh, "后端", "Win32", th.primary},
+      {Icon::Check, tr("控件总数"), "32", th.accent},
+      {Icon::Settings, tr("代码行数"), "13.6k", th.ok},
+      {Icon::Warning, tr("上行依赖"), "0", th.warn},
+      {Icon::Refresh, tr("后端"), "Win32", th.primary},
   };
   StatTile* tiles[4];
   for (int i = 0; i < 4; ++i) {
@@ -102,35 +103,35 @@ Size buildOverviewPage(Widget* content, AppState& app) {
     std::snprintf(buf, sizeof(buf), "%.1f °C", app.hub.lastValue(app.chTemp));
     liveTile->setValue(buf);
   };
-  tiles[0]->set(Icon::Warning, "釜内温度（实时）", "--", th.accent);
+  tiles[0]->set(Icon::Warning, tr("釜内温度（实时）"), "--", th.accent);
 
   // ---------------- what this is ----------------
   auto* gAbout = content->add<GroupBox>();
   gAbout->setGeometry({0, 92, 604, 262});
-  gAbout->setTitle("GeeyoouUI 是什么");
+  gAbout->setTitle(tr("GeeyoouUI 是什么"));
 
   para(gAbout, 14, 44, 576, 200,
-       "面向工控 HMI / 上位机的跨平台 C++20 自绘控件库。\n\n"
+       tr("面向工控 HMI / 上位机的跨平台 C++20 自绘控件库。\n\n"
        "· 自绘渲染（Blend2D），跨平台外观完全一致\n"
        "· 无 moc —— 信号槽用模板 + std::function，没有代码生成步骤\n"
        "· 脏矩形增量重绘 —— HMI 画面 90% 的像素是静止的\n"
        "· 热路径零分配 —— 实时数据走固定容量环形缓冲\n"
        "· 平台层是纯虚接口 —— 新后端只需给出一块像素缓冲\n\n"
        "左侧导航逐页浏览各控件族。所有页面共用同一个采集线程与 DataHub：\n"
-       "「HMI 监控」和「运维控制台」看到的是同一份实时数据。");
+       "「HMI 监控」和「运维控制台」看到的是同一份实时数据。"));
 
   // ---------------- layer map ----------------
   auto* gLayers = content->add<GroupBox>();
   gLayers->setGeometry({620, 92, 424, 262});
-  gLayers->setTitle("分层与规模");
+  gLayers->setTitle(tr("分层与规模"));
 
-  struct LayerSpec { const char* name; int lines; Color color; };
+  struct LayerSpec { std::string name; int lines; Color color; };
   const LayerSpec kLayers[] = {
-      {"widget  控件树 + 窗口层", 8489, th.accent},
-      {"render  绘制 / 主题 / 样式 / 图标", 2681, th.warn},
-      {"hmi     领域控件", 980, th.ok},
-      {"platform 移植边界", 819, th.textDim},
-      {"core    无依赖基础", 660, th.primary},
+      {tr("widget  控件树 + 窗口层"), 8489, th.accent},
+      {tr("render  绘制 / 主题 / 样式 / 图标"), 2681, th.warn},
+      {tr("hmi     领域控件"), 980, th.ok},
+      {tr("platform 移植边界"), 819, th.textDim},
+      {tr("core    无依赖基础"), 660, th.primary},
   };
   for (int i = 0; i < 5; ++i) {
     auto* l = gLayers->add<Label>();
@@ -147,7 +148,7 @@ Size buildOverviewPage(Widget* content, AppState& app) {
 
     auto* n = gLayers->add<Label>();
     n->setGeometry({250, 46.0f + float(i) * 40.0f, 160, 20});
-    n->setText(std::to_string(kLayers[i].lines) + " 行");
+    n->setText(std::to_string(kLayers[i].lines) + tr(" 行"));
     n->addStyleClass("caption");
     n->setPixelSize(11.0f);
     n->setAlign(HAlign::Right, VAlign::Middle);
@@ -156,15 +157,15 @@ Size buildOverviewPage(Widget* content, AppState& app) {
   // ---------------- not implemented ----------------
   auto* gTodo = content->add<GroupBox>();
   gTodo->setGeometry({0, 370, 1044, 180});
-  gTodo->setTitle("明确未实现（有意推迟，理由见 docs/architecture.md §4）");
+  gTodo->setTitle(tr("明确未实现（有意推迟，理由见 docs/architecture.md §4）"));
 
-  struct TodoSpec { const char* text; StatusLed::State state; };
+  struct TodoSpec { std::string text; StatusLed::State state; };
   const TodoSpec kTodo[] = {
-      {"布局引擎 —— v1 用绝对坐标，符合固定分辨率组态画面习惯", StatusLed::State::Off},
-      {"IME 内联预编辑 —— 中文输入可用，但组合串由系统 IME 窗口绘制", StatusLed::State::Warn},
-      {"撤销/重做、双击选词 —— 文本控件无 undo 栈", StatusLed::State::Off},
-      {"无障碍 UIA —— 领域专用库，优先级低", StatusLed::State::Off},
-      {"X11 / Cocoa 后端 —— 接口已预留，未实现", StatusLed::State::Warn},
+      {tr("布局引擎 —— v1 用绝对坐标，符合固定分辨率组态画面习惯"), StatusLed::State::Off},
+      {tr("IME 内联预编辑 —— 中文输入可用，但组合串由系统 IME 窗口绘制"), StatusLed::State::Warn},
+      {tr("撤销/重做、双击选词 —— 文本控件无 undo 栈"), StatusLed::State::Off},
+      {tr("无障碍 UIA —— 领域专用库，优先级低"), StatusLed::State::Off},
+      {tr("X11 / Cocoa 后端 —— 接口已预留，未实现"), StatusLed::State::Warn},
   };
   for (int i = 0; i < 5; ++i) {
     auto* led = gTodo->add<StatusLed>();
