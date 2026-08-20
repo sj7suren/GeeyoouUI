@@ -51,6 +51,34 @@ constexpr float kWheelZoom = 1.12f;
 // is about the shake of a hand on a plant HMI trackball.
 constexpr float kClickSlop = 4.0f;
 
+// THE VIEWPORT HAS ITS OWN GROUND, AND IT IS NEVER THE THEME'S FIELD COLOUR.
+//
+// This is the fix for a defect that only shows under a light skin: `field` there
+// is #FFFFFF, the models are light grey, and a white model on a white field is
+// not a subtle contrast problem -- it is an invisible one.  A 3D viewport is not
+// a text box; it is a window onto a world, and every CAD and modelling tool on
+// the planet gives it a mid-tone of its own for exactly this reason.
+//
+// So the backdrop is picked from the theme's BRIGHTNESS rather than from any of
+// its colours, and it is clamped to the middle of the range in both directions:
+// dark enough to show a white vessel, light enough to show a dark one.
+bool themeIsLight(const Theme& t) {
+  // Rec. 601 luma, which is close enough for a light/dark decision and needs no
+  // colour-space machinery.
+  const float y = 0.299f * float(t.background.red()) +
+                  0.587f * float(t.background.green()) +
+                  0.114f * float(t.background.blue());
+  return y > 127.0f;
+}
+
+// Lighting DARKENS.  Always, under every skin.
+//
+// The first version mixed unlit faces towards Theme::background, which is a
+// perfectly reasonable-looking line of code and is wrong twice over: under a
+// light skin it makes shadows WHITE, so a model loses its shading exactly where
+// it needed it most.  Shading is physics; the theme has no vote.
+const Color kShadow = Color::rgb(0x07, 0x0A, 0x11);
+
 float signedArea(Point a, Point b, Point c) {
   return (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
 }
@@ -196,6 +224,16 @@ void View3D::setGridVisible(bool on) {
   update();
 }
 
+void View3D::setColorMode(ColorMode m) {
+  colorMode_ = m;
+  update();
+}
+
+void View3D::setAnnotationsVisible(bool on) {
+  notes_ = on;
+  update();
+}
+
 void View3D::setHoverHighlight(bool on) {
   hoverHighlight_ = on;
   hovered_ = kNoPart;
@@ -304,14 +342,47 @@ void View3D::resolveParts() {
     const bool hot = (PartId(i) == selected_) ||
                      (hoverHighlight_ && PartId(i) == hovered_);
     partLook_[i].color = colorFor(p, hot);
+    partLook_[i].accent = accentFor(p);
     partLook_[i].visible = p.visible;
+  }
+}
+
+// The heat ramp: cold -> nominal -> warm -> over.
+//
+// Built from the theme's SEMANTIC colours rather than from hard-coded hues, so a
+// plant that recolours "warning" gets a ramp that still matches its own alarm
+// pages -- which is the whole reason those tokens are named by meaning.
+Color rampColor(const Theme& t, float v) {
+  v = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+  if (v < 0.34f) return t.accent.lerp(t.success, v / 0.34f);
+  if (v < 0.67f) return t.success.lerp(t.warn, (v - 0.34f) / 0.33f);
+  return t.warn.lerp(t.danger, (v - 0.67f) / 0.33f);
+}
+
+// The callout colour: the part's CONDITION, or the theme's accent when there is
+// nothing to report.  Never the material -- see PartLook::accent.
+Color View3D::accentFor(const Scene3D::Part& p) const {
+  const Theme& t = Theme::current();
+  switch (p.state) {
+    case PartState::Running: return t.success;
+    case PartState::Stopped: return t.textDim;
+    case PartState::Fault: return t.danger;
+    case PartState::Maintenance: return t.warn;
+    case PartState::Disabled: return t.textDisabled;
+    case PartState::Normal:
+    default: return t.accent;
   }
 }
 
 Color View3D::colorFor(const Scene3D::Part& p, bool highlighted) const {
   const Theme& t = Theme::current();
   Color base = t.panelBorder;
-  {
+
+  if (colorMode_ == ColorMode::Material) {
+    base = p.material;
+  } else if (colorMode_ == ColorMode::Value) {
+    base = rampColor(t, p.value);
+  } else {
     switch (p.state) {
       // Resolved HERE, against the theme that is live now.  Never stored.
       case PartState::Running:     base = t.success; break;
@@ -333,7 +404,6 @@ Color View3D::colorFor(const Scene3D::Part& p, bool highlighted) const {
 }
 
 void View3D::paintBodies(Painter& p) {
-  const Theme& t = Theme::current();
   drawnFaces_ = 0;
 
   for (const BodyRef& ref : order_) {
@@ -366,9 +436,10 @@ void View3D::paintBodies(Painter& p) {
       const Vec3 nrm = (b.view - a.view).cross(c.view - a.view).normalized();
       const float diffuse = std::max(0.0f, nrm.dot(kLightDir));
       const float shade = kAmbient + (1.0f - kAmbient) * diffuse;
-      // Shaded TOWARDS THE BACKGROUND rather than towards black, so the model
-      // sits in the scene under a light skin as well as a dark one.
-      const Color col = base.lerp(t.background, (1.0f - shade) * 0.85f);
+      // Towards the shadow tone, never towards the page.  Capped at 0.72 so a
+      // face in full shade still shows WHICH COLOUR it is -- losing the status
+      // colour to the lighting would defeat the point of the control.
+      const Color col = base.lerp(kShadow, (1.0f - shade) * 0.72f);
 
       Point sa = a.screen;
       Point sb = b.screen;
@@ -377,6 +448,26 @@ void View3D::paintBodies(Painter& p) {
       p.fillTriangle(sa, sb, sc, col);
       ++drawnFaces_;
     }
+  }
+}
+
+// A vertical gradient, in bands, because Painter has no gradient and does not
+// need one for this: sixteen strips across a viewport are invisible as bands and
+// cost sixteen rectangles.  Lighter at the top, the way a sky is, which also
+// gives the eye a horizon to judge the orbit against.
+void View3D::paintBackdrop(Painter& p, const Rect& viewport) const {
+  const Theme& t = Theme::current();
+  const bool light = themeIsLight(t);
+  // Mid-tones, both of them, and neither taken from the theme's own surfaces.
+  const Color top = light ? Color::rgb(0xC2, 0xC9, 0xD6) : Color::rgb(0x26, 0x2E, 0x3C);
+  const Color bottom = light ? Color::rgb(0x94, 0x9E, 0xB0) : Color::rgb(0x11, 0x15, 0x1D);
+
+  const int bands = 16;
+  const float h = viewport.height() / float(bands);
+  for (int i = 0; i < bands; ++i) {
+    const float f = (float(i) + 0.5f) / float(bands);
+    p.fillRect({viewport.x(), viewport.y() + h * float(i), viewport.width(), h + 1.0f},
+               top.lerp(bottom, f));
   }
 }
 
@@ -406,7 +497,11 @@ void View3D::paintGrid(Painter& p, const Rect& viewport) const {
     return true;
   };
 
-  const Color line = t.grid.withAlpha(150);
+  // Off the BACKDROP, not off the theme: t.grid is a near-white under a light
+  // skin and would vanish into a mid-grey viewport.
+  const bool light = themeIsLight(t);
+  const Color line = light ? Color::rgb(0x7C, 0x86, 0x99).withAlpha(190)
+                           : Color::rgb(0x3A, 0x44, 0x58).withAlpha(190);
   for (int i = 0; i <= lines; ++i) {
     const float o = -half + step * float(i);
     Point p0, p1;
@@ -419,10 +514,95 @@ void View3D::paintGrid(Painter& p, const Rect& viewport) const {
   }
 }
 
+// Callouts, drawn LAST so nothing in the model covers them.
+//
+// The anchor is the part's centre pushed by the annotation's offset; the label
+// sits a fixed number of PIXELS from it, so a label stays readable at any zoom
+// rather than growing with the model.  A label whose anchor is behind the eye is
+// dropped -- there is no sensible place on screen for "behind you".
+void View3D::paintAnnotations(Painter& p, const Rect& viewport) const {
+  if (!scene_ || scene_->annotationCount() == 0) return;
+
+  const Theme& t = Theme::current();
+  const bool light = themeIsLight(t);
+  const Color panel = light ? Color::rgb(0xFF, 0xFF, 0xFF).withAlpha(235)
+                            : Color::rgb(0x14, 0x19, 0x23).withAlpha(235);
+  const Color titleCol = light ? Color::rgb(0x17, 0x1F, 0x2E) : Color::rgb(0xE6, 0xEB, 0xF4);
+  const Color valueCol = light ? Color::rgb(0x5A, 0x68, 0x80) : Color::rgb(0x86, 0x94, 0xAD);
+
+  const float aspect = viewport.width() / std::max(1.0f, viewport.height());
+  const Mat4 vp = camera_.projection(aspect) * camera_.view();
+  const float halfW = viewport.width() * 0.5f;
+  const float halfH = viewport.height() * 0.5f;
+
+  for (std::size_t i = 0; i < scene_->annotationCount(); ++i) {
+    const Scene3D::Annotation& a = scene_->annotation(AnnotationId(i));
+    if (!a.visible) continue;
+    if (a.part < partLook_.size() && !partLook_[a.part].visible) continue;
+
+    const Vec3 world = scene_->partCenter(a.part) + a.offset;
+    float w = 1.0f;
+    const Vec3 clip = vp.transformPoint(world, &w);
+    if (w <= 1e-4f) continue;
+    const float inv = 1.0f / w;
+    const Point anchor{viewport.x() + halfW + clip.x * inv * halfW,
+                       viewport.y() + halfH - clip.y * inv * halfH};
+    // A MARGIN, not the viewport itself.  A callout is offset ABOVE the part it
+    // names, and the camera frames the model's bounds -- which do not include
+    // the offset -- so the anchor of a label on the tallest part is routinely a
+    // few dozen pixels off the top edge.  Dropping those made the labels that
+    // mattered most the ones that vanished.  Anchors BEHIND the eye are still
+    // dropped, above: there is no sensible place on screen for "behind you".
+    if (!viewport.deflated(-64.0f).contains(anchor)) continue;
+
+    const Color accent =
+        (a.part < partLook_.size()) ? partLook_[a.part].accent : t.accent;
+
+    const float tw = measureText(a.title, t.fontSmall).width;
+    const float vw = a.value.empty() ? 0.0f : measureText(a.value, t.fontSmall).width;
+    const float boxW = std::max(tw, vw) + 18.0f;
+    const float boxH = a.value.empty() ? 22.0f : 34.0f;
+
+    // Up and to the right, then pulled back inside the viewport if that would
+    // take it off the edge.  A callout that leaves the widget is a callout that
+    // gets clipped in half.
+    float bx = anchor.x + 26.0f;
+    float by = anchor.y - 30.0f - boxH * 0.5f;
+    if (bx + boxW > viewport.right() - 4.0f) bx = anchor.x - 26.0f - boxW;
+    if (by < viewport.y() + 4.0f) by = anchor.y + 26.0f;
+
+    const Rect box(bx, by, boxW, boxH);
+    p.strokeLine(anchor, {box.x() < anchor.x ? box.right() : box.x(),
+                          box.center().y}, accent.withAlpha(200), 1.0f);
+    p.fillCircle(anchor, 3.0f, accent);
+
+    p.fillRoundRect(box, 5.0f, panel);
+    p.strokeRoundRect(box.deflated(0.5f), 5.0f, accent.withAlpha(210), 1.0f);
+    // The status colour repeated as a bar on the leading edge: at a glance the
+    // label says WHICH part and HOW it is, without reading either line.
+    p.fillRoundRect({box.x() + 2.0f, box.y() + 4.0f, 3.0f, box.height() - 8.0f}, 1.5f,
+                    accent);
+
+    if (a.value.empty()) {
+      p.drawText({box.x() + 12.0f, box.center().y}, a.title, t.fontSmall, titleCol,
+                 HAlign::Left, VAlign::Middle);
+    } else {
+      p.drawText({box.x() + 12.0f, box.y() + 11.0f}, a.title, t.fontSmall, titleCol,
+                 HAlign::Left, VAlign::Middle);
+      p.drawText({box.x() + 12.0f, box.y() + 24.0f}, a.value, t.fontSmall, valueCol,
+                 HAlign::Left, VAlign::Middle);
+    }
+  }
+}
+
 void View3D::paintEmpty(Painter& p) const {
   const Theme& t = Theme::current();
   const Rect r = localRect();
-  p.drawText(r.center(), "未加载三维模型", t.fontBody, t.textDim, HAlign::Center,
+  // Against the BACKDROP, which is a mid-tone under either skin, so the message
+  // needs a colour of its own rather than the theme's dim text.
+  const Color fg = themeIsLight(t) ? Color::rgb(0x4A, 0x53, 0x63)
+                                   : Color::rgb(0x8A, 0x95, 0xA8);
+  p.drawText(r.center(), "未加载三维模型", t.fontBody, fg, HAlign::Center,
              VAlign::Middle);
 }
 
@@ -430,11 +610,15 @@ void View3D::onPaint(Painter& p, const Rect&) {
   const Theme& t = Theme::current();
   const Rect r = localRect();
 
-  p.fillRoundRect(r, t.radius, t.field);
+  const Rect viewport = r.deflated(1.0f);
+
+  p.save();
+  p.clip(r);
+  if (!viewport.isEmpty()) paintBackdrop(p, viewport);
+  p.restore();
   p.strokeRoundRect(r.deflated(0.5f), t.radius,
                     hasFocus() ? t.focusRing : t.panelBorder, 1.0f);
 
-  const Rect viewport = r.deflated(1.0f);
   if (!scene_ || scene_->nodeCount() == 0 || viewport.isEmpty()) {
     paintEmpty(p);
     return;
@@ -446,6 +630,7 @@ void View3D::onPaint(Painter& p, const Rect&) {
   projectScene(viewport);
   if (grid_) paintGrid(p, viewport);
   paintBodies(p);
+  if (notes_) paintAnnotations(p, viewport);
   p.restore();
 
   hasFrame_ = true;
