@@ -469,3 +469,29 @@ GEEYOOU_TEST(showcase_pages, the_tables_big_page_is_placed_sized_and_grown) {
   checkPage(ctx_, content, design, /*expectedUnplaced=*/4, /*minWidgets=*/8);
   paintOnce(content, int(design.width), int(design.height));
 }
+
+// ============================================================ ÈýÎ¬ ==========
+//
+// A 3D viewport is still just a widget to the layout engine, and proving that is
+// the first thing worth knowing about a control this unusual: it is measured,
+// grown, shrunk and painted by the same three properties as every other page.
+//
+// paintOnce matters more here than anywhere else in this file.  The page's whole
+// job happens inside one onPaint -- transform, cull, sort, fill -- so a page that
+// were only MEASURED would have the entire renderer compiled, instrumented by
+// ASan, and never executed.
+GEEYOOU_TEST(showcase_pages, the_scene3d_page_is_placed_sized_and_grown) {
+  showcase::AppState app;
+  app.chFlow = app.hub.addChannel("flow", "m3/h");
+  app.chTemp = app.hub.addChannel("temp", "C");
+  app.chPress = app.hub.addChannel("press", "MPa");
+
+  Widget content;
+  const Size design = showcase::buildScene3DPage(&content, app);
+  // Four: the part list is a TableView, and a TableView owns four resident
+  // editors that are never laid out until a cell is edited.  The View3D itself
+  // owns no children at all -- every triangle it draws is a fill, not a widget,
+  // which is the point of the whole design.
+  checkPage(ctx_, content, design, /*expectedUnplaced=*/4, /*minWidgets=*/10);
+  paintOnce(content, int(design.width), int(design.height));
+}
