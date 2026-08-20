@@ -49,6 +49,16 @@
 
 namespace geeyoou {
 
+// What decides a part's colour.
+//
+// Three, because an operator asks three different questions of the same model
+// and no single colouring answers all of them.
+enum class ColorMode : std::uint8_t {
+  Status,    // the alarm question: which one has gone red
+  Material,  // the geometry question: what is this thing, ignore the alarms
+  Value,     // the process question: where is it hot -- a ramp over partValue()
+};
+
 class View3D : public Widget {
  public:
   GEEYOOU_STYLE_TYPE(View3D, Widget)
@@ -73,6 +83,14 @@ class View3D : public Widget {
   void frameAll();
   // frameAll(), plus the default orientation.  What a "reset view" button calls.
   void resetView();
+
+  void setColorMode(ColorMode m);
+  ColorMode colorMode() const { return colorMode_; }
+
+  // Callouts: a leader line from a part to a small label.  Off costs nothing --
+  // the scene is not asked for them at all.
+  void setAnnotationsVisible(bool on);
+  bool areAnnotationsVisible() const { return notes_; }
 
   // A ground reference.  Worth having: without one, an orbit reads as the model
   // wobbling rather than as the camera moving.
@@ -140,10 +158,15 @@ class View3D : public Widget {
   // once per BODY, and a vessel is three bodies wearing one part.
   void resolveParts();
   void projectScene(const Rect& viewport);
+  // The viewport's own ground, and it deliberately does NOT follow the theme's
+  // field colour.  See the definition: a white field cannot show a white model.
+  void paintBackdrop(Painter& p, const Rect& viewport) const;
   void paintGrid(Painter& p, const Rect& viewport) const;
+  void paintAnnotations(Painter& p, const Rect& viewport) const;
   void paintBodies(Painter& p);
   void paintEmpty(Painter& p) const;
   Color colorFor(const Scene3D::Part& part, bool highlighted) const;
+  Color accentFor(const Scene3D::Part& part) const;
   // One statement each, so the emit is the last thing the frame does.
   void emitCameraChanged();
   void emitPartClicked(PartId id);
@@ -155,6 +178,8 @@ class View3D : public Widget {
   // they have, a resize leaves their view alone.  Reset hands it back.
   bool cameraTouched_ = false;
   bool grid_ = true;
+  bool notes_ = true;
+  ColorMode colorMode_ = ColorMode::Status;
   bool hoverHighlight_ = true;
   PartId hovered_ = kNoPart;
   PartId selected_ = kNoPart;
@@ -168,7 +193,13 @@ class View3D : public Widget {
 
   // --- per-frame scratch, reserved by setScene and never grown in onPaint ---
   struct PartLook {
-    Color color;
+    Color color;   // what the body is filled with, per the colour mode
+    // What a CALLOUT is drawn in, and it is deliberately not `color`.  A label's
+    // job is "which part, and how is it" -- so it follows the STATUS even while
+    // the model is being shaded by material or by value.  It also has to stay
+    // legible on a white label, and a part whose material is white would give a
+    // border nobody can see.
+    Color accent;
     bool visible = true;
   };
   std::vector<PartLook> partLook_;
