@@ -11,6 +11,7 @@
 #include "geeyoou/widget/GroupBox.hpp"
 #include "geeyoou/widget/Label.hpp"
 #include "geeyoou/widget/PushButton.hpp"
+#include "i18n/I18n.hpp"
 
 namespace showcase {
 
@@ -23,34 +24,34 @@ Size buildHmiPage(Widget* content, AppState& app) {
   flowGauge->setGeometry({0, 0, 250, 214});
   flowGauge->setRange(0, 100);
   flowGauge->setBands(75, 90);
-  flowGauge->setTitle("进料流量");
+  flowGauge->setTitle(tr("进料流量"));
   flowGauge->setUnit("m³/h");
 
   auto* tempGauge = content->add<Gauge>();
   tempGauge->setGeometry({266, 0, 250, 214});
   tempGauge->setRange(0, 200);
   tempGauge->setBands(150, 180);
-  tempGauge->setTitle("釜内温度");
+  tempGauge->setTitle(tr("釜内温度"));
   tempGauge->setUnit("°C");
 
   auto* pressGauge = content->add<Gauge>();
   pressGauge->setGeometry({532, 0, 250, 214});
   pressGauge->setRange(0, 10);
   pressGauge->setBands(7, 8.5);
-  pressGauge->setTitle("系统压力");
+  pressGauge->setTitle(tr("系统压力"));
   pressGauge->setUnit("MPa");
 
   auto* statusPanel = content->add<GroupBox>();
   statusPanel->setGeometry({798, 0, 274, 214});
-  statusPanel->setTitle("设备状态");
+  statusPanel->setTitle(tr("设备状态"));
 
-  struct LedSpec { const char* caption; StatusLed::State init; };
+  struct LedSpec { std::string caption; StatusLed::State init; };
   const LedSpec kLeds[] = {
-      {"进料泵 P-101", StatusLed::State::Ok},
-      {"加热器 H-201", StatusLed::State::Ok},
-      {"泄压阀 V-303", StatusLed::State::Off},
-      {"超压报警", StatusLed::State::Off},
-      {"Modbus 通讯", StatusLed::State::Ok},
+      {tr("进料泵 P-101"), StatusLed::State::Ok},
+      {tr("加热器 H-201"), StatusLed::State::Ok},
+      {tr("泄压阀 V-303"), StatusLed::State::Off},
+      {tr("超压报警"), StatusLed::State::Off},
+      {tr("Modbus 通讯"), StatusLed::State::Ok},
   };
   StatusLed* leds[5];
   for (int i = 0; i < 5; ++i) {
@@ -63,12 +64,12 @@ Size buildHmiPage(Widget* content, AppState& app) {
 
   auto* chart = content->add<TrendChart>();
   chart->setGeometry({0, 230, 1072, 330});
-  chart->setTitle("实时趋势");
+  chart->setTitle(tr("实时趋势"));
   chart->setYRange(0, 200);
   chart->setGridDivisions(8, 4);
-  chart->addChannel("流量", th.accent, 900);
-  chart->addChannel("温度", th.warn, 900);
-  chart->addChannel("压力×20", th.ok, 900);
+  chart->addChannel(tr("流量"), th.accent, 900);
+  chart->addChannel(tr("温度"), th.warn, 900);
+  chart->addChannel(tr("压力×20"), th.ok, 900);
 
   // Shared by the three lambdas below and destroyed with the last of them --
   // a raw new here would leak every time the page is rebuilt.
@@ -77,29 +78,29 @@ Size buildHmiPage(Widget* content, AppState& app) {
 
   auto* btnStart = content->add<PushButton>();
   btnStart->setGeometry({0, 576, 120, 38});
-  btnStart->setText("启动");
+  btnStart->setText(tr("启动"));
   btnStart->setVariant(ButtonVariant::Success);
 
   auto* btnStop = content->add<PushButton>();
   btnStop->setGeometry({132, 576, 120, 38});
-  btnStop->setText("停止");
+  btnStop->setText(tr("停止"));
   btnStop->setVariant(ButtonVariant::Danger);
 
   auto* status = content->add<Label>();
   status->setGeometry({268, 576, 500, 38});
   status->addStyleClass("caption");
   status->setPixelSize(12.0f);
-  status->setText("状态：采集中");
+  status->setText(tr("状态：采集中"));
 
   btnStart->clicked.connect([running, status, leds] {
     *running = true;
-    status->setText("状态：采集中");
+    status->setText(tr("状态：采集中"));
     leds[0]->setState(StatusLed::State::Ok);
     leds[4]->setState(StatusLed::State::Ok);
   });
   btnStop->clicked.connect([running, status, leds] {
     *running = false;
-    status->setText("状态：已停止（数据保持）");
+    status->setText(tr("状态：已停止（数据保持）"));
     leds[0]->setState(StatusLed::State::Off);
     leds[1]->setState(StatusLed::State::Off);
   });
