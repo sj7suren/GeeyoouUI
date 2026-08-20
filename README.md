@@ -12,6 +12,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/sj7suren/GeeyoouUI/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/sj7suren/GeeyoouUI/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg">
   <img alt="C++20" src="https://img.shields.io/badge/C%2B%2B-20-00599C.svg">
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20(Win32)-lightgrey.svg">
@@ -58,7 +59,7 @@ comply with and nothing to deploy beyond your own executable.
 | **Hot path allocations** | ✅ Zero — live data goes through fixed-capacity ring buffers | General purpose |
 | **Skinning** | ✅ Skin registry + one accent color drives the palette + QSS-like selectors, hot-swap at runtime | QSS, per-widget |
 | **Layout** | ✅ `BoxLayout` / `GridLayout` with stretch, min/max and column spans — **or** absolute coordinates, which is how mimic screens are authored | Full layout system |
-| **Platforms** | ❌ **Windows only today.** Platform layer is 12 pure virtuals; X11/Cocoa unimplemented | Windows, macOS, Linux, mobile, embedded |
+| **Platforms** | ❌ **Windows only today.** Platform layer is 21 pure virtuals across two interfaces; X11/Cocoa unimplemented | Windows, macOS, Linux, mobile, embedded |
 | **Accessibility** | ❌ Not implemented (no UIA) | Mature |
 | **Ecosystem** | ❌ 30+ widgets, one library | Enormous |
 
@@ -128,7 +129,7 @@ compiler.
   suited to unattended long-running operation
 - **Layout when you want it** — `BoxLayout` / `GridLayout` with stretch and min/max, or plain
   absolute coordinates when the screen is a mimic and position carries process meaning
-- **Platform layer is a pure interface** — v1 implements Win32; X11 / Cocoa need 12 methods
+- **Platform layer is a pure interface** — v1 implements Win32; X11 / Cocoa need 21 methods, most of them one-liners
 
 ## The showcase app
 
@@ -534,7 +535,7 @@ the software-rendered `View3D`.
 |---|---|
 | Accessibility (UIA) | Needs the widget tree to stabilize first |
 | Inline IME pre-edit | The system candidate window already tracks the caret; inline editing is polish |
-| X11 / Cocoa backends | The platform layer is 12 pure virtuals — the port is scoped, not started |
+| X11 / Cocoa backends | The platform layer is 21 pure virtuals across two interfaces — the port is scoped, not started |
 
 See `docs/roadmap.md` for what comes next.
 
@@ -542,7 +543,7 @@ See `docs/roadmap.md` for what comes next.
 
 Issues and PRs are welcome — especially:
 
-- **X11 or Cocoa backend** — implement `platform/Platform.hpp` (12 methods) and the toolkit follows
+- **X11 or Cocoa backend** — implement `platform/Platform.hpp` (21 methods, most trivial) and the toolkit follows
 - **Domain icon packs** — pumps, valves, breakers, conveyors; `addSvgPath` makes this cheap
 - **Skins** — a skin is a `Theme` + a stylesheet; ship yours as a single file
 - **Bug reports from real plant floors** — the ones that matter most
