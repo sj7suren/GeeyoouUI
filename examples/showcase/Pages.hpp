@@ -40,6 +40,10 @@ Size buildTablesFrozenPage(Widget* content);
 Size buildTablesTreePage(Widget* content);
 Size buildTablesAsyncPage(Widget* content);
 Size buildTablesBigPage(Widget* content);
+// 三维。Takes AppState because the vessel's colour is driven by the same live
+// temperature every other page reads -- a status on a part is only worth having
+// if it comes from the process rather than from a demo button.
+Size buildScene3DPage(Widget* content, AppState& app);
 Size buildWindowPage(Widget* content, ShowcaseWindow& win);
 Size buildThemePage(Widget* content, ShowcaseWindow& win);
 
