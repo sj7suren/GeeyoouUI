@@ -284,7 +284,11 @@ Size buildTablesFrozenPage(Widget* content) {
   std::vector<TableView::Column> cols;
   cols.push_back(kindColumn("#", 46.0f, CellKind::Index));
   cols.push_back(textColumn("位号", 110.0f, true));
-  cols.push_back(textColumn("名称", 190.0f));
+  // Flexible, so a wide window fills the middle band instead of leaving a
+  // stripe of empty grid between the last column and the frozen pane -- the one
+  // thing a table with nothing but fixed columns always looks like on a 1676px
+  // screen.
+  cols.push_back(textColumn("名称", 0.0f));
   cols.push_back(textColumn("区域", 130.0f));
   cols.push_back(textColumn("类型", 100.0f));
   cols.push_back(textColumn("标签", 160.0f));
