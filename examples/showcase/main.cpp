@@ -103,6 +103,10 @@ int main() {
                  [](Widget* c) { return buildInputsPage(c); });
   shell->addPage("", "下拉选择", "单选 / 搜索 / 多选 / 树形 / 级联 / 菜单 / 日期",
                  Icon::ChevronDown, [](Widget* c) { return buildSelectsPage(c); });
+  shell->addPage("", "对话框与新控件",
+                 "模态对话框 / 标签页 / 数字键盘 / 右键菜单 / 棒图",
+                 Icon::WindowMaximize,
+                 [&win](Widget* c) { return buildDialogsPage(c, win); });
 
   // 表格族。Seven entries rather than one page with seven tables: each of these
   // demonstrates a different PROPERTY (virtualisation, frozen geometry, a row
