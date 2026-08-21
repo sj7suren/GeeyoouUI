@@ -30,6 +30,7 @@ add_executable(geeyoou_tests
   widget/test_tabview.cpp
   widget/test_bargraph.cpp
   widget/test_keypad.cpp
+  widget/test_tooltip.cpp
   widget/test_r2_safety.cpp
   widget/test_r2_remediation.cpp
   widget/test_rem3_doors.cpp
