@@ -85,6 +85,12 @@ class Window : public Widget {
   void openPopup(Widget* popup, const Rect& anchor);
   void closePopup();
   Widget* popup() const { return popup_; }
+
+  // Whether a tooltip bubble is on screen right now.  A tooltip arms when the
+  // cursor comes to rest on a widget carrying one and shows after a short delay;
+  // this reports the shown state, mainly for tests and for an app that wants to
+  // suppress its own transient overlays while a hint is up.
+  bool isTooltipVisible() const { return tooltipShown_; }
   // Fires after the popup closes, for whatever opened it.
   Signal<> popupClosed;
 
@@ -152,6 +158,19 @@ class Window : public Widget {
   // callback captures `this`.  Held so the destructor can stop it -- otherwise
   // closing any window at all ticks into freed memory a few milliseconds later.
   TimerId animationTimer_ = 0;
+
+  // --- tooltip ---
+  // A hover hint drawn by the Window itself (not a widget, so it captures no
+  // input and needs no dismiss handling).  Armed when the hovered widget -- or
+  // an ancestor -- carries a tooltip, shown after a rest delay, hidden on the
+  // next hover change, move-away or press.  Same held-timer rule as the
+  // animation clock: the callback captures `this`, so the destructor stops it.
+  void armTooltip(Point cursorWindow);
+  void hideTooltip();
+  std::string tooltipText_;
+  Point tooltipAt_{};
+  bool tooltipShown_ = false;
+  TimerId tooltipTimer_ = 0;
 
   // Declared LAST so it is destroyed FIRST: the skin subscription captures
   // `this` and calls update(), which reaches for platformWindow_.  Anything
