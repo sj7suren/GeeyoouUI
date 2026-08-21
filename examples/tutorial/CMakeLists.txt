@@ -32,5 +32,13 @@ if(MSVC)
   target_compile_options(tutorial_shots PRIVATE /utf-8 /W4)
 endif()
 
-set_target_properties(tutorial tutorial_shots PROPERTIES
+# Offscreen gallery for the new widgets -- a visual check target.
+add_executable(widget_shots widget_shots.cpp)
+target_link_libraries(widget_shots PRIVATE geeyoou::geeyoou)
+target_include_directories(widget_shots PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+if(MSVC)
+  target_compile_options(widget_shots PRIVATE /utf-8 /W4)
+endif()
+
+set_target_properties(tutorial tutorial_shots widget_shots PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
