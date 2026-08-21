@@ -40,6 +40,9 @@ set(GEEYOOU_SOURCES
   src/widget/Slider.cpp
   src/widget/ProgressBar.cpp
   src/widget/GroupBox.cpp
+  src/widget/Dialog.cpp
+  src/widget/TabView.cpp
+  src/widget/NumericKeypad.cpp
   src/widget/Separator.cpp
   src/widget/SpinBox.cpp
   src/widget/LineEdit.cpp
@@ -57,6 +60,7 @@ set(GEEYOOU_SOURCES
   src/widget/TreeTableModel.cpp
   src/widget/TablePager.cpp
   src/widget/MenuButton.cpp
+  src/widget/ContextMenu.cpp
   src/widget/Cascader.cpp
   src/widget/DatePicker.cpp
   src/scene3d/Mesh.cpp
@@ -64,6 +68,7 @@ set(GEEYOOU_SOURCES
   src/scene3d/View3D.cpp
   src/hmi/StatusLed.cpp
   src/hmi/Gauge.cpp
+  src/hmi/Bargraph.cpp
   src/hmi/TrendChart.cpp
   src/hmi/DataHub.cpp
   src/hmi/AlarmList.cpp
