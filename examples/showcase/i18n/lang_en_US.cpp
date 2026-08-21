@@ -932,12 +932,22 @@ const LangEntry kEntries[] = {
      "Set the target temperature on the keypad (touchscreen)"},
     {"已设定目标温度 = %.1f °C", "Target temperature set = %.1f °C"},
     {"对话框是全窗口遮罩 + 居中面板：它靠几何实现模态，背后点不到。\n\n"
-     "触摸屏没有物理键盘，改设定值必须弹屏上数字键盘——工控现场这是刚需。",
+     "触摸屏没有物理键盘，改设定值必须弹屏上数字键盘——工控现场这是刚需。\n\n"
+     "把指针停在上面的按钮或棒图上，约 0.6 秒后会浮出气泡提示（Tooltip）。",
      "A dialog is a full-window scrim plus a centred panel: it is modal by "
      "geometry, so nothing behind it can be clicked.\n\n"
      "A touchscreen has no physical keyboard, so changing a set point means "
      "popping up an on-screen keypad — on a plant floor that is essential, not "
-     "a nicety."},
+     "a nicety.\n\n"
+     "Rest the pointer on a button or bargraph above and a tooltip bubble "
+     "floats up after about 0.6 s."},
+    {"弹出一个只读提示框", "Pops up a read-only message box"},
+    {"危险操作前的二次确认", "A second confirmation before a dangerous action"},
+    {"触摸屏专用：弹出屏上数字键盘",
+     "Touchscreen only: pops up the on-screen numeric keypad"},
+    {"绿 → 黄 → 红：越过预警 / 报警阈值即变色",
+     "Green → yellow → red: recolours as it crosses the warn / alarm thresholds"},
+    {"在此右键唤出上下文菜单", "Right-click here to raise the context menu"},
     {"右键上下文菜单", "Right-click context menu"},
     {"在这块区域点右键", "Right-click in this area"},
     {"确认报警", "Acknowledge"},
