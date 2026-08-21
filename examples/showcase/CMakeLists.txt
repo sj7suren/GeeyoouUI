@@ -10,6 +10,7 @@ add_executable(showcase
   i18n/lang_en_US.cpp
   PageWindow.cpp
   PageTheme.cpp
+  PageDialogs.cpp
   PageIcons.cpp
   PageOverview.cpp
   PageHmi.cpp
