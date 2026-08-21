@@ -6,6 +6,7 @@
 #include "geeyoou/platform/Platform.hpp"
 #include "geeyoou/render/Painter.hpp"
 #include "geeyoou/render/Skin.hpp"
+#include "geeyoou/widget/Tooltip.hpp"
 
 namespace geeyoou {
 
@@ -44,6 +45,10 @@ Window::~Window() {
   platform().stopTimer(animationTimer_);
   animationTimer_ = 0;
   animationsOn_ = false;
+
+  // Same reason as the animation clock: the tooltip timer captures `this`.
+  platform().stopTimer(tooltipTimer_);
+  tooltipTimer_ = 0;
 
   // Drop the observer pointers before the child vector is destroyed, so nothing
   // can dereference a half-destroyed widget during teardown.
@@ -263,6 +268,47 @@ void Window::handlePaint(Painter& p, const Rect& dirty) {
   // The popup's clip starts from the WHOLE window, not from whatever container
   // spawned it -- that is precisely what lets it overhang a GroupBox.
   if (popup_) popup_->paintTree(p, dirty, whole);
+
+  // The tooltip is painted last of all, above even the popup, and by the Window
+  // rather than as a widget so it captures no input and needs no dismiss path.
+  // The bubble itself is drawn by the shared helper the offscreen gallery also
+  // calls -- see Tooltip.hpp for why the look lives out there.
+  if (tooltipShown_) paintTooltipBubble(p, whole, tooltipAt_, tooltipText_);
+}
+
+void Window::armTooltip(Point cursorWindow) {
+  hideTooltip();  // hover changed -- drop whatever was pending or showing
+  // Nearest tooltip walking up from the widget under the cursor.
+  std::string text;
+  for (Widget* w = hovered_; w; w = w->parent()) {
+    if (w->hasTooltip()) {
+      text = w->tooltip();
+      break;
+    }
+  }
+  if (text.empty()) return;
+  tooltipText_ = std::move(text);
+  tooltipAt_ = cursorWindow;
+  // Rest delay, then show.  startTimer is periodic, so the callback stops it
+  // first to make it one-shot (self-stop is supported).
+  tooltipTimer_ = platform().startTimer(600, [this] {
+    const TimerId t = tooltipTimer_;
+    tooltipTimer_ = 0;
+    platform().stopTimer(t);
+    tooltipShown_ = true;
+    update();
+  });
+}
+
+void Window::hideTooltip() {
+  if (tooltipTimer_) {
+    platform().stopTimer(tooltipTimer_);
+    tooltipTimer_ = 0;
+  }
+  const bool was = tooltipShown_;
+  tooltipShown_ = false;
+  tooltipText_.clear();
+  if (was) update();
 }
 
 void Window::handleMouse(const MouseEvent& e) {
@@ -327,9 +373,15 @@ void Window::handleMouse(const MouseEvent& e) {
       hovered_->dispatchMouse(enter);
     }
     target = hovered_;
+    // Hover changed: cancel any showing tooltip and arm a new one if the widget
+    // now under the cursor (or an ancestor) carries one.  hovered_ is the
+    // pointer widgetDetached maintains, so it is safe after the notifications
+    // above -- a local target would not be.
+    armTooltip(e.windowPos);
   }
 
   if (e.action == MouseAction::Press) {
+    hideTooltip();  // a click dismisses any hint
     pressGrab_ = target;
     // Clicking moves focus to the nearest focusable ancestor of what was hit,
     // and clicking empty background drops focus entirely.  Clicks INSIDE a
