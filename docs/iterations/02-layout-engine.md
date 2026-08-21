@@ -1188,6 +1188,35 @@ update();                                       // :222
 | L82-R | `TableView.cpp`（`paintPane`） | P1 tableAccent | 1 | S3 | W3 |
 | L83-R | `TableView.cpp`（`paintCell`） | P1 tableCellPresent | 10 | S3 | W3 |
 | L84-R | `TableView.cpp`（`paintTreeCell`） | P1 tableExpansion | 2 | S3 | W3 |
+| L85-D | `Dialog.cpp`（`close`） | P2 closePopup | 1 | S2 | W2 |
+| L86-D | `Dialog.cpp`（`show`） | P2 setGeometry | 2 | S2 | W2 |
+| L87-D | `Dialog.cpp`（`layoutChildren`） | P2 setGeometry | 2 | S2 | W2 |
+| L88-D | `Dialog.cpp`（`onMouse`） | P1 close | 1 | S2 | W2 |
+| L89-D | `Dialog.cpp`（`onKey`） | P1 close | 2 | S2 | W2 |
+| L90-D | `Dialog.cpp`（`addButton`） | P2 add | 2 | S3 | W3 |
+| L91-D | `Dialog.cpp`（`messageBox`） | P2 add | 4 | S3 | W3 |
+| L92-D | `Dialog.cpp`（`confirmBox`） | P2 add | 4 | S3 | W3 |
+| L93-T | `TabView.cpp`（`setCurrentIndex`） | P2 setVisible | 3 | S2 | W2 |
+| L94-T | `TabView.cpp`（`addTab`） | P2 add | 2 | S3 | W3 |
+| L95-K | `NumericKeypad.cpp`（`buildKeys`） | P2 add | 1 | S3 | W3 |
+| L96-K | `NumericKeypad.cpp`（`press`） | P3 emit | 1 | S2 | W2 |
+| L97-K | `NumericKeypad.cpp`（`numericInput`） | P2 add | 5 | S3 | W3 |
+| L98-M | `ContextMenu.cpp`（`ensureMenu`） | P2 add | 2 | S2 | W2 |
+| L99-M | `ContextMenu.cpp`（`popupAt`） | P2 setGeometry | 2 | S2 | W2 |
+| L100-M | `ContextMenu.cpp`（`trigger`） | P3 emit | 1 | S2 | W2 |
+
+**L85–L92（`Dialog`）登记说明。** 新增的模态对话框控件（`widget/Dialog.hpp`）带来八个候选，按家族定级，逐点危险性未逐一判（与本表其余行同一条规矩）：
+
+* **L85-D `Dialog::close` 是这八条里唯一真正把控制权交出去的一帧，而它恰恰是被有意设计成安全的那一条。** 它的门是 `Window::closePopup`（family C），但 `close()` 不在按钮的 `clicked` 发射栈里直接调它——按钮活在对话框内部，若在 `clicked` 处理里销毁对话框，就是销毁"正在发射的信号的宿主"，即契约 D7（`core/Signal.hpp`）。所以 `close()` 只记录结果，把 `closePopup()` 与 `onResult` 推迟到一个**零延时、自停止的定时器**里执行，那时按钮的发射早已退栈。`onResult` 是延迟帧的**最后一句**，之后不碰任何成员，因此调用方**可以**在 `onResult` 里销毁对话框。这一帧的安全不来自游标，来自"把门挪到干净的栈上"。
+* **L88-D / L89-D（`onMouse` / `onKey`）的门 `close` 是名字碰撞**（family G 的形状）：`Dialog::close` 非虚，与 `SelectBase::close` 同名而被谓词扫中。真正到达生命周期的是 L85-D 那一帧，已如上。
+* **L86-D / L87-D（`show` / `layoutChildren`）的门是 `setGeometry`**（family D，几何）：作用对象是对话框自己和它拥有的 `body_` / 按钮子节点，`onGeometryChanged` 只会回到本控件的 `layoutChildren`，不经应用代码。
+* **L90–L92（`addButton` / `messageBox` / `confirmBox`）的门是 `add<T>()`**（family E，构造/装配）：在还没交给应用操作的子树上创建控件，与 E 族的构造帧同形，S3/W3。
+
+**L93–L94（`TabView`）登记说明。** 标签容器（`widget/TabView.hpp`）与外壳的 `Shell::showPage` 同形——都是"隐藏旧页 / 显示并定位新页"的容器管理帧。`setCurrentIndex`（L93-T）的门是 `setVisible` / `setGeometry`（family C/D），作用对象都是 TabView 自己拥有的页子节点；`currentChanged.emit` 已是**尾发射**（最后一句），所以门后经 `this` 的只有对自有子树的 `setGeometry`。`addTab`（L94-T）的门是 `add<Widget>()`（family E，在自有子树上建页）。两条都不经应用可覆写的路径到达外部代码。
+
+**L98–L100（`ContextMenu`）登记说明。** 右键上下文菜单（`widget/ContextMenu.hpp`）**逐字复用 `MenuButton` 的菜单机制**，三条与 `MenuButton` 的 `ensureMenu`（L45-C）/ `openMenu`（L46-C）/ `trigger`（L34-B）一一对应、同形同级：`ensureMenu`（L98-M）在 Window 上建 `PopupList` 并接 `rowActivated`（**close-first-emit-last**，D7 不适用——信号宿主是 Window 的 PopupList 不是本对象）；`popupAt`（L99-M）给菜单设行与几何（family C）；`trigger`（L100-M）两次 `emit`（family B，与 `MenuButton::trigger` 同为不可尾发射的双发射，登记而非改写）。生命周期由 `ConnectionScope conns_`（声明在末、最先析构）保证：菜单活在 Window 上、比本对象长命，订阅在本对象析构前被切断。
+
+**L95–L97（`NumericKeypad`）登记说明。** 触摸屏数字键盘（`widget/NumericKeypad.hpp`）。`buildKeys`（L95-K）在构造期用 `add<PushButton>()` 建键（family E）；`press`（L96-K）改按键串后 `valueChanged`/`committed` 都是**尾发射**（family B，#27 那族的形状），谓词按首个门登记；`numericInput`（L97-K）是把键盘装进 `Dialog` 的便捷函数，门是 `add<T>()`（family E，装配），其 `onResult` 里的 `removeChild` 走的是 L85-D 说明里那条"`Dialog::close` 已把销毁挪到干净栈上、契约允许在 `onResult` 里销毁"的路径，`test_dialog.cpp` 的 `may_be_destroyed_from_inside_onResult` 用例在 ASan 下守它。
 
 **这张表要和"没有出现在表里的那四帧"一起读，那才是本族的完整判断：**
 
