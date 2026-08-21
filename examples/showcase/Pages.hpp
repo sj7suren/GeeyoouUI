@@ -46,5 +46,8 @@ Size buildTablesBigPage(Widget* content);
 Size buildScene3DPage(Widget* content, AppState& app);
 Size buildWindowPage(Widget* content, ShowcaseWindow& win);
 Size buildThemePage(Widget* content, ShowcaseWindow& win);
+// 对话框与新控件。Takes the window because the modal dialogs and the numeric
+// keypad open as overlays on it.
+Size buildDialogsPage(Widget* content, ShowcaseWindow& win);
 
 }  // namespace showcase
