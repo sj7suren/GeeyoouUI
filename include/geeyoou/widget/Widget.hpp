@@ -280,6 +280,21 @@ class Widget : public StyleSubject {
   bool hasStyleClass(std::string_view cls) const;
   const std::vector<std::string>& styleClasses() const { return classes_; }
 
+  // A short hint the Window draws when the cursor rests on this widget.  A
+  // tooltip set on a container applies to its whole area unless a child under
+  // the cursor sets its own; the Window walks up from the hovered widget to
+  // find the nearest one.
+  //
+  // Stored OUTSIDE the widget, in a side table keyed by `this` (see
+  // Widget.cpp), not as a member: the R2 size budget asserted in Widget.cpp is
+  // fully spent, and almost no widget ever carries a tooltip.  A member -- even
+  // a single pointer -- would tax every widget that never sets one; the side
+  // table costs absent tooltips exactly zero bytes.  Setting an empty string
+  // clears it.
+  void setTooltip(std::string s);
+  std::string tooltip() const;   // "" when none set
+  bool hasTooltip() const;
+
   // Properties the active style sheet resolves for this widget in `state`.
   // Cached against the global style generation, so the cascade runs once per
   // widget per skin change rather than once per paint.
