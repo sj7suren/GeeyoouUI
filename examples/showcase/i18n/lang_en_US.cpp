@@ -907,6 +907,44 @@ const LangEntry kEntries[] = {
     {"系统压力超过高限", "System pressure above the high limit"},
     {"釜内温度进入预警区", "Reactor temperature entered the warning band"},
     {"Modbus 从站响应超时，已重试", "Modbus slave response timeout, retried"},
+
+    // ------------------------------------------------- PageDialogs.cpp ---
+    {"对话框与新控件", "Dialogs & New Widgets"},
+    {"模态对话框 / 标签页 / 数字键盘 / 右键菜单 / 棒图",
+     "Modal dialogs / tabs / numeric keypad / context menu / bargraph"},
+    {"状态：就绪 · 试试下面的对话框、键盘、右键菜单",
+     "Status: ready · try the dialogs, keypad and context menu below"},
+    {"标签页 · 每页一组棒图", "Tabs · a group of bargraphs per page"},
+    {"对话框 · 模态遮罩", "Dialogs · a modal scrim"},
+    {"消息框", "Message box"},
+    {"配方已下发到 2# 反应釜。", "Recipe downloaded to Reactor 2#."},
+    {"知道了", "Got it"},
+    {"消息框：已确认", "Message box: acknowledged"},
+    {"确认框（危险操作）", "Confirm (dangerous)"},
+    {"确认操作", "Confirm action"},
+    {"确定要停止进料泵 P-101 吗？此操作会中断当前批次。",
+     "Stop feed pump P-101?  This will interrupt the current batch."},
+    {"确认框：操作员确认了停泵",
+     "Confirm: the operator confirmed the stop"},
+    {"停止", "Stop"},
+    {"取消", "Cancel"},
+    {"数字键盘设定目标温度（触摸屏）",
+     "Set the target temperature on the keypad (touchscreen)"},
+    {"已设定目标温度 = %.1f °C", "Target temperature set = %.1f °C"},
+    {"对话框是全窗口遮罩 + 居中面板：它靠几何实现模态，背后点不到。\n\n"
+     "触摸屏没有物理键盘，改设定值必须弹屏上数字键盘——工控现场这是刚需。",
+     "A dialog is a full-window scrim plus a centred panel: it is modal by "
+     "geometry, so nothing behind it can be clicked.\n\n"
+     "A touchscreen has no physical keyboard, so changing a set point means "
+     "popping up an on-screen keypad — on a plant floor that is essential, not "
+     "a nicety."},
+    {"右键上下文菜单", "Right-click context menu"},
+    {"在这块区域点右键", "Right-click in this area"},
+    {"确认报警", "Acknowledge"},
+    {"屏蔽此点", "Shelve point"},
+    {"查看历史", "View history"},
+    {"删除记录", "Delete record"},
+    {"右键菜单 → ", "Context menu → "},
 };
 
 }  // namespace
