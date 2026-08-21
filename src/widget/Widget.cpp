@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cassert>
 #include <cctype>
+#include <string>
+#include <unordered_map>
 
 #include "geeyoou/render/Painter.hpp"
 #include "geeyoou/widget/Window.hpp"
@@ -480,7 +482,46 @@ std::size_t deathWatchDepth() {
 
 }  // namespace detail
 
+namespace {
+// Tooltips live here, not in Widget.  The R2 size budget (the static_assert
+// below) is fully spent by layout_ and naturalSize_, and almost no widget ever
+// sets a tooltip, so a per-widget member -- even a single pointer -- would tax
+// every widget that never has one.  A side table keyed by the widget pointer
+// costs the tooltip-less widgets nothing but this map's own existence, and one
+// hashed erase each at teardown only while some tooltip is live anywhere.  The
+// UI is single-threaded, so the bare static needs no lock.
+std::unordered_map<const Widget*, std::string>& tooltipTable() {
+  static std::unordered_map<const Widget*, std::string> table;
+  return table;
+}
+}  // namespace
+
+void Widget::setTooltip(std::string s) {
+  if (s.empty()) {
+    tooltipTable().erase(this);
+  } else {
+    tooltipTable()[this] = std::move(s);
+  }
+}
+
+std::string Widget::tooltip() const {
+  auto& table = tooltipTable();
+  if (table.empty()) return {};
+  auto it = table.find(this);
+  return it == table.end() ? std::string{} : it->second;
+}
+
+bool Widget::hasTooltip() const {
+  auto& table = tooltipTable();
+  return !table.empty() && table.find(this) != table.end();
+}
+
 Widget::~Widget() {
+  // A tooltip entry keyed by this pointer would dangle the instant the address
+  // is reused; drop it here.  Skipped entirely -- no hash, no lock -- whenever
+  // nothing in the process has set a tooltip, which is the common case.
+  if (!tooltipTable().empty()) tooltipTable().erase(this);
+
   // A bubble standing on this widget must not walk into the parent pointer that
   // is about to be freed.  announceDetached() already does this for the removal
   // API, but destruction has other doors: dropping the unique_ptr takeChild()
