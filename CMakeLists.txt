@@ -42,6 +42,7 @@ set(GEEYOOU_SOURCES
   src/widget/GroupBox.cpp
   src/widget/Dialog.cpp
   src/widget/TabView.cpp
+  src/widget/Tooltip.cpp
   src/widget/NumericKeypad.cpp
   src/widget/Separator.cpp
   src/widget/SpinBox.cpp
