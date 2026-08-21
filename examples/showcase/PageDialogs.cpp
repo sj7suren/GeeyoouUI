@@ -105,6 +105,7 @@ Size buildDialogsPage(Widget* content, ShowcaseWindow& win) {
       b->setBands(kBars[i].warn, kBars[i].alarm);
       b->setTitle(tr(kBars[i].title));
       b->setUnit(kBars[i].unit);
+      b->setTooltip(tr("绿 → 黄 → 红：越过预警 / 报警阈值即变色"));
       bars[page][i] = b;
     }
   }
@@ -133,6 +134,7 @@ Size buildDialogsPage(Widget* content, ShowcaseWindow& win) {
   auto* bMsg = gDlg->add<PushButton>();
   bMsg->setGeometry({16, 52, 220, 40});
   bMsg->setText(tr("消息框"));
+  bMsg->setTooltip(tr("弹出一个只读提示框"));
   bMsg->clicked.connect([&win, say] {
     messageBox(&win, tr("提示"), tr("配方已下发到 2# 反应釜。"),
                {tr("知道了")},
@@ -143,6 +145,7 @@ Size buildDialogsPage(Widget* content, ShowcaseWindow& win) {
   bConfirm->setGeometry({252, 52, 220, 40});
   bConfirm->setText(tr("确认框（危险操作）"));
   bConfirm->setVariant(ButtonVariant::Danger);
+  bConfirm->setTooltip(tr("危险操作前的二次确认"));
   bConfirm->clicked.connect([&win, say] {
     confirmBox(&win, tr("确认操作"),
                tr("确定要停止进料泵 P-101 吗？此操作会中断当前批次。"),
@@ -154,6 +157,7 @@ Size buildDialogsPage(Widget* content, ShowcaseWindow& win) {
   bKeypad->setGeometry({16, 104, 456, 40});
   bKeypad->setText(tr("数字键盘设定目标温度（触摸屏）"));
   bKeypad->setVariant(ButtonVariant::Primary);
+  bKeypad->setTooltip(tr("触摸屏专用：弹出屏上数字键盘"));
   bKeypad->clicked.connect([&win, say] {
     numericInput(&win, tr("目标温度"), 165.0,
                  [say](double v) {
@@ -172,7 +176,8 @@ Size buildDialogsPage(Widget* content, ShowcaseWindow& win) {
   hint->setWordWrap(true);
   hint->setText(tr(
       "对话框是全窗口遮罩 + 居中面板：它靠几何实现模态，背后点不到。\n\n"
-      "触摸屏没有物理键盘，改设定值必须弹屏上数字键盘——工控现场这是刚需。"));
+      "触摸屏没有物理键盘，改设定值必须弹屏上数字键盘——工控现场这是刚需。\n\n"
+      "把指针停在上面的按钮或棒图上，约 0.6 秒后会浮出气泡提示（Tooltip）。"));
 
   // ------------------------------------------------- 右键菜单 ---
   auto* gMenu = content->add<GroupBox>();
@@ -181,6 +186,7 @@ Size buildDialogsPage(Widget* content, ShowcaseWindow& win) {
 
   auto* area = gMenu->add<RightClickArea>();
   area->setGeometry({16, 52, 1008, 180});
+  area->setTooltip(tr("在此右键唤出上下文菜单"));
   area->onPick = [say](const std::string& id) {
     say(tr("右键菜单 → ") + id);
   };
