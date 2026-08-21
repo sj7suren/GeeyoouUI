@@ -20,6 +20,7 @@
 #include "geeyoou/widget/NumericKeypad.hpp"
 #include "geeyoou/widget/PushButton.hpp"
 #include "geeyoou/widget/TabView.hpp"
+#include "geeyoou/widget/Tooltip.hpp"
 
 using namespace geeyoou;
 
@@ -110,6 +111,34 @@ int main(int argc, char** argv) {
     dlg->addButton("取消", 0, ButtonVariant::Default, false);
     dlg->addButton("停止", 1, ButtonVariant::Danger, true);
     render(root, 640, 400, dir + "/w-dialog.png");
+  }
+
+  // --- Tooltip bubble -----------------------------------------------------
+  // Rendered by the SAME paintTooltipBubble the Window floats on hover, so this
+  // shot is proof of the real bubble -- shape, padding, and that the CJK text
+  // is drawn, not clipped or tofu.  A mock button gives it something to anchor
+  // to.  Drawn after paintTree because the real tooltip is painted last of all.
+  {
+    Widget root;
+    auto* btn = root.add<PushButton>();
+    btn->setGeometry({40, 40, 200, 40});
+    btn->setText("启动泵组 P-101");
+
+    root.setGeometry({0, 0, 380, 150});
+    root.performLayout();
+    OffscreenImage img(380, 150, 1.0f);
+    const Rect all(0.0f, 0.0f, 380.0f, 150.0f);
+    Canvas canvas;
+    if (canvas.begin(img.surface(), all)) {
+      Painter p = canvas.painter();
+      p.fillRect(all, Theme::current().background);
+      root.paintTree(p, all, all);
+      paintTooltipBubble(p, all, {150.0f, 76.0f}, "点击后泵组进入自动方式");
+      canvas.end();
+      const std::string path = dir + "/w-tooltip.png";
+      const bool ok = writePng(img, path.c_str());
+      std::printf("  %-24s %s\n", path.c_str(), ok ? "ok" : "FAIL");
+    }
   }
 
   std::printf("done\n");
